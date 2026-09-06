@@ -961,14 +961,15 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         body: str,
         working_title: str | None = None,
     ) -> dict[str, Any]:
-        """Save an explicit agent/user-approved body as a regenerated version."""
+        """Save an agent-written body as a *regenerated* version.
 
-        body, _ = _clean_publication_text(body)
-        _require_publication_text(body)
-        # Validate and normalize as regenerated, not user_edit
-        # The repository will set origin based on the tool; we ensure it's regenerated
+        ``user_edit`` is reserved for the owner's own edits through the draft
+        panel; a model-authored save must never claim that origin, otherwise
+        later revisions would be preserved away as if the owner had typed it.
+        """
 
         _check_cancel(ctx)
+        body, _ = _clean_publication_text(body)
         _require_publication_text(body)
         try:
             parsed_id = __import__("uuid").UUID(str(draft_id))
@@ -992,10 +993,11 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
                 },
             }
         try:
-            row = await ctx.deps.repository.save_draft(
+            row = await ctx.deps.repository.update_draft(
                 draft_id=parsed_id,
                 payload=payload,
                 expected_revision=expected_revision,
+                origin="regenerated",
                 instruction="Saved at the user's request.",
             )
         except (DraftValidationError, DraftConflictError) as exc:

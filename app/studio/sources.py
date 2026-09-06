@@ -59,6 +59,13 @@ def _mime(content_type: str) -> str:
     return str(content_type or "").split(";", 1)[0].strip().lower()
 
 
+_EXTRA_BLOCKED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    ipaddress.ip_network("100.64.0.0/10"),   # shared address space (CGNAT, Tailscale)
+    ipaddress.ip_network("192.0.0.0/24"),    # IETF protocol assignments
+    ipaddress.ip_network("64:ff9b::/96"),    # NAT64 well-known prefix
+)
+
+
 def _blocked_ip(value: str) -> bool:
     try:
         address = ipaddress.ip_address(value)
@@ -66,29 +73,18 @@ def _blocked_ip(value: str) -> bool:
         return True
     # IPv4-mapped IPv6 literals must be checked as their IPv4 address too.
     mapped = getattr(address, "ipv4_mapped", None)
-    if mapped is not None and mapped is not None:
-        try:
-            address = ipaddress.ip_address(str(mapped))
-        except ValueError:
-            pass
-        else:
-            # Check mapped as well
-            pass
-    # Keep explicit categories; is_private misses CGNAT/shared space
+    if mapped is not None:
+        address = mapped
+    # ``is_global`` is the broad test (it excludes documentation, benchmarking
+    # and other non-routable space that ``is_private`` does not). The explicit
+    # networks below are ranges some Python versions still report as global.
     if not address.is_global:
         return True
-    # Explicit shared/CGNAT and NAT64 ranges that is_global may miss on some Python versions
-    try:
-        if address.version == 4:
-            if ipaddress.ip_address(value) in ipaddress.ip_network("100.64.0.0/10"):
-                return True
-            if ipaddress.ip_address(value) in ipaddress.ip_network("192.0.0.0/24"):
-                return True
-        else:
-            if ipaddress.ip_address(value) in ipaddress.ip_network("64:ff9b::/96"):
-                return True
-    except ValueError:
-        pass
+    for network in _EXTRA_BLOCKED_NETWORKS:
+        if address.version == network.version and address in network:
+            return True
+    # ipaddress.is_private covers RFC1918 and many reserved ranges, but keep
+    # each category explicit because these are separate SSRF threat classes.
     return bool(
         address.is_private
         or address.is_loopback

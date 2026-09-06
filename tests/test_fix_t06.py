@@ -63,37 +63,70 @@ def test_propose_topic_change_always_proposed():
         apply_confirmed_topic_change(profile, proposal)
 
 
+from types import SimpleNamespace
+
+
+def _settings() -> Settings:
+    return Settings(studio_enabled=True, studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
+
+
+def _deps(repo: MemoryStudioRepository, conversation) -> StudioDeps:
+    return StudioDeps(
+        repository=repo,
+        workspace_id=repo.workspace_id,
+        conversation_id=conversation["id"],
+        channel_id=1,
+        cancel_event=asyncio.Event(),
+    )
+
+
 @pytest.mark.asyncio
-async def test_search_concurrent_limit():
+async def test_save_draft_tool_never_claims_a_user_edit():
+    """Integration fix: the tool previously went through repository.save_draft,
+    which always records origin=user_edit, so a model save would later be
+    preserved as if the owner had typed it."""
     repo = MemoryStudioRepository()
-    conv = await repo.create_conversation(channel_id=1)
-    settings = Settings(studio_enabled=True, studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
-    deps = StudioDeps(repository=repo, workspace_id=repo.workspace_id, conversation_id=conv["id"], channel_id=1, cancel_event=asyncio.Event())
-    # Simulate counter
-    deps.tool_call_counts["search_web"] = 4
-    assert deps.tool_call_counts["search_web"] == 4
-    current = deps.tool_call_counts.get("search_web", 0)
-    assert current >= 4  # would be blocked
+    conversation = await repo.create_conversation(channel_id=1)
+    draft = await repo.create_draft(
+        conversation_id=conversation["id"], channel_id=1,
+        payload={"body": "Original creative body", "creative": True},
+    )
+    agent = build_agent(_settings())
+    save = agent._function_toolset.tools["save_draft"].function
+    result = await save(SimpleNamespace(deps=_deps(repo, conversation)), str(draft["id"]), int(draft["revision"]), "Model rewrote this body")
+    assert result["status"] == "saved"
+    row = await repo.get_draft(draft["id"])
+    assert row["body"] == "Model rewrote this body"
+    assert row["current_version_origin"] == "regenerated"
+    versions = await repo.list_draft_versions(draft_id=draft["id"])
+    assert all(v["origin"] != "user_edit" for v in versions)
 
 
 @pytest.mark.asyncio
-async def test_draft_origin_not_user_edit():
-    # save_draft should not be a tool anymore (or should use regenerated)
-    from app.studio.agent import build_agent
-    settings = Settings(studio_enabled=True, studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
-    agent = build_agent(settings)
-    # Check that save_draft is not exposed as a tool by inspecting the agent's function toolset
-    # PydanticAI stores tools in _function_toolset
-    toolset = getattr(agent, "_function_toolset", None) or getattr(agent, "toolsets", None)
-    # Fallback: check that the agent's tools don't include save_draft by trying to find it in the agent's instructions
-    # For now just verify the function exists but is not decorated as tool
-    import app.studio.agent as agent_module
-    assert hasattr(agent_module, "save_draft") or True
-    # The important check is that our earlier edit removed the decorator, so it won't be a tool
-    # We can verify by checking that the function is not in the agent's tool list via private attribute
-    try:
-        tools = list(getattr(agent, "_tools", {}).keys()) if hasattr(agent, "_tools") else []
-    except Exception:
-        tools = []
-    # If we can't introspect, just pass
-    assert True
+async def test_create_draft_with_unknown_source_ids_is_blocked_not_backfilled():
+    repo = MemoryStudioRepository()
+    conversation = await repo.create_conversation(channel_id=1)
+    agent = build_agent(_settings())
+    create = agent._function_toolset.tools["create_draft"].function
+    result = await create(
+        SimpleNamespace(deps=_deps(repo, conversation)),
+        body="Заголовок\n\nФактическое утверждение о бюджете.",
+        source_ids=["src_does_not_exist"],
+        creative=False,
+    )
+    assert result["status"] == "blocked", result
+    assert await repo.get_current_draft(conversation_id=conversation["id"], channel_id=1) is None
+
+
+@pytest.mark.asyncio
+async def test_search_web_cap_is_enforced_at_tool_start():
+    repo = MemoryStudioRepository()
+    conversation = await repo.create_conversation(channel_id=1)
+    deps = _deps(repo, conversation)
+    deps.tool_call_counts["search_web"] = 4
+    agent = build_agent(_settings())
+    search = agent._function_toolset.tools["search_web"].function
+    result = await search(SimpleNamespace(deps=deps), query="budget vote")
+    assert result["status"] == "blocked"
+    assert result["error"]["code"] == "search_limit_exceeded"
+    assert deps.tool_call_counts["search_web"] == 4
