@@ -146,8 +146,39 @@ class ContextAssembler:
             "note": _text(safe_channel.get("note"), 500),
         }
         raw_profile = _without_comment_bodies(dict(profile or {}))
-        raw_instruction = _text(instruction, 4_000)
-        raw_summary = _text(conversation_summary, 4_000)
+        # Sanitize untrusted text in profile, summary, and topics
+        try:
+            from .sources import sanitize_untrusted_text as _sanitize
+            # Sanitize profile string fields
+            for k, v in list(raw_profile.items()):
+                if isinstance(v, str):
+                    txt, _ = _sanitize(v)
+                    raw_profile[k] = _text(txt, 4000)
+                elif isinstance(v, list) and k == "topics":
+                    sanitized_topics = []
+                    for item in v:
+                        if isinstance(item, dict):
+                            name = item.get("name", "")
+                            scope = item.get("scope", "")
+                            if isinstance(name, str):
+                                name, _ = _sanitize(name)
+                                item["name"] = _text(name, 200)
+                            if isinstance(scope, str):
+                                scope, _ = _sanitize(scope)
+                                item["scope"] = _text(scope, 500)
+                            sanitized_topics.append(item)
+                        elif isinstance(item, str):
+                            txt, _ = _sanitize(item)
+                            sanitized_topics.append(_text(txt, 200))
+                    raw_profile[k] = sanitized_topics
+            raw_summary, _ = _sanitize(raw_summary)
+            raw_summary = _text(raw_summary, 4000)
+            raw_instruction, _ = _sanitize(raw_instruction)
+            raw_instruction = _text(raw_instruction, 4000)
+        except Exception:
+            pass
+        raw_instruction = _text(instruction, 4_000) if "raw_instruction" not in locals() else raw_instruction
+        raw_summary = _text(conversation_summary, 4_000) if "raw_summary" not in locals() else raw_summary
 
         if analytics is None:
             performance: dict[str, Any] = {}

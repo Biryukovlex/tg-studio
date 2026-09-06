@@ -100,6 +100,12 @@ async def build_semantic_profile(analytics, rows, settings):
     budget, posts = 36_000, []
     for post in analytics.evidence_posts[:20]:
         excerpt = (text_by_id.get(post.post_id) or post.excerpt)[:min(2500, budget)]
+        # Sanitize untrusted post text before prompting
+        try:
+            from .sources import sanitize_untrusted_text as _sanitize
+            excerpt, _ = _sanitize(excerpt)
+        except Exception:
+            pass
         budget -= len(excerpt)
         if excerpt:
             posts.append({"post_id": post.post_id, "text": excerpt, "traction": post.scores.traction_score,

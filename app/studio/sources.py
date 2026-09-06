@@ -28,11 +28,11 @@ from .search import canonicalize_url
 
 _ALLOWED_MIME = {"text/html", "application/xhtml+xml", "text/plain"}
 _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("ignore_previous_instructions", re.compile(r"\b(ignore|disregard|forget)\b.{0,80}\b(previous|prior|earlier|all|any)\b.{0,50}\b(instructions?|rules?|messages?)\b", re.I | re.S)),
-    ("system_prompt_impersonation", re.compile(r"\b(system|developer|assistant)\s+(message|prompt|instruction)\b", re.I)),
-    ("tool_manipulation", re.compile(r"\b(call|use|execute|invoke)\s+(the\s+)?(tool|function|browser|terminal)\b", re.I)),
-    ("secret_exfiltration", re.compile(r"\b(reveal| disclose|print|leak|expose)\b.{0,50}\b(secret|password|token|prompt|credential)s?\b", re.I)),
-    ("jailbreak_language", re.compile(r"\b(jailbreak|override|do not follow|new instructions)\b", re.I)),
+    ("ignore_previous_instructions", re.compile(r"\b(ignore|disregard|forget|игнорируй|забудь)\b.{0,80}\b(previous|prior|earlier|all|any|предыдущие|прошлые|все)\b.{0,50}\b(instructions?|rules?|messages?|инструкции|правила|сообщения)\b", re.I | re.S)),
+    ("system_prompt_impersonation", re.compile(r"\b(system|developer|assistant|системный)\s+(message|prompt|instruction|промпт|инструкция)\b", re.I)),
+    ("tool_manipulation", re.compile(r"\b(call|use|execute|invoke|вызови|используй)\s+(the\s+)?(tool|function|browser|terminal|инструмент|функцию)\b", re.I)),
+    ("secret_exfiltration", re.compile(r"\b(reveal|disclose|print|leak|expose|раскрой|покажи)\b.{0,50}\b(secret|password|token|prompt|credential|секрет|пароль|токен|промпт)\b", re.I)),
+    ("jailbreak_language", re.compile(r"\b(jailbreak|override|do not follow|new instructions|новые\s+инструкции)\b", re.I)),
 )
 
 
@@ -66,10 +66,29 @@ def _blocked_ip(value: str) -> bool:
         return True
     # IPv4-mapped IPv6 literals must be checked as their IPv4 address too.
     mapped = getattr(address, "ipv4_mapped", None)
-    if mapped is not None:
-        address = mapped
-    # ipaddress.is_private covers RFC1918 and many reserved ranges, but keep
-    # each category explicit because these are separate SSRF threat classes.
+    if mapped is not None and mapped is not None:
+        try:
+            address = ipaddress.ip_address(str(mapped))
+        except ValueError:
+            pass
+        else:
+            # Check mapped as well
+            pass
+    # Keep explicit categories; is_private misses CGNAT/shared space
+    if not address.is_global:
+        return True
+    # Explicit shared/CGNAT and NAT64 ranges that is_global may miss on some Python versions
+    try:
+        if address.version == 4:
+            if ipaddress.ip_address(value) in ipaddress.ip_network("100.64.0.0/10"):
+                return True
+            if ipaddress.ip_address(value) in ipaddress.ip_network("192.0.0.0/24"):
+                return True
+        else:
+            if ipaddress.ip_address(value) in ipaddress.ip_network("64:ff9b::/96"):
+                return True
+    except ValueError:
+        pass
     return bool(
         address.is_private
         or address.is_loopback
@@ -193,7 +212,10 @@ class _HTMLTextExtractor(HTMLParser):
 
 
 def sanitize_untrusted_text(text: str) -> tuple[str, tuple[str, ...]]:
-    """Remove instruction-shaped lines from model-facing untrusted text."""
+    """Remove instruction-shaped lines from model-facing untrusted text.
+
+    This filter is heuristic; the system prompt remains the primary defense.
+    """
 
     flags: list[str] = []
     for flag, pattern in _INJECTION_PATTERNS:
