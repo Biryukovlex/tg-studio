@@ -64,15 +64,20 @@ async def amain() -> None:
         db = Database(settings.db_path)
         db.init_db()
 
+    def _uvicorn_config(app) -> uvicorn.Config:
+        kwargs: dict = dict(host=settings.web_host, port=settings.web_port, log_level="info")
+        if settings.trusted_proxy_ips.strip():
+            kwargs["proxy_headers"] = True
+            kwargs["forwarded_allow_ips"] = settings.trusted_proxy_ips.strip()
+        return uvicorn.Config(app, **kwargs)
+
     # The web role serves read-only dashboard/Studio requests and deliberately
     # does not acquire a Telegram session. Collection/manual refresh is owned
     # by the worker role in split deployments.
     if role == "web":
         collector = Collector(None, db, settings)
         app = create_app(collector, settings)
-        server = uvicorn.Server(
-            uvicorn.Config(app, host=settings.web_host, port=settings.web_port, log_level="info")
-        )
+        server = uvicorn.Server(_uvicorn_config(app))
         log.info("Web-only panel: http://%s:%s", settings.web_host, settings.web_port)
         try:
             await server.serve()
@@ -87,6 +92,10 @@ async def amain() -> None:
         persisted_session = await db.load_telegram_session(
             label=settings.telegram_connection_label, cipher=cipher
         )
+        try:
+            await db.expire_stale_collection_jobs()
+        except Exception:
+            log.warning("expire_stale_collection_jobs failed at startup")
     session_string = persisted_session or settings.session_string
     if not session_string:
         raise RuntimeError(
@@ -99,16 +108,46 @@ async def amain() -> None:
     )
     await client.connect()
     if not await client.is_user_authorized():
-        log.error("Session is not authorized - re-run `python scripts/generate_session.py`.")
-        return
-    if isinstance(db, PostgresDatabase) and cipher is not None:
-        await db.persist_telegram_session(
-            label=settings.telegram_connection_label,
-            api_id=settings.api_id,
-            api_hash=settings.api_hash,
-            session_string=session_string,
-            cipher=cipher,
-        )
+        # Try environment session if it differs from persisted
+        if settings.session_string and settings.session_string != persisted_session:
+            log.info("Persisted session not authorized, trying environment session")
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            client = TelegramClient(
+                StringSession(settings.session_string), settings.api_id, settings.api_hash
+            )
+            await client.connect()
+            if await client.is_user_authorized():
+                session_string = settings.session_string
+                log.info("session source: environment")
+                if isinstance(db, PostgresDatabase) and cipher is not None:
+                    await db.persist_telegram_session(
+                        label=settings.telegram_connection_label,
+                        api_id=settings.api_id,
+                        api_hash=settings.api_hash,
+                        session_string=session_string,
+                        cipher=cipher,
+                    )
+            else:
+                log.error("Session is not authorized - re-run `python scripts/generate_session.py`.")
+                return
+        else:
+            log.error("Session is not authorized - re-run `python scripts/generate_session.py`.")
+            return
+    else:
+        if isinstance(db, PostgresDatabase) and cipher is not None and session_string != persisted_session:
+            try:
+                await db.persist_telegram_session(
+                    label=settings.telegram_connection_label,
+                    api_id=settings.api_id,
+                    api_hash=settings.api_hash,
+                    session_string=session_string,
+                    cipher=cipher,
+                )
+            except Exception:
+                log.warning("persist_telegram_session failed")
     log.info("Logged in as %s", (await client.get_me()).first_name)
 
     collector = Collector(client, db, settings)
@@ -160,9 +199,7 @@ async def amain() -> None:
         return
 
     app = create_app(collector, settings)
-    server = uvicorn.Server(
-        uvicorn.Config(app, host=settings.web_host, port=settings.web_port, log_level="info")
-    )
+    server = uvicorn.Server(_uvicorn_config(app))
 
     log.info("Web panel: http://%s:%s", settings.web_host, settings.web_port)
     log.info("First collection cycle starting...")
@@ -172,18 +209,25 @@ async def amain() -> None:
 
     first_cycle = asyncio.create_task(_first_cycle())
 
-    # Wait ONLY on the long-running tasks. Including first_cycle here would
-    # tear everything down as soon as the initial poll finishes.
-    await asyncio.wait({server_task, tg_task}, return_when=asyncio.FIRST_COMPLETED)
-
-    for task in (server_task, tg_task, first_cycle):
-        if not task.done():
-            task.cancel()
-    await asyncio.gather(server_task, tg_task, first_cycle, return_exceptions=True)
-    scheduler.shutdown(wait=False)
-    await client.disconnect()
-    if isinstance(db, PostgresDatabase):
-        await db.close()
+    try:
+        # Wait ONLY on the long-running tasks. Including first_cycle here would
+        # tear everything down as soon as the initial poll finishes.
+        await asyncio.wait({server_task, tg_task}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in (server_task, tg_task, first_cycle):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(server_task, tg_task, first_cycle, return_exceptions=True)
+        scheduler.shutdown(wait=False)
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        if isinstance(db, PostgresDatabase):
+            try:
+                await db.close()
+            except Exception:
+                pass
 
 
 def main() -> None:

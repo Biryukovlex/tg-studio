@@ -91,7 +91,9 @@ async def test_post_detail_renders_telegram_entities_as_safe_html(client, app):
 
     assert response.status_code == 200
     assert 'class="detail-post-body"' in response.text
-    assert "/static/style.css?v=9" in response.text
+    from app.web.routes import static_asset_version
+
+    assert f"/static/style.css?v={static_asset_version()}" in response.text
     assert "<strong>Bold &lt;tag&gt;</strong>" in response.text
     assert "<strong>Bold <tag>" not in response.text
 

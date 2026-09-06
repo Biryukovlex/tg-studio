@@ -296,13 +296,22 @@ class StudioService:
         lease_seconds = max(30, int(getattr(self.settings, "studio_run_lease_seconds", 120)))
         configured = float(getattr(self.settings, "studio_run_heartbeat_seconds", 20.0))
         interval = max(0.05, min(configured, lease_seconds / 3))
+        consecutive_failures = 0
         while handle.active:
             await asyncio.sleep(interval)
-            state = await self.repository.renew_run_lease(
-                run_id,
-                worker_id=worker_id,
-                lease_seconds=lease_seconds,
-            )
+            try:
+                state = await self.repository.renew_run_lease(
+                    run_id,
+                    worker_id=worker_id,
+                    lease_seconds=lease_seconds,
+                )
+            except Exception:
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    handle.cancel(reason="lease_lost")
+                    return
+                continue
+            consecutive_failures = 0
             if state is None:
                 handle.cancel(reason="lease_lost")
                 return
@@ -825,10 +834,15 @@ class StudioService:
             finally:
                 if watchdog is not None:
                     watchdog.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await watchdog
-                self.registry.finish(run_id)
-                await queue.put(complete)
+                    try:
+                        with suppress(asyncio.CancelledError, Exception):
+                            await watchdog
+                    finally:
+                        self.registry.finish(run_id)
+                        await queue.put(complete)
+                else:
+                    self.registry.finish(run_id)
+                    await queue.put(complete)
 
         task = asyncio.create_task(execute_run(), name=f"studio-run-{run_id}")
         self.registry.attach(run_id, task)

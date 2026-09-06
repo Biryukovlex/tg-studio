@@ -16,8 +16,10 @@ npm --prefix studio-frontend audit --omit=dev --audit-level=high
 
 The dashboard ships the Manrope and MingCute font assets under
 `app/web/static/vendor/`; their license notices remain beside the vendored
-files and are summarized in the root `NOTICE`. Assistant UI, AG-UI, React, and
-Vite notices are supplied by their npm packages and must be retained in any
+files and are summarized in the root `NOTICE`. Chart.js 4.4.1 (`app/web/static/vendor/chartjs/chart.umd.min.js`)
+is vendored under the MIT License — Copyright (c) 2023 Chart.js Contributors,
+https://www.chartjs.org, `https://github.com/chartjs/Chart.js/blob/master/LICENSE.md`.
+Assistant UI, AG-UI, React, and Vite notices are supplied by their npm packages and must be retained in any
 redistributed frontend bundle.
 
 SearXNG is not linked into the Python image. It is an optional Compose service

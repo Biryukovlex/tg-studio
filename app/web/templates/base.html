@@ -8,9 +8,10 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/vendor/manrope/index.css">
   <link rel="stylesheet" href="/static/vendor/mingcute/css/core-regular.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=9">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=2" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <script src="/static/vendor/chartjs/chart.umd.min.js"></script>
+  <script src="/static/app.js?v={{ asset_version }}" defer></script>
+  {% block head %}{% endblock %}
 </head>
 <body class="app-body{% block body_class %}{% endblock %}">
   <div class="app-shell">

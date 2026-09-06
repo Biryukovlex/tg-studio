@@ -17,6 +17,8 @@ import logging
 
 from telethon import TelegramClient, events
 
+from datetime import datetime
+
 from .collector import Collector
 from .config import Settings
 from .async_compat import maybe_await
@@ -73,9 +75,11 @@ class CommandHandlers:
                 await event.reply("Something went wrong, check logs.")
 
     def _allowed(self, event) -> bool:
-        if event.is_private and event.sender_id in self.settings.admin_ids:
+        if not event.is_private:
+            return False
+        if event.sender_id in self.settings.admin_ids:
             return True
-        # messages you send to yourself in Saved Messages
+        # Saved Messages: the account owner talking to themselves.
         return bool(event.out and event.chat_id == self._me_id)
 
     async def _find_channel_id(self, arg: str):
@@ -90,13 +94,19 @@ class CommandHandlers:
         cmd = parts[0].lstrip("/").lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        # Bootstrap helper: anyone (in a private chat / Saved Messages) can ask
-        # for their id - otherwise there is a chicken-and-egg filling ADMIN_TG_IDS.
-        if cmd == "whoami" and (event.is_private or event.out):
+        # Bootstrap helper: anyone in a private chat (including the owner's
+        # Saved Messages) can ask for their id. Never answer in groups, where an
+        # outgoing command would post the owner's id publicly.
+        if cmd == "whoami":
+            if not event.is_private:
+                return
             await event.reply(f"Your Telegram id: {event.sender_id or 'unknown'}")
             return
 
         if not self._allowed(event):
+            return
+        # Non-whoami commands only in private chats from admins
+        if not event.is_private:
             return
 
         if cmd in ("start", "help"):
@@ -109,7 +119,17 @@ class CommandHandlers:
 
         if cmd == "refresh":
             await event.reply("Collecting fresh stats...")
-            summary = await self.collector.poll_all(reason="manual")
+            # Use supervised schedule_poll to avoid fire-and-forget without logging
+            scheduler = getattr(self.collector, "schedule_poll", None)
+            if scheduler is not None:
+                task = scheduler(reason="manual")
+                try:
+                    summary = await task
+                except Exception:
+                    await event.reply("Collection failed; check logs.")
+                    return
+            else:
+                summary = await self.collector.poll_all(reason="manual")
             await event.reply(
                 f"Done: {summary['posts_seen']} posts scanned, "
                 f"{summary['snapshots_written']} snapshots updated, "
@@ -130,7 +150,11 @@ class CommandHandlers:
         if cmd == "stats":
             k = await maybe_await(self.db.kpis(channel_id))
             scope = arg if arg else "all channels"
-            last_poll = (k.get("last_poll") or "never") + " UTC"
+            raw_last = k.get("last_poll")
+            if isinstance(raw_last, datetime):
+                last_poll = raw_last.strftime("%Y-%m-%d %H:%M") + " UTC"
+            else:
+                last_poll = (raw_last or "never") + " UTC"
             await event.reply(
                 f"Stats for {scope}\n\n"
                 f"Posts tracked: {k.get('posts', 0):,}\n"

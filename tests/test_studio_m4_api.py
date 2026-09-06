@@ -39,5 +39,7 @@ async def test_research_health_and_bootstrap_never_block_on_optional_search(clie
 async def test_research_health_preserves_authentication(client, settings):
     settings.studio_enabled = True
     response = await client.get("/studio/api/research/health", follow_redirects=False)
-    assert response.status_code == 303
-    assert response.headers["location"] == "/login"
+    assert response.status_code == 401
+    body = response.json()
+    err = body.get("error") or body.get("detail", {}).get("error", {})
+    assert err.get("code") == "unauthenticated"

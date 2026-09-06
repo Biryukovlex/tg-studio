@@ -85,7 +85,12 @@ async def build_semantic_profile(analytics, rows, settings):
         if len(sample) >= 20:
             break
         sample.setdefault(post.post_id, post)
-    analytics = analytics.model_copy(update={"evidence_posts": list(sample.values())})
+    sample_ids = set(sample.keys())
+    analytics = analytics.model_copy(update={
+        "evidence_posts": list(sample.values()),
+        "top_posts": [p for p in analytics.top_posts if p.post_id in sample_ids],
+        "baseline_posts": [p for p in analytics.baseline_posts if p.post_id in sample_ids],
+    })
     if getattr(settings, "studio_test_mode", False) or not analytics.evidence_posts:
         profile, analysis = build_profile(analytics)
         profile.topics, analysis.topic_insights = [], []

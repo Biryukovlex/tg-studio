@@ -247,7 +247,8 @@ def build_profile(
                 limitations=list(limitations),
             )
         )
-    style_posts = [post for post in analytics.top_posts if post.style_eligible]
+    allowed_ids = {post.post_id for post in analytics.evidence_posts}
+    style_posts = [post for post in analytics.top_posts if post.style_eligible and post.post_id in allowed_ids]
     style = _style(style_posts, confidence=analytics.confidence, limitations=limitations)
     profile = ChannelProfile(
         channel_id=analytics.channel_id,

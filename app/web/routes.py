@@ -8,15 +8,20 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import functools
+import hashlib
 import io
 import logging
 import secrets
+import time
 import uuid
 from pathlib import Path
+
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from ..collector import Collector
@@ -27,6 +32,8 @@ from .dependencies import csrf_token as shared_csrf_token
 from .dependencies import require_auth as shared_require_auth
 from .dependencies import require_csrf as shared_require_csrf
 from .dependencies import WorkspaceContext
+from ..studio.routes import _TEMPLATES as _studio_templates
+from ..studio.routes import _public_event_payload as _filter_event_payload
 from ..studio.routes import build_router as build_studio_router
 from ..studio.repository import MemoryStudioRepository, RunNotFound, StudioRepository
 from ..studio.service import StudioService
@@ -37,6 +44,100 @@ WEB_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
 _ORDER_KEYS = {"date", "views", "reactions", "comments", "shares"}
+
+# Login rate limiting: 5 failures per IP per 15 minutes.
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 15 * 60
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+
+
+def _client_ip(request: Request) -> str:
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _prune_attempts(now: float) -> None:
+    cutoff = now - _LOGIN_WINDOW_SECONDS
+    for ip, stamps in list(_LOGIN_ATTEMPTS.items()):
+        filtered = [t for t in stamps if t > cutoff]
+        if filtered:
+            _LOGIN_ATTEMPTS[ip] = filtered
+        else:
+            _LOGIN_ATTEMPTS.pop(ip, None)
+
+
+def _is_rate_limited(ip: str) -> tuple[bool, int]:
+    now = time.monotonic()
+    _prune_attempts(now)
+    stamps = _LOGIN_ATTEMPTS.get(ip, [])
+    if len(stamps) >= _LOGIN_MAX_ATTEMPTS:
+        oldest = min(stamps) if stamps else now
+        retry_after = int(max(1, (_LOGIN_WINDOW_SECONDS - (now - oldest))))
+        return True, retry_after
+    return False, 0
+
+
+def _record_failed_attempt(ip: str) -> None:
+    now = time.monotonic()
+    _prune_attempts(now)
+    _LOGIN_ATTEMPTS.setdefault(ip, []).append(now)
+
+
+def _clear_attempts(ip: str) -> None:
+    _LOGIN_ATTEMPTS.pop(ip, None)
+
+
+def _sanitize_csv_cell(value: object) -> object:
+    """Neutralise spreadsheet formula triggers in free-text cells.
+
+    Only string values are touched: numeric ids such as negative discussion
+    chat ids and datetime objects must round-trip unchanged.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return value
+    if value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
+def reset_login_rate_limiter() -> None:
+    _LOGIN_ATTEMPTS.clear()
+
+
+@functools.lru_cache(maxsize=1)
+def static_asset_version() -> str:
+    """Short content hash of the first-party static assets referenced by templates."""
+    digest = hashlib.sha256()
+    for name in ("app.js", "style.css"):
+        path = WEB_DIR / "static" / name
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(name.encode("utf-8"))
+    return digest.hexdigest()[:12]
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, settings: Settings):
+        super().__init__(app)
+        self._settings = settings
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self'; "
+            "connect-src 'self'; frame-ancestors 'none'"
+        )
+        if self._settings.behind_tls:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
 
 
 def _optional_positive_int(value: str | int | None) -> int | None:
@@ -119,7 +220,13 @@ def _load_or_create_secret(settings: Settings) -> str:
 def create_app(collector: Collector, settings: Settings) -> FastAPI:
     db = collector.db
     app = FastAPI(title="TG Studio", docs_url=None, redoc_url=None)
-    app.add_middleware(SessionMiddleware, secret_key=_load_or_create_secret(settings))
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=_load_or_create_secret(settings),
+        https_only=settings.behind_tls,
+        same_site="lax",
+    )
+    app.add_middleware(SecurityHeadersMiddleware, settings=settings)
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
     db_context = WorkspaceContext(
         user_id=getattr(db, "user_id", None)
@@ -138,6 +245,11 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     templates.env.filters["num"] = _num
     templates.env.filters["dt"] = _dt
     templates.env.globals["app_name"] = "TG Studio"
+    # Content-hash cache busting: a changed app.js/style.css must never be
+    # served from a browser cache keyed on a hand-bumped ?v= number.
+    templates.env.globals["asset_version"] = static_asset_version()
+    _studio_templates.env.globals["asset_version"] = static_asset_version()
+    _studio_templates.env.globals["app_name"] = "TG Studio"
 
     def render(request: Request, name: str, ctx: dict, status_code: int = 200):
         ctx.update({"request": request})
@@ -178,11 +290,22 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
 
     @app.post("/login")
     async def login(request: Request, username: str = Form(""), password: str = Form("")):
-        ok_user = secrets.compare_digest(username, settings.admin_username)
-        ok_pass = secrets.compare_digest(password, settings.admin_password)
+        ip = _client_ip(request)
+        limited, retry_after = _is_rate_limited(ip)
+        if limited:
+            return Response(
+                content="Too many failed login attempts. Try again later.",
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+                media_type="text/plain",
+            )
+        ok_user = secrets.compare_digest(username.encode("utf-8"), settings.admin_username.encode("utf-8"))
+        ok_pass = secrets.compare_digest(password.encode("utf-8"), settings.admin_password.encode("utf-8"))
         if not (ok_user and ok_pass):
-            log.warning("failed admin login from %s", request.client.host if request.client else "?")
+            _record_failed_attempt(ip)
+            log.warning("failed admin login from %s", ip)
             return render(request, "login.html", {"error": "Invalid username or password"}, 401)
+        _clear_attempts(ip)
         request.session["auth"] = True
         if db_context.user_id is not None:
             request.session["user_id"] = str(db_context.user_id)
@@ -250,7 +373,7 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
                 {
                     "type": event["event_type"],
                     "runId": run_id,
-                    **event.get("safe_payload", {}),
+                    **_filter_event_payload(event.get("safe_payload", {})),
                 }
                 for event in events
             ],
@@ -351,9 +474,9 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
         ])
         for r in rows:
             writer.writerow([
-                r["id"], r["message_id"], r["identifier"], r["posted_at"],
-                (r["text"] or "").replace("\n", " "),
-                r["views"], r["reactions"], r["comments"], r["shares"], r["updated_at"],
+                _sanitize_csv_cell(r["id"]), _sanitize_csv_cell(r["message_id"]), r["identifier"], _sanitize_csv_cell(r["posted_at"]),
+                _sanitize_csv_cell((r["text"] or "").replace("\n", " ")),
+                _sanitize_csv_cell(r["views"]), _sanitize_csv_cell(r["reactions"]), _sanitize_csv_cell(r["comments"]), _sanitize_csv_cell(r["shares"]), _sanitize_csv_cell(r["updated_at"]),
             ])
         return Response(
             content=buf.getvalue(),
@@ -375,12 +498,12 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
         ])
         for row in rows:
             writer.writerow([
-                row["id"], row["post_id"], row["post_message_id"],
-                row["channel_identifier"], row["telegram_message_id"],
-                row["discussion_chat_id"], row["posted_at"], row["edited_at"],
-                row["sender_id"], row["sender_name"], row["sender_username"],
-                (row["text"] or "").replace("\n", " "), row["media_type"],
-                row["reactions"], row["reply_to_message_id"], row["is_deleted"],
+                _sanitize_csv_cell(row["id"]), _sanitize_csv_cell(row["post_id"]), _sanitize_csv_cell(row["post_message_id"]),
+                row["channel_identifier"], _sanitize_csv_cell(row["telegram_message_id"]),
+                _sanitize_csv_cell(row["discussion_chat_id"]), _sanitize_csv_cell(row["posted_at"]), _sanitize_csv_cell(row["edited_at"]),
+                _sanitize_csv_cell(row["sender_id"]), _sanitize_csv_cell(row["sender_name"]), _sanitize_csv_cell(row["sender_username"]),
+                _sanitize_csv_cell((row["text"] or "").replace("\n", " ")), _sanitize_csv_cell(row["media_type"]),
+                _sanitize_csv_cell(row["reactions"]), _sanitize_csv_cell(row["reply_to_message_id"]), _sanitize_csv_cell(row["is_deleted"]),
             ])
         return Response(
             content=buf.getvalue(),

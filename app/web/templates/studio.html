@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Content Studio · {{ app_name }}{% endblock %}
 {% block body_class %}{% if setup.ready %} studio-page{% endif %}{% endblock %}
+{% block head %}<meta name="studio-csrf-token" content="{{ csrf_token }}">{% endblock %}
 {% block pageheading %}
 <p class="eyebrow">Content Studio</p>
 <h1>Agent workspace</h1>
 {% endblock %}
 {% block navactions %}{% endblock %}
 {% block content %}
-<meta name="studio-csrf-token" content="{{ csrf_token }}">
 {% if setup.ready %}
 <div id="studio-react-root" data-workspace="{{ setup.workspace_slug }}" aria-label="Content Studio"></div>
 <link rel="stylesheet" href="/static/studio-dist/assets/index.css">
