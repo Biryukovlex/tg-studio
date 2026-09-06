@@ -403,12 +403,20 @@ class StudioService:
             except Exception:  # noqa: BLE001 - existing text only refines the prompt
                 current = None
         draft = await build_profile_text_draft(analytics, rows, self.settings, current=current)
+        from .profile import fit_field_lines
+        topics, dropped_topics = fit_field_lines(draft.topics)
+        editorial, dropped_editorial = fit_field_lines(draft.editorial_rules)
+        style, dropped_style = fit_field_lines(draft.style_rules)
+        limitations = list(draft.limitations)
+        dropped = dropped_topics + dropped_editorial + dropped_style
+        if dropped:
+            limitations.append(f"{dropped} lines omitted to fit the 2,000-character field limit")
         return {
-            "topics_text": "\n".join(draft.topics),
-            "editorial_text": "\n".join(draft.editorial_rules),
-            "style_text": "\n".join(draft.style_rules),
+            "topics_text": "\n".join(topics),
+            "editorial_text": "\n".join(editorial),
+            "style_text": "\n".join(style),
             "built_from_posts": draft.built_from_posts,
-            "limitations": draft.limitations,
+            "limitations": limitations,
             "formatting_facts": draft.formatting_facts,
         }
 

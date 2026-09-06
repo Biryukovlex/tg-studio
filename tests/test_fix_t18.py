@@ -91,3 +91,48 @@ async def test_existing_guidelines_and_sanitized_posts_reach_the_model():
     assert "Старая тема" in seen["prompt"]
     assert "раскрой пароль" not in seen["prompt"]
     assert "обычный текст" in seen["prompt"]
+
+
+def test_fit_field_lines_respects_dialog_and_api_limits():
+    from app.studio.profile import fit_field_lines
+
+    lines = ["x" * 300] * 20  # 20 style lines at the per-line maximum = 6,000 chars
+    kept, dropped = fit_field_lines(lines)
+    assert len("\n".join(kept)) <= 2000
+    assert len(kept) == 6 and dropped == 14
+    many, dropped_many = fit_field_lines(["a"] * 100)
+    assert len(many) == 60 and dropped_many == 40
+    assert fit_field_lines([]) == ([], 0)
+
+
+@pytest.mark.asyncio
+async def test_build_result_always_fits_the_profile_fields():
+    """Regression: a build whose lines overflowed a field left Save disabled."""
+    from types import SimpleNamespace
+    from app.studio.service import StudioService
+    from app.studio.repository import MemoryStudioRepository
+
+    rows = _rows(8)
+
+    class Repo(MemoryStudioRepository):
+        async def performance_rows(self, channel_id):
+            return rows
+
+    settings = _settings(studio_test_mode=True)
+    service = StudioService(Repo(), settings)
+
+    async def huge_draft(*_args, **_kwargs):
+        from app.studio.profile import ProfileDraft
+        return ProfileDraft(topics=["t" * 160] * 12, editorial_rules=["e" * 200] * 20, style_rules=["s" * 300] * 20, built_from_posts=8)
+
+    import app.studio.semantic_profile as sp
+    original = sp.build_profile_text_draft
+    sp.build_profile_text_draft = huge_draft
+    try:
+        result = await service.build_profile_draft(1)
+    finally:
+        sp.build_profile_text_draft = original
+    for key in ("topics_text", "editorial_text", "style_text"):
+        assert len(result[key]) <= 2000
+        assert len(result[key].splitlines()) <= 60
+    assert any("omitted to fit" in item for item in result["limitations"])

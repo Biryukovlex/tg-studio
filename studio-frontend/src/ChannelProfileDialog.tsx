@@ -124,6 +124,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
   const [conflictProfile, setConflictProfile] = useState<ChannelProfile | null>(null);
 
   const dirty = initial ? (topics !== initial.topics || editorial !== initial.editorial || style !== initial.style) : (topics !== "" || editorial !== "" || style !== "");
+  const overLimit = topics.length > 2000 || editorial.length > 2000 || style.length > 2000;
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -388,12 +389,16 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
           type="button"
           className="studio-copy"
           onClick={() => void handleSave()}
-          disabled={!dirty || saving || building || topics.length > 2000 || editorial.length > 2000 || style.length > 2000}
+          disabled={!dirty || saving || building || overLimit}
         >
           {dirty ? `Save as v${(profile?.version ?? initial?.version ?? 0) + 1}` : "Save"}
         </button>
       </footer>
-      {conflictProfile ? (
+      {overLimit && !building ? (
+        <p className="studio-profile-status is-error" role="alert">
+          One field exceeds 2,000 characters. Shorten it before saving.
+        </p>
+      ) : conflictProfile ? (
         <p className="studio-profile-status is-error" role="alert">
           Someone saved v{conflictProfile.version} while you were editing. <button type="button" onClick={loadTheirVersion}>Load their version</button>
           <button type="button" onClick={saveMineAsNext}>Save mine as v{conflictProfile.version + 1}</button>
@@ -402,7 +407,6 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
         <p className={`studio-profile-status${statusIsError ? " is-error" : ""}`} role={statusIsError ? "alert" : "status"}>
           {status}
           {!canBuild && blockerMessage && !building && !statusIsError ? ` ${blockerMessage}` : ""}
-          {building ? " Analyzing posts. This usually takes under a minute." : ""}
         </p>
       ) : blockerMessage && !canBuild ? (
         <p className="studio-profile-status" role="status">

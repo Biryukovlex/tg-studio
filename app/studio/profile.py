@@ -535,6 +535,30 @@ async def build_profile_draft(analytics: ChannelAnalytics, rows: list[dict[str, 
     return _build_draft_from_analytics(analytics, rows)
 
 
+PROFILE_FIELD_MAX_CHARS = 2_000
+PROFILE_FIELD_MAX_LINES = 60
+
+
+def fit_field_lines(lines: list[str], *, max_chars: int = PROFILE_FIELD_MAX_CHARS, max_lines: int = PROFILE_FIELD_MAX_LINES) -> tuple[list[str], int]:
+    """Keep leading lines that fit one profile text field; return (kept, dropped).
+
+    The dialog and PUT /profile enforce the same limits, so a build result
+    that overflowed would leave Save disabled with nothing to explain why.
+    """
+
+    kept: list[str] = []
+    total = 0
+    for line in lines:
+        if len(kept) >= max_lines:
+            break
+        addition = len(line) + (1 if kept else 0)
+        if total + addition > max_chars:
+            break
+        kept.append(line)
+        total += addition
+    return kept, max(0, len(lines) - len(kept))
+
+
 def _topic_list(text: str) -> list[str]:
     values = re.split(r"[,;\n]+", text.strip())
     return [re.sub(r"^[\s\-•]+", "", value).strip() for value in values if value.strip()][:20]
