@@ -382,6 +382,7 @@ function DraftPanel({
   const [versions, setVersions] = useState<DraftVersion[]>([]);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "conflict" | "error">("saved");
   const [copied, setCopied] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [conflict, setConflict] = useState<{ server: Draft; localBody: string; localTitle: string } | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const hydrated = useRef(false);
@@ -662,15 +663,16 @@ function DraftPanel({
       ) : (
         <div className="studio-draft-content">
           <label className="studio-draft-title">Artifact title<input aria-label="Artifact title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /><span className="studio-draft-title-hint">Kept for search and cross-checking. Not copied to the post.</span></label>
-          <div className="studio-draft-preview"><div className="studio-markdown"><DraftMarkdownPreview text={draft.body} /></div></div>
-          <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={draft.body} onChange={(event) => edit("body", event.target.value)} />
+          {previewOpen
+            ? <div className="studio-draft-preview" role="region" aria-label="Post preview"><div className="studio-markdown"><DraftMarkdownPreview text={draft.body} /></div></div>
+            : <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={draft.body} onChange={(event) => edit("body", event.target.value)} />}
           <div className={`studio-char-count ${draft.over_limit ? "is-over" : draft.warning_threshold ? "is-warning" : ""}`}>
             <span>{(draft.character_count ?? Array.from(plainFromMarkdown(draft.body)).length).toLocaleString()} / 4,096 plain-text characters</span>
             <span>{draft.over_limit ? "Copy blocked" : draft.warning_threshold ? "Near Telegram limit" : "Telegram ready"}</span>
           </div>
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}
           {clickableSources.length > 0 && <div className="studio-draft-notes"><strong>Sources</strong><div className="studio-source-chips">{clickableSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}</div></div>}
-          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy post"}</button><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) restore(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version}>Restore</button></label></div>
+          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) restore(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version}>Restore</button></label></div>
         </div>
       )}
     </aside>
@@ -723,13 +725,18 @@ function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Boots
       </section>
     );
   }
-  const topics = (profile.topics_text ?? "").split("\n").filter((line) => line.trim()).slice(0, 6);
+  // Chips show the topic name only; the scope after the dash belongs in the dialog.
+  const topicName = (line: string) => {
+    const name = line.split(/\s[—–-]\s|:\s/)[0].trim();
+    return name.length > 48 ? `${name.slice(0, 47)}…` : name;
+  };
+  const topicLines = (profile.topics_text ?? "").split("\n").filter((line) => line.trim());
   const editorialCount = (profile.editorial_text ?? "").split("\n").filter((l) => l.trim()).length;
   const styleCount = (profile.style_text ?? "").split("\n").filter((l) => l.trim()).length;
-  const topicsCount = (profile.topics_text ?? "").split("\n").filter((l) => l.trim()).length;
+  const topicsCount = topicLines.length;
   const rulesCount = editorialCount + styleCount;
   const remainingTopics = topicsCount > 4 ? `+${topicsCount - 4}` : null;
-  const chips = topics.slice(0, 4);
+  const chips = topicLines.slice(0, 4).map(topicName);
   return (
     <section className="studio-primer studio-primer-profile" aria-label="Channel profile status">
       <div>
@@ -737,7 +744,7 @@ function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Boots
         <p>{topicsCount} topics · {rulesCount} rules. The agent receives these guidelines with every message.</p>
       </div>
       <div className="studio-topic-chips" aria-label="Topics">
-        {chips.map((topic) => <span key={topic}>{topic}</span>)}
+        {chips.map((topic, index) => <span key={`${index}-${topic}`} title={topicLines[index]}>{topic}</span>)}
         {remainingTopics && <span>{remainingTopics}</span>}
       </div>
       <button type="button" onClick={onProfile}>Profile</button>

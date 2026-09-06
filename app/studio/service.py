@@ -394,8 +394,15 @@ class StudioService:
         if max_posts > 0:
             rows = list(rows)[:max_posts]
         analytics = analyze_posts(rows, channel_id, identifier=channel.get("identifier"))
-        from .profile import _build_draft_from_analytics
-        draft = _build_draft_from_analytics(analytics, rows)
+        from .semantic_profile import build_profile_text_draft
+        current = None
+        getter = getattr(self.repository, "get_profile", None)
+        if getter is not None:
+            try:
+                current = await getter(channel_id)
+            except Exception:  # noqa: BLE001 - existing text only refines the prompt
+                current = None
+        draft = await build_profile_text_draft(analytics, rows, self.settings, current=current)
         return {
             "topics_text": "\n".join(draft.topics),
             "editorial_text": "\n".join(draft.editorial_rules),

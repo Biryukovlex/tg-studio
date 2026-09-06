@@ -72,7 +72,7 @@ button { color: inherit; }
 .studio-topbar > div:first-child { min-width: 0; flex: 1; }
 .studio-primer-profile.is-low { border-color: rgba(248,193,118,.28); }
 .studio-topic-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
-.studio-topic-chips span { padding: 5px 8px; border: 1px solid var(--studio-line); border-radius: 99px; color: var(--studio-soft); background: rgba(110,231,221,.06); font-size: 10px; }
+.studio-topic-chips span { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 8px; border: 1px solid var(--studio-line); border-radius: 99px; color: var(--studio-soft); background: rgba(110,231,221,.06); font-size: 10px; }
 .studio-primer-error { color: #f6b8a9 !important; }
 .studio-thread-wrap { position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .studio-thread-wrap > .studio-thread { flex: 1; height: auto; }
@@ -279,7 +279,9 @@ button { color: inherit; }
 .studio-profile-status.is-error { color: #f6b8a9; }
 .studio-profile-status button { margin: 0 8px 0 0; }
 .studio-rail-foot .studio-rail-foot-buttons { display: flex; gap: 8px; margin-left: auto; }
-.studio-draft-preview { min-height: 120px; margin: 6px 0 0; padding: 12px 14px; border: 1px solid var(--studio-line); border-radius: 10px; background: var(--studio-bg); color: var(--studio-soft); font-size: 12px; line-height: 1.6; }
+.studio-draft-preview { min-height: 300px; max-height: 58vh; overflow-y: auto; overflow-x: hidden; margin: 0; padding: 13px; border: 1px solid rgba(149,190,203,.24); border-radius: 12px; background: rgba(7,19,29,.7); color: #efffff; font-size: 12px; line-height: 1.58; }
+.studio-draft-mode { border: 1px solid var(--studio-line); border-radius: 9px; padding: 8px 10px; color: var(--studio-soft); background: rgba(110,231,221,.06); font-size: 10px; font-weight: 800; cursor: pointer; }
+.studio-draft-mode[aria-pressed="true"] { border-color: rgba(110,231,221,.4); color: var(--studio-accent); background: rgba(110,231,221,.08); }
 .studio-draft-preview .studio-markdown p { margin: 0; }
 .studio-draft-preview .studio-markdown a { color: var(--studio-accent); }
 .studio-draft-preview .studio-markdown strong { color: #eef7f9; }

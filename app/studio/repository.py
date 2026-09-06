@@ -292,7 +292,7 @@ class StudioRepository:
                                 ORDER BY workspace_id, post_id, id DESC
                            )
                            SELECT p.id AS post_id, p.message_id, p.channel_id, p.posted_at,
-                                  p.text, p.is_deleted, l.taken_at AS snapshot_at,
+                                  p.text, p.formatting_entities, p.is_deleted, l.taken_at AS snapshot_at,
                                   l.views, l.comments, l.reactions, l.shares,
                                   true AS has_snapshot
                              FROM posts p JOIN channels c
