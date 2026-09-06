@@ -142,6 +142,37 @@ export type RunEvent = {
   created_at: string | null;
 };
 
+export type ChannelProfile = {
+  channel_id: number;
+  version: number;
+  topics_text: string;
+  editorial_text: string;
+  style_text: string;
+  updated_at: string | null;
+  built_at: string | null;
+  built_from_posts: number;
+  topics?: Array<{ name: string; claim?: string }>;
+  confidence?: string;
+  style_profile?: Record<string, unknown>;
+  editorial_rules?: Record<string, unknown>;
+};
+
+export type ProfilePayload = {
+  profile: ChannelProfile | null;
+  can_build: boolean;
+  build_blockers: Array<{ code: string; message: string; available?: number; minimum?: number }>;
+  channel_id: number;
+};
+
+export type ProfileDraft = {
+  topics_text: string;
+  editorial_text: string;
+  style_text: string;
+  built_from_posts: number;
+  limitations: string[];
+  formatting_facts: Array<Record<string, unknown>>;
+};
+
 export type Bootstrap = {
   setup: SetupState;
   workspace: { id: string; slug: string; role: string };
@@ -160,14 +191,8 @@ export type Bootstrap = {
     configuration_fingerprint?: string;
     disclosure?: { title: string; message: string } | null;
   };
-  profile_status: "no_channel" | "needs_consent" | "not_analyzed" | "low_confidence" | "ready";
-  profile: {
-    topics: Array<{ name: string; claim?: string }>;
-    confidence: string;
-    version: number;
-    style_profile?: Record<string, unknown>;
-    editorial_rules?: Record<string, unknown>;
-  } | null;
+  profile_status: "no_channel" | "needs_consent" | "not_built" | "not_analyzed" | "low_confidence" | "ready";
+  profile: ChannelProfile | null;
 };
 
 export type ApiError = {
@@ -232,6 +257,26 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function csrfToken(): string {
   return document.querySelector<HTMLMetaElement>("meta[name=studio-csrf-token]")?.content ?? "";
+}
+
+export async function fetchProfile(channelId: number): Promise<ProfilePayload> {
+  return api<ProfilePayload>(`/studio/api/profile?channel_id=${encodeURIComponent(String(channelId))}`);
+}
+
+export async function saveProfile(payload: { channel_id: number; expected_version: number; topics_text: string; editorial_text: string; style_text: string }): Promise<{ profile: ChannelProfile }> {
+  return api<{ profile: ChannelProfile }>("/studio/api/profile", {
+    method: "PUT",
+    headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function buildProfile(channelId: number): Promise<{ draft: ProfileDraft }> {
+  return api<{ draft: ProfileDraft }>("/studio/api/profile/build", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
+    body: JSON.stringify({ channel_id: channelId }),
+  });
 }
 
 export function asThreadMessages(messages: PersistedMessage[]) {

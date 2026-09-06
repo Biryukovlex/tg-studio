@@ -17,6 +17,7 @@
     "@assistant-ui/react-markdown": "0.14.14",
     "react": "19.1.1",
     "react-dom": "19.1.1",
+    "remark-breaks": "4.0.0",
     "remark-gfm": "4.0.1"
   },
   "devDependencies": {

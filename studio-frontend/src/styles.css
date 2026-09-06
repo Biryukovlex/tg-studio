@@ -257,3 +257,25 @@ button { color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+/* Channel profile dialog (shares .studio-settings) */
+.studio-profile header .studio-profile-header-actions { display: flex; gap: 8px; }
+.studio-profile-mode[aria-pressed="true"] { border-color: rgba(110,231,221,.4); color: var(--studio-accent); background: rgba(110,231,221,.08); }
+.studio-profile-meta { margin: 6px 0 4px; }
+.studio-profile-field { margin-top: 14px; }
+.studio-profile-field label { display: block; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--studio-muted); }
+.studio-profile-field p { margin: 2px 0 0; }
+.studio-profile-field p code { font-size: 11px; color: var(--studio-soft); }
+.studio-profile .studio-profile-field textarea { min-height: 120px; margin: 6px 0 0; font: inherit; font-size: 12px; }
+.studio-profile .studio-profile-field textarea:disabled { opacity: .6; }
+.studio-profile-preview { min-height: 120px; margin: 6px 0 0; padding: 12px 14px; border: 1px solid var(--studio-line); border-radius: 10px; background: var(--studio-bg); color: var(--studio-soft); font-size: 12px; line-height: 1.6; }
+.studio-profile-preview .studio-markdown p { margin: 0; }
+.studio-profile-preview .studio-markdown a { color: var(--studio-accent); }
+.studio-profile-preview .studio-markdown strong { color: #eef7f9; }
+.studio-profile-counter { display: flex; justify-content: flex-end; margin-top: 4px; font-size: 11px; color: var(--studio-muted); }
+.studio-profile-counter.is-over { color: #f6b8a9; }
+.studio-profile-actions { margin-top: 18px; }
+.studio-profile-status { margin-top: 12px; color: var(--studio-soft); }
+.studio-profile-status.is-error { color: #f6b8a9; }
+.studio-profile-status button { margin: 0 8px 0 0; }
+.studio-rail-foot .studio-rail-foot-buttons { display: flex; gap: 8px; margin-left: auto; }

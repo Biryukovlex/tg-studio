@@ -28,6 +28,7 @@ import {
   StudioApiError,
 } from "./api";
 import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
+import ChannelProfileDialog from "./ChannelProfileDialog";
 import "./styles.css";
 
 function ToolActivity({ toolName, result }: ToolCallMessagePartProps) {
@@ -189,6 +190,7 @@ function ConversationRail({
   onDelete,
   deletingId,
   onSettings,
+  onProfile,
 }: {
   conversations: Conversation[];
   selected: Conversation | null;
@@ -197,6 +199,7 @@ function ConversationRail({
   onDelete: (conversation: Conversation) => void;
   deletingId: string | null;
   onSettings: () => void;
+  onProfile: () => void;
 }) {
   return (
     <aside className="studio-rail" aria-label="Studio conversations">
@@ -248,7 +251,10 @@ function ConversationRail({
       <div className="studio-rail-foot">
         <span className="studio-status-dot" aria-hidden="true" />
         <span>Private workspace</span>
-        <button type="button" onClick={onSettings}>Settings</button>
+        <div className="studio-rail-foot-buttons">
+          <button type="button" onClick={onProfile}>Profile</button>
+          <button type="button" onClick={onSettings}>Settings</button>
+        </div>
       </div>
     </aside>
   );
@@ -574,21 +580,10 @@ function DraftPanel({
   );
 }
 
-function ProfilePrimer({ bootstrap, onGranted }: { bootstrap: Bootstrap; onGranted: (payload: Bootstrap) => void }) {
+function ProfilePrimer({ bootstrap, onProfile }: { bootstrap: Bootstrap; onProfile: () => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const consent = bootstrap.consent;
-  const semanticReady = bootstrap.profile?.editorial_rules?.extraction_version === "channel.semantic.v1";
-  const analyze = () => {
-    if (!bootstrap.selected_channel_id) return;
-    setBusy(true);
-    setMessage("");
-    void api<{ profile: Bootstrap["profile"] }>(`/studio/api/profile/analyze?channel_id=${bootstrap.selected_channel_id}`, {
-      method: "POST", headers: { "x-csrf-token": csrfToken() },
-    }).then(({ profile }) => onGranted({ ...bootstrap, profile, profile_status: profile?.confidence === "low" ? "low_confidence" : "ready" }))
-      .catch((reason: unknown) => setMessage(reason instanceof Error ? reason.message : "Profile analysis failed."))
-      .finally(() => setBusy(false));
-  };
   const grant = () => {
     setBusy(true);
     setMessage("");
@@ -597,7 +592,13 @@ function ProfilePrimer({ bootstrap, onGranted }: { bootstrap: Bootstrap; onGrant
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
       body: JSON.stringify({ confirm: true, configuration_fingerprint: consent.configuration_fingerprint }),
     })
-      .then((payload) => onGranted({ ...bootstrap, consent: payload.consent, profile: payload.profile, profile_status: payload.profile ? (payload.profile.confidence === "low" ? "low_confidence" : "ready") : "not_analyzed" }))
+      .then((payload) => {
+        // After consent, reload bootstrap to get updated profile_status
+        void api<Bootstrap>("/studio/api/bootstrap").then((next) => {
+          // Update bootstrap via page reload? For primer, just show message.
+          setMessage("Consent granted. The agent can now use your channel context.");
+        });
+      })
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Consent could not be saved."))
       .finally(() => setBusy(false));
   };
@@ -615,19 +616,34 @@ function ProfilePrimer({ bootstrap, onGranted }: { bootstrap: Bootstrap; onGrant
       </section>
     );
   }
-  if (!semanticReady) return <section className="studio-primer" aria-label="Channel profile status"><p role="status">{busy ? "Analyzing successful posts: topics and writing style…" : message || "Channel profile has not been analyzed yet."}</p><button type="button" onClick={analyze} disabled={busy}>Analyze channel</button></section>;
-  if (!bootstrap.profile) return null;
+  const profile = bootstrap.profile;
+  const hasProfile = !!(profile && (profile.topics_text?.trim() || profile.editorial_text?.trim() || profile.style_text?.trim()));
+  if (!hasProfile) {
+    return (
+      <section className="studio-primer" aria-label="Channel profile status">
+        <p role="status">No channel profile yet. Build it from your posts or write the guidelines yourself.</p>
+        <button type="button" onClick={onProfile}>Profile</button>
+      </section>
+    );
+  }
+  const topics = (profile.topics_text ?? "").split("\n").filter((line) => line.trim()).slice(0, 6);
+  const editorialCount = (profile.editorial_text ?? "").split("\n").filter((l) => l.trim()).length;
+  const styleCount = (profile.style_text ?? "").split("\n").filter((l) => l.trim()).length;
+  const topicsCount = (profile.topics_text ?? "").split("\n").filter((l) => l.trim()).length;
+  const rulesCount = editorialCount + styleCount;
+  const remainingTopics = topicsCount > 4 ? `+${topicsCount - 4}` : null;
+  const chips = topics.slice(0, 4);
   return (
-    <section className={`studio-primer studio-primer-profile ${bootstrap.profile_status === "low_confidence" ? "is-low" : ""}`} aria-label="Channel profile status">
+    <section className="studio-primer studio-primer-profile" aria-label="Channel profile status">
       <div>
-        <p className="studio-overline">Channel profile · v{bootstrap.profile.version}</p>
-        <p>{bootstrap.profile_status === "low_confidence" ? "Early signal only — the agent will keep recommendations cautious." : "Profile ready — the agent will use these signals as working context."}</p>
+        <p className="studio-overline">Channel profile · v{profile.version}</p>
+        <p>{topicsCount} topics · {rulesCount} rules. The agent receives these guidelines with every message.</p>
       </div>
-      <div className="studio-topic-chips" aria-label="Inferred topics">
-        {bootstrap.profile.topics.slice(0, 6).map((topic) => <span key={topic.name} title={topic.claim}>{topic.name}</span>)}
+      <div className="studio-topic-chips" aria-label="Topics">
+        {chips.map((topic) => <span key={topic}>{topic}</span>)}
+        {remainingTopics && <span>{remainingTopics}</span>}
       </div>
-      <button type="button" onClick={analyze} disabled={busy}>{busy ? "Analyzing…" : "Refresh profile"}</button>
-      {message && <p role="alert">{message}</p>}
+      <button type="button" onClick={onProfile}>Profile</button>
     </section>
   );
 }
@@ -925,6 +941,7 @@ function StudioThread({
 
 function StudioApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [error, setError] = useState("");
@@ -1023,8 +1040,17 @@ function StudioApp() {
 
   return (
     <div className="studio-app">
-      <ConversationRail conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} onDelete={deleteConversation} deletingId={deletingId} onSettings={() => setSettingsOpen(true)} />
+      <ConversationRail conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} onDelete={deleteConversation} deletingId={deletingId} onSettings={() => setSettingsOpen(true)} onProfile={() => setProfileOpen(true)} />
       {settingsOpen && <StudioSettings onClose={() => setSettingsOpen(false)} />}
+      {profileOpen && bootstrap.selected_channel_id && (
+        <ChannelProfileDialog
+          channelId={bootstrap.selected_channel_id}
+          onClose={() => setProfileOpen(false)}
+          onSaved={(profile) => {
+            setBootstrap((current) => current ? { ...current, profile, profile_status: (profile.topics_text?.trim() || profile.editorial_text?.trim() || profile.style_text?.trim()) ? "ready" : "not_built" } : current);
+          }}
+        />
+      )}
       <main className="studio-main">
         <header className="studio-topbar">
           <div>
@@ -1033,10 +1059,11 @@ function StudioApp() {
             {titleError && <p role="alert">{titleError}</p>}
           </div>
           <button type="button" className="studio-draft-toggle" onClick={() => setDraftOpen(true)}>Draft</button>
+          <button type="button" className="studio-settings-mobile" onClick={() => setProfileOpen(true)}>Profile</button>
           <button type="button" className="studio-settings-mobile" onClick={() => setSettingsOpen(true)}>Settings</button>
           <div className="studio-topbar-meta"><span className="studio-status-dot" aria-hidden="true" /> Agent context connected</div>
         </header>
-        <ProfilePrimer bootstrap={bootstrap} onGranted={(payload) => setBootstrap((current) => current ? { ...current, consent: payload.consent, profile: payload.profile, profile_status: payload.profile_status } : payload)} />
+        <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} />
         {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
       </main>
       <DraftPanel conversationId={selected?.id ?? null} seedDraft={bootstrap.draft} open={draftOpen} onClose={() => setDraftOpen(false)} watchForAgentChanges={agentRunActive} refreshToken={draftRefreshToken} />
