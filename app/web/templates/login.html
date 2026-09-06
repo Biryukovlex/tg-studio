@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#06101a">
+  <title>Login · TG Studio</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/vendor/manrope/index.css">
+  <link rel="stylesheet" href="/static/vendor/mingcute/css/core-regular.min.css">
+  <link rel="stylesheet" href="/static/style.css?v=9">
+</head>
+<body class="login-body">
+  <div class="login-shell">
+    <div class="login-brand">
+      <span class="brand-mark" aria-hidden="true"><i class="mgc mgc-chart-bar-2-core-regular"></i></span>
+      <span>TG Studio</span>
+    </div>
+    <form method="post" action="/login" class="login-card">
+      <h1>Welcome back</h1>
+      <p class="muted">Sign in to your private channel workspace.</p>
+      {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+      <label>Username
+        <input type="text" name="username" autofocus autocomplete="username" required>
+      </label>
+      <label>Password
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit" class="btn wide">Sign in</button>
+    </form>
+    <p class="login-footnote">Private analytics · stored locally</p>
+  </div>
+</body>
+</html>

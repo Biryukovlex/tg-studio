@@ -1,0 +1,125 @@
+# PostgreSQL-first local deployment. SQLite remains available only as the
+# read-only migration source or when DATABASE_URL is intentionally blank.
+
+name: tg-studio
+
+x-tg-studio-environment: &tg-studio-environment
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://tg_stats:change-me@postgres:5432/tg_stats}
+  STUDIO_SEARCH_ENABLED: ${STUDIO_SEARCH_ENABLED:-false}
+  STUDIO_SEARCH_BASE_URL: ${STUDIO_SEARCH_BASE_URL:-}
+  PROCESS_ROLE: ${PROCESS_ROLE:-all}
+
+x-tg-studio-common: &tg-studio-common
+  build: .
+  restart: unless-stopped
+  env_file: .env
+  volumes:
+    - ./data:/app/data
+  depends_on:
+    postgres:
+      condition: service_healthy
+  stop_grace_period: 30s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tg-studio-postgres
+    restart: unless-stopped
+    environment:
+      # Compatibility: retain these historical storage identifiers so existing
+      # PostgreSQL volumes remain readable after the product rename.
+      POSTGRES_DB: ${POSTGRES_DB:-tg_stats}
+      POSTGRES_USER: ${POSTGRES_USER:-tg_stats}
+      # Set POSTGRES_PASSWORD in .env for a non-development deployment.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      # Host access is useful for explicit migrations/backups, but remains
+      # localhost-only by default. Change POSTGRES_HOST_PORT if occupied.
+      - "${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_HOST_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      start_period: 5s
+      retries: 12
+
+  # Community default: one process owns Telegram, scheduled collection, and
+  # the web panel. Run `docker compose --profile migrate run --rm migrate`
+  # once after a fresh PostgreSQL volume, before starting this service.
+  tg-studio:
+    <<: *tg-studio-common
+    container_name: tg-studio
+    environment:
+      <<: *tg-studio-environment
+      PROCESS_ROLE: ${PROCESS_ROLE:-all}
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  # Explicit, one-shot schema migration. It is intentionally not a dependency
+  # of tg-studio: horizontally scaled web/worker services must never race to
+  # migrate the database at process start.
+  migrate:
+    <<: *tg-studio-common
+    profiles: ["migrate"]
+    container_name: tg-studio-migrate
+    restart: "no"
+    environment:
+      <<: *tg-studio-environment
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+
+  # Optional hosted topology. Use explicit service names so the default
+  # tg-studio `all` process is not started alongside these services:
+  #   docker compose --profile split up -d postgres tg-studio-web tg-studio-worker
+  tg-studio-web:
+    <<: *tg-studio-common
+    profiles: ["split"]
+    container_name: tg-studio-web
+    environment:
+      <<: *tg-studio-environment
+      PROCESS_ROLE: web
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  tg-studio-worker:
+    <<: *tg-studio-common
+    profiles: ["split"]
+    container_name: tg-studio-worker
+    environment:
+      <<: *tg-studio-environment
+      PROCESS_ROLE: worker
+
+  # Optional private metasearch service. It has no host port and is not a
+  # dependency of tg-studio, so a missing/unhealthy search service cannot stop
+  # Telegram collection or the dashboard. Start with:
+  #   docker compose --profile studio-search up -d searxng
+  searxng:
+    image: ${SEARXNG_IMAGE:-searxng/searxng:latest}
+    profiles: ["studio-search"]
+    restart: unless-stopped
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-data:/var/cache/searxng
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 8
+
+volumes:
+  postgres-data:
+  searxng-data:

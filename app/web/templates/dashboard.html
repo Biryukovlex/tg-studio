@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="control-row" data-reveal>
+  <form method="get" action="/" class="filter-form" data-auto-submit>
+    <label>
+      <span>Channel</span>
+      <span class="select-shell">
+        <select name="channel" aria-label="Channel">
+          <option value="">All channels</option>
+          {% for c in channels %}
+          <option value="{{ c.id }}" {% if current_channel == c.id %}selected{% endif %}>
+            {{ c.title or c.identifier }}
+          </option>
+          {% endfor %}
+        </select>
+      </span>
+    </label>
+    <label>
+      <span>Window</span>
+      <span class="select-shell">
+        <select name="days" aria-label="History window">
+          {% for value, label in [('7', 'Last 7 days'), ('14', 'Last 14 days'), ('30', 'Last 30 days'), ('90', 'Last 90 days'), ('all', 'All history')] %}
+          <option value="{{ value }}" {% if days == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </span>
+    </label>
+    <input type="hidden" name="order" value="{{ order }}">
+  </form>
+  <p class="update-meta">
+    Last update: <strong>{{ k.last_poll|dt or 'Never' }} UTC</strong>
+    <span aria-hidden="true">•</span>
+    {{ k.posts|int }} posts tracked
+  </p>
+</section>
+
+<section class="metrics-grid" aria-label="Channel totals">
+  <article class="metric-card metric-reach" data-reveal>
+    <div class="metric-icon"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i></div>
+    <div>
+      <div class="metric-value" data-count="{{ k.views|int }}">{{ k.views|num }}</div>
+      <div class="metric-label">Reach / Views</div>
+    </div>
+  </article>
+  <article class="metric-card metric-reactions" data-reveal>
+    <div class="metric-icon"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i></div>
+    <div>
+      <div class="metric-value" data-count="{{ k.reactions|int }}">{{ k.reactions|num }}</div>
+      <div class="metric-label">Reactions</div>
+    </div>
+  </article>
+  <article class="metric-card metric-comments" data-reveal>
+    <div class="metric-icon"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i></div>
+    <div>
+      <div class="metric-value" data-count="{{ k.comments|int }}">{{ k.comments|num }}</div>
+      <div class="metric-label">Comments <span>· {{ k.collected_comments|num }} archived</span></div>
+    </div>
+  </article>
+  <article class="metric-card metric-shares" data-reveal>
+    <div class="metric-icon"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i></div>
+    <div>
+      <div class="metric-value" data-count="{{ k.shares|int }}">{{ k.shares|num }}</div>
+      <div class="metric-label">Shares</div>
+    </div>
+  </article>
+</section>
+
+<section class="panel chart-panel" id="performance" data-reveal>
+  <div class="panel-heading">
+    <div>
+      <h2>Totals over time <span>(cumulative, UTC)</span></h2>
+    </div>
+    <div class="chart-periods" role="group" aria-label="Chart aggregation">
+      <button class="chart-period active" type="button" data-chart-period="day" aria-pressed="true">Day</button>
+      <button class="chart-period" type="button" data-chart-period="week" aria-pressed="false">Week</button>
+      <button class="chart-period" type="button" data-chart-period="month" aria-pressed="false">Month</button>
+    </div>
+  </div>
+  <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
+</section>
+
+<section class="panel posts-panel" id="posts" data-reveal>
+  <div class="panel-heading posts-heading">
+    <div>
+      <h2>Recent posts</h2>
+    </div>
+    <span class="row-count">{{ k.posts|int }} tracked</span>
+  </div>
+  <div class="table-scroll">
+    <table class="tbl posts-table">
+      <colgroup>
+        <col class="col-date">
+        {% if not current_channel %}<col class="col-channel">{% endif %}
+        <col class="col-post">
+        <col class="col-views">
+        <col class="col-reactions">
+        <col class="col-comments">
+        <col class="col-shares">
+        <col class="col-actions">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Date (UTC)</th>
+          {% if not current_channel %}<th>Channel</th>{% endif %}
+          <th>Post</th>
+          <th><a class="sort-link{% if order == 'views' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=views&days={{ days }}"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>Views / 24h</a></th>
+          <th><a class="sort-link{% if order == 'reactions' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=reactions&days={{ days }}"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i>Reactions</a></th>
+          <th><a class="sort-link{% if order == 'comments' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=comments&days={{ days }}"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i>Comments</a></th>
+          <th><a class="sort-link{% if order == 'shares' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=shares&days={{ days }}"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i>Shares</a></th>
+          <th class="actions-col">Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="date-cell">{{ r.posted_at|dt }}</td>
+          {% if not current_channel %}<td class="channel-cell">{{ r.identifier }}</td>{% endif %}
+          <td class="post-text">
+            <a href="{{ r.link }}" target="_blank" rel="noopener">{{ (r.text or '(media post)')[:90] }}</a>
+          </td>
+          <td class="number-cell">{{ r.views|num }} {% if r.views_delta and r.views_delta > 0 %}<span class="delta up">+{{ r.views_delta|num }}</span>{% else %}<span class="delta">–</span>{% endif %}</td>
+          <td class="number-cell">{{ r.reactions|num }}</td>
+          <td class="number-cell"><a class="metric-link" href="/post/{{ r.id }}#comments">{{ r.comments|num }}</a><span class="archived-count">{{ r.collected_comments|num }} archived</span></td>
+          <td class="number-cell">{{ r.shares|num }}</td>
+          <td class="actions-col"><a class="icon-btn" href="/post/{{ r.id }}" aria-label="View post details" title="View post details"><i class="mgc mgc-route-core-regular" aria-hidden="true"></i></a></td>
+        </tr>
+        {% endfor %}
+        {% if not rows %}
+        <tr><td colspan="8" class="empty-state">Nothing collected yet — wait for the first sync cycle.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+const data = {{ chart|tojson }};
+const motionOK = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const styles = getComputedStyle(document.documentElement);
+const chartColors = {
+  reach: styles.getPropertyValue('--cyan').trim(),
+  reactions: styles.getPropertyValue('--coral').trim(),
+  comments: styles.getPropertyValue('--teal').trim(),
+  shares: styles.getPropertyValue('--blue').trim(),
+  muted: styles.getPropertyValue('--muted').trim(),
+  grid: styles.getPropertyValue('--chart-grid').trim()
+};
+const trendChart = new Chart(document.getElementById('trendChart'), {
+  type: 'line',
+  data: {
+    labels: data.labels,
+    datasets: [
+      { label: 'Reach / Views', data: data.views, borderColor: chartColors.reach, backgroundColor: 'rgba(26, 211, 238, .10)', fill: true, tension: .36, borderWidth: 2.5, pointRadius: 2, pointHoverRadius: 6 },
+      { label: 'Reactions', data: data.reactions, borderColor: chartColors.reactions, tension: .36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
+      { label: 'Comments', data: data.comments, borderColor: chartColors.comments, tension: .36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
+      { label: 'Shares', data: data.shares, borderColor: chartColors.shares, tension: .36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    animation: motionOK ? { duration: 1400, easing: 'easeOutQuart' } : false,
+    plugins: {
+      legend: { position: 'top', align: 'start', labels: { color: chartColors.muted, boxWidth: 24, boxHeight: 2, padding: 24, usePointStyle: false, font: { family: 'Manrope Variable', size: 12, weight: 550 } } },
+      tooltip: { backgroundColor: '#0d1a27', borderColor: 'rgba(119, 151, 177, .3)', borderWidth: 1, titleColor: '#f4f8fb', bodyColor: '#a6b5c3', padding: 12, displayColors: true }
+    },
+    scales: {
+      x: { ticks: { color: chartColors.muted, maxTicksLimit: 12, font: { family: 'Manrope Variable', size: 11 } }, grid: { display: false }, border: { display: false } },
+      y: { beginAtZero: true, ticks: { color: chartColors.muted, padding: 12, font: { family: 'Manrope Variable', size: 11 } }, grid: { color: chartColors.grid, borderDash: [4, 5] }, border: { display: false } }
+    }
+  }
+});
+
+const rawSeries = {
+  labels: [...data.labels],
+  values: [data.views, data.reactions, data.comments, data.shares].map(series => [...series])
+};
+
+function groupedIndexes(period) {
+  if (period === 'day') return rawSeries.labels.map((_, index) => index);
+  const lastByPeriod = new Map();
+  rawSeries.labels.forEach((label, index) => {
+    const date = new Date(`${label}T00:00:00Z`);
+    let key;
+    if (period === 'month') {
+      key = label.slice(0, 7);
+    } else {
+      const mondayOffset = (date.getUTCDay() + 6) % 7;
+      date.setUTCDate(date.getUTCDate() - mondayOffset);
+      key = date.toISOString().slice(0, 10);
+    }
+    lastByPeriod.set(key, index);
+  });
+  return [...lastByPeriod.values()];
+}
+
+document.querySelectorAll('[data-chart-period]').forEach(button => {
+  button.addEventListener('click', () => {
+    const indexes = groupedIndexes(button.dataset.chartPeriod);
+    trendChart.data.labels = indexes.map(index => rawSeries.labels[index]);
+    trendChart.data.datasets.forEach((dataset, seriesIndex) => {
+      dataset.data = indexes.map(index => rawSeries.values[seriesIndex][index]);
+    });
+    document.querySelectorAll('[data-chart-period]').forEach(item => {
+      const selected = item === button;
+      item.classList.toggle('active', selected);
+      item.setAttribute('aria-pressed', String(selected));
+    });
+    trendChart.update(motionOK ? undefined : 'none');
+  });
+});
+</script>
+{% endblock %}

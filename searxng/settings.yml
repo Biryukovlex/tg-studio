@@ -1,0 +1,19 @@
+# Minimal private SearXNG settings for the optional Studio search profile.
+# The image keeps its upstream engine defaults; only JSON output is required
+# by the provider-neutral application adapter.
+use_default_settings: true
+
+general:
+  instance_name: TG Studio private search
+
+search:
+  formats:
+    - html
+    - json
+
+server:
+  bind_address: 0.0.0.0
+  port: 8080
+  # The container entrypoint may replace this with an operator secret. This
+  # value is not used by tg-studio and the service is never exposed publicly.
+  secret_key: change-me-in-compose

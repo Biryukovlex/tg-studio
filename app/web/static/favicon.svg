@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TG Studio">
+  <rect width="64" height="64" rx="16" fill="#07131d"/>
+  <path d="M14 46h36" fill="none" stroke="#294354" stroke-width="4" stroke-linecap="round"/>
+  <rect x="16" y="34" width="8" height="12" rx="2" fill="#19d2ec"/>
+  <rect x="28" y="24" width="8" height="22" rx="2" fill="#35d8cb"/>
+  <rect x="40" y="14" width="8" height="32" rx="2" fill="#6ee7dd"/>
+</svg>

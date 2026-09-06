@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#06101a">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/vendor/manrope/index.css">
+  <link rel="stylesheet" href="/static/vendor/mingcute/css/core-regular.min.css">
+  <link rel="stylesheet" href="/static/style.css?v=9">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="/static/app.js?v=2" defer></script>
+</head>
+<body class="app-body{% block body_class %}{% endblock %}">
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand-mark" href="/" aria-label="{{ app_name }} home">
+        <i class="mgc mgc-chart-bar-2-core-regular" aria-hidden="true"></i>
+      </a>
+
+      <nav class="sidebar-nav">
+        <a class="sidebar-link{% if request.url.path == '/' %} active{% endif %}" href="/">
+          <i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>
+          <span>Overview</span>
+        </a>
+        {% if request.app.state.settings.studio_enabled %}
+        <a class="sidebar-link{% if request.url.path.startswith('/studio') %} active{% endif %}" href="/studio">
+          <i class="mgc mgc-content-ai-core-regular" aria-hidden="true"></i>
+          <span>Studio</span>
+        </a>
+        {% endif %}
+      </nav>
+
+      <div class="sidebar-foot">
+        <a class="sidebar-link logout-link" href="/logout">
+          <i class="mgc mgc-exit-door-core-regular" aria-hidden="true"></i>
+          <span>Log out</span>
+        </a>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="page-heading">
+          {% block pageheading %}
+          <p class="eyebrow">Channel intelligence</p>
+          <h1>Overview</h1>
+          {% endblock %}
+        </div>
+        <div class="nav-actions">
+          {% block navactions %}
+          <form method="post" action="/refresh" class="inline-form refresh-form">
+            {% if current_channel %}<input type="hidden" name="channel" value="{{ current_channel }}">{% endif %}
+            <button type="submit" class="action-btn primary-action">
+              <i class="mgc mgc-refresh-4-ai-core-regular" aria-hidden="true"></i>
+              <span>Sync now</span>
+            </button>
+          </form>
+          <a class="action-btn" href="/export.csv{% if current_channel %}?channel={{ current_channel }}{% endif %}">
+            <i class="mgc mgc-file-export-core-regular" aria-hidden="true"></i>
+            <span>Export posts</span>
+          </a>
+          <a class="action-btn" href="/export-comments.csv{% if current_channel %}?channel={{ current_channel }}{% endif %}">
+            <i class="mgc mgc-comment-2-core-regular" aria-hidden="true"></i>
+            <span>Export comments</span>
+          </a>
+          {% endblock %}
+        </div>
+      </header>
+
+      <main id="main-content">
+        {% if msg %}
+        <div class="banner" role="status">
+          <i class="mgc mgc-signal-core-regular" aria-hidden="true"></i>
+          <span>{{ msg }}</span>
+        </div>
+        {% endif %}
+        {% block content %}{% endblock %}
+      </main>
+
+      <footer>
+        <span>All times UTC</span>
+        <span class="footer-dot" aria-hidden="true"></span>
+        <span>PostgreSQL workspace</span>
+      </footer>
+    </div>
+  </div>
+</body>
+</html>

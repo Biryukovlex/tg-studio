@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: studio-frontend/package-lock.json
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Install frontend dependencies
+        run: npm --prefix studio-frontend ci --ignore-scripts
+      - name: Python tests
+        run: python -m pytest -q
+      - name: Python compile check
+        run: python -m compileall -q app scripts alembic tests
+      - name: Dependency consistency
+        run: python -m pip check
+      - name: Dependency license policy
+        run: python scripts/check_dependency_licenses.py
+      - name: Python vulnerability audit
+        run: python -m pip_audit -r requirements.lock
+      - name: Frontend typecheck
+        run: npm --prefix studio-frontend run typecheck
+      - name: Frontend production build
+        run: npm --prefix studio-frontend run build
+      - name: Frontend vulnerability audit
+        run: npm --prefix studio-frontend audit --audit-level=high
+      - name: Compose configuration
+        run: docker compose config --quiet

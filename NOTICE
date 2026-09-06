@@ -1,0 +1,15 @@
+TG Studio
+Copyright 2026 TG Studio contributors
+
+This product includes the Manrope font, Copyright 2019 The Manrope Project
+Authors, licensed under the SIL Open Font License, Version 1.1. Its license is
+included at app/web/static/vendor/manrope/LICENSE.
+
+This product includes MingCute icon font assets licensed under the Apache
+License, Version 2.0. Its license is included at
+app/web/static/vendor/mingcute/LICENSE.
+
+Third-party dependency licenses remain with their respective packages. The
+optional SearXNG Compose service is a separate work distributed under the GNU
+Affero General Public License; it is not covered by TG Studio's Apache-2.0
+license.

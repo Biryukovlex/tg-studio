@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Post details · {{ app_name }}{% endblock %}
+{% block pageheading %}
+<p class="eyebrow">Archived post</p>
+<h1>Post details</h1>
+{% endblock %}
+{% block navactions %}
+<a class="action-btn primary-action" href="/">
+  <i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>
+  <span>Back to overview</span>
+</a>
+{% if row.link != '#' %}
+<a class="action-btn" href="{{ row.link }}" target="_blank" rel="noopener">
+  <i class="mgc mgc-route-core-regular" aria-hidden="true"></i>
+  <span>Open in Telegram</span>
+</a>
+{% endif %}
+{% endblock %}
+{% block content %}
+
+<section class="detail-summary" data-reveal>
+  <div>
+    <div class="detail-post-body" role="article">{% if row.formatted_html %}{{ row.formatted_html|safe }}{% else %}(media post){% endif %}</div>
+    <p class="detail-meta">
+      Posted {{ row.posted_at|dt }} UTC
+      {% if row.link != '#' %} · <a href="{{ row.link }}" target="_blank" rel="noopener">View source</a>{% endif %}
+    </p>
+  </div>
+  <span class="detail-channel">{{ row.identifier }}</span>
+</section>
+
+<section class="metrics-grid" aria-label="Post totals">
+  <article class="metric-card metric-reach" data-reveal>
+    <div class="metric-icon"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i></div>
+    <div><div class="metric-value" data-count="{{ row.views|int }}">{{ row.views|num }}</div><div class="metric-label">Reach / Views</div></div>
+  </article>
+  <article class="metric-card metric-reactions" data-reveal>
+    <div class="metric-icon"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i></div>
+    <div><div class="metric-value" data-count="{{ row.reactions|int }}">{{ row.reactions|num }}</div><div class="metric-label">Reactions</div></div>
+  </article>
+  <article class="metric-card metric-comments" data-reveal>
+    <div class="metric-icon"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i></div>
+    <div><div class="metric-value" data-count="{{ row.comments|int }}">{{ row.comments|num }}</div><div class="metric-label">Comments <span>· {{ row.collected_comments|num }} archived</span></div></div>
+  </article>
+  <article class="metric-card metric-shares" data-reveal>
+    <div class="metric-icon"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i></div>
+    <div><div class="metric-value" data-count="{{ row.shares|int }}">{{ row.shares|num }}</div><div class="metric-label">Shares</div></div>
+  </article>
+</section>
+
+<section class="panel" id="comments" data-reveal>
+  <div class="panel-heading">
+    <div>
+      <p class="section-kicker">Discussion archive</p>
+      <h2>Comments</h2>
+    </div>
+    <span class="row-count">{{ row.collected_comments|num }} archived</span>
+  </div>
+  <div class="comment-list">
+    {% for comment in comments %}
+    <article class="comment{% if comment.is_deleted %} deleted{% endif %}">
+      <div class="comment-meta">
+        <span class="comment-author">{{ comment.sender_name }}</span>
+        {% if comment.sender_username %}<span>@{{ comment.sender_username }}</span>{% endif %}
+        <span>{{ comment.posted_at|dt }} UTC</span>
+        {% if comment.edited_at %}<span>Edited {{ comment.edited_at|dt }}</span>{% endif %}
+        {% if comment.reactions %}<span class="reaction-count"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i> {{ comment.reactions|num }}</span>{% endif %}
+        {% if comment.is_deleted %}<span class="deleted-label">Deleted from Telegram</span>{% endif %}
+        {% if comment.link != '#' %}<a href="{{ comment.link }}" target="_blank" rel="noopener"><i class="mgc mgc-route-core-regular" aria-hidden="true"></i> Open</a>{% endif %}
+      </div>
+      <div class="comment-text">{{ comment.text or ('(' ~ comment.media_type ~ ')' if comment.media_type else '(empty comment)') }}</div>
+    </article>
+    {% endfor %}
+    {% if not comments %}<p class="empty-state">No comments collected for this post.</p>{% endif %}
+  </div>
+</section>
+
+<section class="panel chart-panel" data-reveal>
+  <div class="panel-heading">
+    <div>
+      <p class="section-kicker">Post performance</p>
+      <h2>Metric history <span>(UTC)</span></h2>
+    </div>
+  </div>
+  <div class="chart-wrap"><canvas id="postChart"></canvas></div>
+</section>
+
+<section class="panel" data-reveal>
+  <div class="panel-heading">
+    <div>
+      <p class="section-kicker">Raw archive</p>
+      <h2>Snapshots <span>(latest first)</span></h2>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table class="tbl snapshots-table">
+      <thead><tr><th>Time</th><th>Views</th><th>Reactions</th><th>Comments</th><th>Shares</th></tr></thead>
+      <tbody>
+        {% for h in hist %}
+        <tr>
+          <td>{{ h.taken_at|dt }}</td>
+          <td>{{ h.views|num }}</td><td>{{ h.reactions|num }}</td>
+          <td>{{ h.comments|num }}</td><td>{{ h.shares|num }}</td>
+        </tr>
+        {% endfor %}
+        {% if not hist %}<tr><td colspan="5" class="empty-state">No snapshots recorded.</td></tr>{% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+const data = {{ chart|tojson }};
+const motionOK = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const styles = getComputedStyle(document.documentElement);
+const colors = {
+  reach: styles.getPropertyValue('--cyan').trim(),
+  reactions: styles.getPropertyValue('--coral').trim(),
+  comments: styles.getPropertyValue('--teal').trim(),
+  shares: styles.getPropertyValue('--blue').trim(),
+  muted: styles.getPropertyValue('--muted').trim(),
+  grid: styles.getPropertyValue('--chart-grid').trim()
+};
+new Chart(document.getElementById('postChart'), {
+  type: 'line',
+  data: {
+    labels: data.labels,
+    datasets: [
+      { label: 'Reach / Views', data: data.views, borderColor: colors.reach, backgroundColor: 'rgba(25, 210, 236, .10)', fill: true, tension: .36, borderWidth: 2.5, pointRadius: 2, pointHoverRadius: 6 },
+      { label: 'Reactions', data: data.reactions, borderColor: colors.reactions, tension: .36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
+      { label: 'Comments', data: data.comments, borderColor: colors.comments, tension: .36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
+      { label: 'Shares', data: data.shares, borderColor: colors.shares, tension: .36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    animation: motionOK ? { duration: 1300, easing: 'easeOutQuart' } : false,
+    plugins: {
+      legend: { position: 'top', align: 'start', labels: { color: colors.muted, boxWidth: 24, boxHeight: 2, padding: 24, font: { family: 'Manrope Variable', size: 12, weight: 550 } } },
+      tooltip: { backgroundColor: '#0d1a27', borderColor: 'rgba(119, 151, 177, .3)', borderWidth: 1, titleColor: '#f4f8fb', bodyColor: '#a6b5c3', padding: 12 }
+    },
+    scales: {
+      x: { ticks: { color: colors.muted, maxTicksLimit: 10, font: { family: 'Manrope Variable', size: 11 } }, grid: { display: false }, border: { display: false } },
+      y: { beginAtZero: true, ticks: { color: colors.muted, padding: 12, font: { family: 'Manrope Variable', size: 11 } }, grid: { color: colors.grid, borderDash: [4, 5] }, border: { display: false } }
+    }
+  }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,29 @@
+# Alternative to Docker: run as a systemd service on Hetzner.
+#
+#   sudo cp deploy/systemd/tg-studio.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tg-studio
+#
+[Unit]
+Description=TG Studio collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alex
+Group=alex
+WorkingDirectory=/opt/tg-studio
+EnvironmentFile=/opt/tg-studio/.env
+ExecStart=/opt/tg-studio/.venv/bin/python -m app.main
+Restart=always
+RestartSec=5
+
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/tg-studio/data
+
+[Install]
+WantedBy=multi-user.target
