@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     poll_minutes: float = 15.0
     track_days: int = 30  # 0 = entire channel history
     backfill_limit: int = 200  # 0 = no message-count limit
+    full_rescan_hours: int = 24
 
     # Storage
     data_dir: str = "data"

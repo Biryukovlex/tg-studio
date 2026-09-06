@@ -668,3 +668,35 @@ class PostgresDatabase:
                WHERE workspace_id=:workspace_id AND id=:job_id""",
             {"job_id": job_id, "status": status, "error": (error or "")[:1000] if error else None},
         )
+
+    async def expire_stale_collection_jobs(self) -> int:
+        """Mark running jobs with expired leases as failed (startup recovery)."""
+
+        result = await self._execute(
+            """UPDATE collection_jobs SET status='failed', finished_at=now(),
+                      error_code='stale_on_startup', error_detail='stale_on_startup'
+               WHERE workspace_id=:workspace_id AND status='running' AND lease_until < now()""",
+        )
+        return int(result.rowcount or 0)
+
+    async def renew_collection_job(self, job_id: uuid.UUID, lease_seconds: int = 900) -> None:
+        """Refresh lease for a long-running collection job."""
+
+        lease_until = datetime.now(timezone.utc) + timedelta(seconds=max(30, lease_seconds))
+        await self._execute(
+            """UPDATE collection_jobs SET lease_until=:lease_until
+               WHERE workspace_id=:workspace_id AND id=:job_id AND status='running'""",
+            {"job_id": job_id, "lease_until": lease_until},
+        )
+
+    async def post_ids_with_comments(self, channel_id: int) -> list[int]:
+        """Return distinct post IDs that have at least one non-deleted comment."""
+
+        result = await self._execute(
+            """SELECT DISTINCT post_id FROM comments
+               WHERE workspace_id=:workspace_id AND post_id IN (
+                   SELECT id FROM posts WHERE workspace_id=:workspace_id AND channel_id=:channel_id
+               ) AND is_deleted=false""",
+            {"channel_id": channel_id},
+        )
+        return [int(row[0]) for row in result.all()]
