@@ -296,7 +296,7 @@ function plainFromMarkdown(text: string): string {
   let t = text.replace(/`([^`]+)`/g, "$1");
   t = t.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
   t = t.replace(/^\s*#{1,6}\s+/gm, "");
-  t = t.replace(/<[^>]+>/g, "");
+  t = t.replace(/<[a-zA-Z\/][^>]*>/g, "");
   t = t.replace(/\*\*([^*]+)\*\*/g, "$1");
   t = t.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "$1");
   t = t.replace(/~~([^~]+)~~/g, "$1");
@@ -314,7 +314,7 @@ function plainFromMarkdown(text: string): string {
 
 function renderInlineMarkdown(line: string, key: number) {
   let text = line.replace(/!\[([^\]]*)\]\([^)]*\)/g, "");
-  text = text.replace(/<[^>]+>/g, "");
+  text = text.replace(/<[a-zA-Z\/][^>]*>/g, "");
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|`[^`]+`|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|\[([^\]]+)\]\([^)]+\)|> .+)/g;
@@ -507,6 +507,9 @@ function DraftPanel({
         ...current,
         body: value,
         body_plain: plain,
+        // The server-rendered HTML belongs to the previous body; until the
+        // edit is saved, a rich copy must fall back to plain text.
+        body_html: undefined,
         character_count: Array.from(plain).length,
         plain_character_count: Array.from(plain).length,
         over_limit: Array.from(plain).length > 4096,
@@ -674,7 +677,7 @@ function DraftPanel({
   );
 }
 
-function ProfilePrimer({ bootstrap, onProfile }: { bootstrap: Bootstrap; onProfile: () => void }) {
+function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Bootstrap; onProfile: () => void; onBootstrap: (next: Bootstrap) => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const consent = bootstrap.consent;
@@ -686,13 +689,13 @@ function ProfilePrimer({ bootstrap, onProfile }: { bootstrap: Bootstrap; onProfi
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
       body: JSON.stringify({ confirm: true, configuration_fingerprint: consent.configuration_fingerprint }),
     })
-      .then((payload) => {
-        // After consent, reload bootstrap to get updated profile_status
-        void api<Bootstrap>("/studio/api/bootstrap").then((next) => {
-          // Update bootstrap via page reload? For primer, just show message.
-          setMessage("Consent granted. The agent can now use your channel context.");
-        });
-      })
+      .then(() =>
+        // Consent changes what the primer shows, so reload the bootstrap
+        // payload instead of leaving the consent card on screen.
+        api<Bootstrap>("/studio/api/bootstrap")
+          .then((next) => onBootstrap(next))
+          .catch(() => setMessage("Consent granted. Reload the page to continue.")),
+      )
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Consent could not be saved."))
       .finally(() => setBusy(false));
   };
@@ -1157,7 +1160,7 @@ function StudioApp() {
           <button type="button" className="studio-settings-mobile" onClick={() => setSettingsOpen(true)}>Settings</button>
           <div className="studio-topbar-meta"><span className="studio-status-dot" aria-hidden="true" /> Agent context connected</div>
         </header>
-        <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} />
+        <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
         {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
       </main>
       <DraftPanel conversationId={selected?.id ?? null} seedDraft={bootstrap.draft} open={draftOpen} onClose={() => setDraftOpen(false)} watchForAgentChanges={agentRunActive} refreshToken={draftRefreshToken} />

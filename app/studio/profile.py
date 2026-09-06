@@ -358,7 +358,7 @@ def _formatting_facts(rows: list[dict[str, Any]]) -> tuple[list[str], list[dict[
                     url = ent.get("url") or (text[off:off+length] if ent.get("type") == "url" else "")
                     if url:
                         candidate_url = url
-                        candidate_anchor = text[off:off+length][:30].strip() or "Deputies Watch"
+                        candidate_anchor = text[off:off+length][:30].strip()
                         break
         if candidate_url:
             sig_link += 1
@@ -390,14 +390,17 @@ def _formatting_facts(rows: list[dict[str, Any]]) -> tuple[list[str], list[dict[
     rate = bold_first / total if total else 0
     facts.append({"fact": "bold first line", "rate": round(rate, 3), "count": bold_first, "total": total})
     if rate >= 0.6:
-        lines_out.append("The first line is the title, in bold: **Дума утвердила бюджет на 2027 год**")
+        # Generic placeholder only: never a real post's title.
+        lines_out.append("The first line is the title, in bold: **Example title**")
     elif rate >= 0.2:
         lines_out.append("Sometimes the first line is bold.")
     # Signature link
     rate = sig_link / total if total else 0
     facts.append({"fact": "signature link", "rate": round(rate, 3), "count": sig_link, "total": total, "url": sig_url})
     if rate >= 0.6 and sig_url and sig_url.lower().startswith(("http://", "https://")):
-        anchor = sig_anchor or "Deputies Watch"
+        # Fall back to the link's host when the anchor text is empty; the
+        # signature belongs to the channel being analysed, never to an example.
+        anchor = sig_anchor or sig_url.split("//", 1)[-1].split("/", 1)[0] or "channel"
         lines_out.append(f"Posts end with a signature line that links the channel: — [{anchor}]({sig_url})")
     elif rate >= 0.2:
         lines_out.append("Sometimes posts end with a signature link.")

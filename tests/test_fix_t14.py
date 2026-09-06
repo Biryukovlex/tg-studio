@@ -184,3 +184,33 @@ def test_build_strips_markup():
         assert "![img]" not in line
         assert "<b>" not in line
         assert "javascript:" not in line
+
+
+def test_build_never_emits_mockup_strings_and_derives_anchor_from_link():
+    """Integration fix: the deterministic build had the mockup's channel name
+    and a real-looking Russian title hard-coded as defaults."""
+    from app.studio.profile import _formatting_facts
+
+    now = datetime.now(timezone.utc)
+    rows = []
+    for i in range(10):
+        text = "Title line\nBody content\nlink"
+        entities = [{"type": "bold", "offset": 0, "length": len("Title line".encode("utf-16-le")) // 2}]
+        # Signature link whose anchor text is empty after stripping -> host fallback.
+        entities.append({"type": "text_link", "offset": len(text) - 4, "length": 4, "url": "https://t.me/other_channel"})
+        rows.append({"post_id": i + 1, "message_id": 100 + i, "channel_id": 1, "posted_at": now - timedelta(days=5),
+                     "snapshot_at": now, "text": text, "views": 100, "reactions": 5, "comments": 1, "shares": 1,
+                     "formatting_entities": entities})
+    lines, _ = _formatting_facts(rows)
+    joined = "\n".join(lines)
+    assert "Deputies Watch" not in joined
+    assert "Дума утвердила" not in joined
+    assert "**Example title**" in joined
+    assert "[link](https://t.me/other_channel)" in joined
+    # Anchor falls back to the host when the anchor text is blank.
+    rows_blank = [dict(r, text="Title line\nBody content\n    ") for r in rows]
+    for r in rows_blank:
+        r["formatting_entities"] = [dict(e) for e in r["formatting_entities"]]
+        r["formatting_entities"][1]["offset"] = len(r["text"]) - 4
+    lines_blank, _ = _formatting_facts(rows_blank)
+    assert "[t.me](https://t.me/other_channel)" in "\n".join(lines_blank)

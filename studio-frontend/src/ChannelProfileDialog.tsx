@@ -45,7 +45,7 @@ function renderInlineMarkdown(line: string, key: number) {
   // Strip images ![alt](url) -> nothing
   let text = line.replace(/!\[([^\]]*)\]\([^)]*\)/g, "");
   // Strip raw HTML
-  text = text.replace(/<[^>]+>/g, "");
+  text = text.replace(/<[a-zA-Z\/][^>]*>/g, "");
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   // Combined regex for bold, italic, strike, code, link

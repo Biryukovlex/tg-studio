@@ -38,7 +38,7 @@ def _strip_forbidden(text: str) -> str:
     # Remove headings at line start (#, ## etc)
     text = re.sub(r"^\s*#{1,6}\s+", "", text, flags=re.MULTILINE)
     # Remove HTML tags
-    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"<[a-zA-Z/][^>]*>", "",text)
     return text
 
 
@@ -96,7 +96,7 @@ def _render_inline_html(line: str) -> str:
     # Remove heading markers if any slipped (should have been validated)
     line = re.sub(r"^\s*#{1,6}\s+", "", line)
     # Remove HTML tags (strip)
-    line = re.sub(r"<[^>]+>", "", line)
+    line = re.sub(r"<[a-zA-Z/][^>]*>", "",line)
 
     # Handle code spans: `code` -> <code>code</code> (escape inside)
     line = re.sub(r"`([^`]+)`", lambda m: f"<code>{html.escape(m.group(1), quote=False)}</code>", line)
@@ -130,12 +130,13 @@ def _render_inline_html(line: str) -> str:
     # Handle strikethrough: ~~strike~~
     line = re.sub(r"~~([^~]+)~~", lambda m: f"<s>{html.escape(m.group(1), quote=False)}</s>", line)
 
-    # Now escape remaining plain text that is not inside tags.
-    # Split by tags to keep generated tags unescaped.
-    parts = re.split(r"(<[^>]+>)", line)
+    # Escape everything except the tags this renderer itself generated. Any
+    # other "<…>" span is prose (for example "a < b and c > d") and must be
+    # escaped, otherwise it would reach the rich clipboard as markup.
+    parts = re.split(r"(</?(?:b|i|s|code|a)\b[^>]*>)", line)
     escaped_parts: list[str] = []
     for part in parts:
-        if part.startswith("<") and part.endswith(">"):
+        if re.fullmatch(r"</?(?:b|i|s|code|a)\b[^>]*>", part):
             escaped_parts.append(part)
         else:
             escaped_parts.append(html.escape(part, quote=False))
@@ -160,7 +161,7 @@ def render_markdown_plain(body: str) -> str:
         # Handle headings: # heading -> heading
         line = re.sub(r"^\s*#{1,6}\s+", "", line)
         # Handle HTML: strip
-        line = re.sub(r"<[^>]+>", "", line)
+        line = re.sub(r"<[a-zA-Z/][^>]*>", "",line)
         # Handle bold/italic/strike: **bold** -> bold, *italic* -> italic, ~~strike~~ -> strike
         line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
         line = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"\1", line)

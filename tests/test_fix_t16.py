@@ -97,3 +97,17 @@ def test_strike_and_code_and_quote():
     assert "strike" in plain
     assert "code" in plain
     assert "quote" in plain
+
+
+def test_angle_brackets_in_prose_survive_rendering():
+    """Integration fix: the HTML-stripping regex removed any '<…>' span,
+    including ordinary prose such as comparisons."""
+    body = "Turnout was a < b and c > d this session"
+    assert render_markdown_plain(body) == body
+    assert "a &lt; b and c &gt; d" in render_markdown_html(body)
+    # Real tags are still removed from the rendering and rejected on save.
+    assert render_markdown_html("x <b>y</b> z") == "x y z"
+    # Generated tags stay intact while a stray bracket beside them is escaped.
+    assert render_markdown_html("**bold** < rest") == "<b>bold</b> &lt; rest"
+    with pytest.raises(DraftValidationError):
+        validate_draft_input({"body": "x <b>y</b> z", "creative": True}, known_source_ids=set(), require_sources=False)
