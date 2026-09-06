@@ -67,6 +67,8 @@ def _json_value(value: Any, default: Any) -> Any:
 def _draft_public(row: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-safe draft row with server-derived metadata."""
 
+    from .markdown import render_markdown_html, render_markdown_plain
+
     data = dict(row)
     for key, default in (
         ("source_ids", []),
@@ -91,9 +93,13 @@ def _draft_public(row: dict[str, Any]) -> dict[str, Any]:
             data[key] = _iso(data[key])
     body = str(data.get("body") or "")
     data["body"] = body
-    data["character_count"] = len(body)
-    data["over_limit"] = len(body) > MAX_DRAFT_CHARS
-    data["warning_threshold"] = len(body) >= 3800
+    plain = render_markdown_plain(body)
+    data["body_plain"] = plain
+    data["body_html"] = render_markdown_html(body)
+    data["plain_character_count"] = len(plain)
+    data["character_count"] = len(plain)
+    data["over_limit"] = len(plain) > MAX_DRAFT_CHARS
+    data["warning_threshold"] = len(plain) >= 3800
     data["revision"] = int(data.get("revision") or 1)
     data["current_version"] = int(data.get("current_version") or 1)
     data["current_version_origin"] = str(data.get("current_version_origin") or "generated")

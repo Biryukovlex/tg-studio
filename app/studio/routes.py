@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from ..web.dependencies import require_auth, require_csrf
 from .consent import PROVIDER_NAME, configuration_fingerprint, consent_state, disclosure
 from .drafts import DraftConflictError, DraftValidationError
+from .markdown import render_markdown_html, render_markdown_plain
 from .repository import ActiveRunExists, ConversationNotFound, DraftNotFound, MemoryStudioRepository, RunNotFound, StudioRepository, StudioRepositoryError
 from .profile import ChannelProfile, propose_topic_change
 from .prompts import PROMPT_VERSION
@@ -63,9 +64,15 @@ def _draft(row: dict[str, Any] | None) -> dict[str, Any] | None:
         value[key] = _iso(value.get(key))
     body = str(value.get("body") or "")
     value["body"] = body
-    value["character_count"] = len(body)
-    value["over_limit"] = len(body) > 4096
-    value["warning_threshold"] = len(body) >= 3800
+    # T16: character_count/over_limit computed on plain rendering
+    plain = render_markdown_plain(body)
+    value["body_plain"] = plain
+    value["body_html"] = render_markdown_html(body)
+    value["plain_character_count"] = len(plain)
+    value["character_count"] = len(plain)
+    value["over_limit"] = len(plain) > 4096
+    value["warning_threshold"] = len(plain) >= 3800
+    # Keep legacy plain count under character_count for backward compat
     for key, default in (("source_ids", []), ("claim_support", []), ("assumptions", []), ("warnings", []), ("channel_evidence", []), ("web_evidence", [])):
         raw = value.get(key)
         if isinstance(raw, str):
@@ -794,7 +801,10 @@ def build_router() -> APIRouter:
         except DraftNotFound:
             return _safe_error("draft_not_found", "Draft not found.", status_code=404)
         copied_at = _iso(row.get("copied_at")) or ""
-        return {"draft": _draft(row), "copied_text": str(row.get("body") or ""), "copied_at": copied_at}
+        body = str(row.get("body") or "")
+        plain = render_markdown_plain(body)
+        html_body = render_markdown_html(body)
+        return {"draft": _draft(row), "copied_text": plain, "copied_html": html_body, "copied_at": copied_at}
 
     @router.get("/api/drafts/{draft_id}/versions")
     async def draft_versions(request: Request, draft_id: str):

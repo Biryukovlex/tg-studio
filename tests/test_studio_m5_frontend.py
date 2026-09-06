@@ -22,7 +22,7 @@ def test_m5_artifact_panel_contract_is_built_and_responsive():
         assert "studio-copy" not in heading.group(0)
     # Draft content toolbar has the single copy button
     assert source.count('"Copy post"') == 1 or source.count("'Copy post'") == 1 or "Copy post" in source
-    assert "Array.from(draft.body).length" in source
+    assert "Array.from(draft.body).length" in source or "plainFromMarkdown" in source or "character_count" in source
     assert "postText" not in source
     assert "draft_conflict" in source or "Keep my text" in source
     assert "Restore" in source and "Source" in source

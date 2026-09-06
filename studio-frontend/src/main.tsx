@@ -292,6 +292,68 @@ function StudioSettings({ onClose }: { onClose: () => void }) {
   </dialog>;
 }
 
+function plainFromMarkdown(text: string): string {
+  let t = text.replace(/`([^`]+)`/g, "$1");
+  t = t.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
+  t = t.replace(/^\s*#{1,6}\s+/gm, "");
+  t = t.replace(/<[^>]+>/g, "");
+  t = t.replace(/\*\*([^*]+)\*\*/g, "$1");
+  t = t.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "$1");
+  t = t.replace(/~~([^~]+)~~/g, "$1");
+  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, url: string) => {
+    const safe = url.trim().toLowerCase().startsWith("http://") || url.trim().toLowerCase().startsWith("https://") ? url.trim() : null;
+    if (safe) {
+      if (label.trim() === safe.trim()) return label;
+      return `${label} (${safe})`;
+    }
+    return label;
+  });
+  t = t.split("\n").map((line) => line.replace(/^\s*>\s?/, "")).join("\n");
+  return t;
+}
+
+function renderInlineMarkdown(line: string, key: number) {
+  let text = line.replace(/!\[([^\]]*)\]\([^)]*\)/g, "");
+  text = text.replace(/<[^>]+>/g, "");
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|`[^`]+`|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|\[([^\]]+)\]\([^)]+\)|> .+)/g;
+  let match: RegExpExecArray | null;
+  let idx = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    const start = match.index;
+    if (start > lastIndex) parts.push(<span key={`t-${key}-${idx++}`}>{text.slice(lastIndex, start)}</span>);
+    const token = match[0];
+    if (token.startsWith("**")) parts.push(<strong key={`b-${key}-${idx++}`}>{token.slice(2, -2)}</strong>);
+    else if (token.startsWith("~~")) parts.push(<s key={`s-${key}-${idx++}`}>{token.slice(2, -2)}</s>);
+    else if (token.startsWith("`")) parts.push(<code key={`c-${key}-${idx++}`}>{token.slice(1, -1)}</code>);
+    else if (token.startsWith("[") && match[3]) parts.push(<a key={`a-${key}-${idx++}`} href={match[3]} target="_blank" rel="noopener noreferrer">{match[2]}</a>);
+    else if (token.startsWith("[") && match[4]) parts.push(<span key={`l-${key}-${idx++}`}>{match[4]}</span>);
+    else if (token.startsWith("*") && !token.startsWith("**")) parts.push(<em key={`i-${key}-${idx++}`}>{token.slice(1, -1)}</em>);
+    else if (token.startsWith("> ")) parts.push(<blockquote key={`q-${key}-${idx++}`}><span>{token.slice(2)}</span></blockquote>);
+    else parts.push(<span key={`u-${key}-${idx++}`}>{token}</span>);
+    lastIndex = pattern.lastIndex;
+  }
+  if (lastIndex < text.length) parts.push(<span key={`t-${key}-${idx++}`}>{text.slice(lastIndex)}</span>);
+  if (parts.length === 0) return <span key={key}>{line}</span>;
+  return <span key={key}>{parts}</span>;
+}
+
+function DraftMarkdownPreview({ text }: { text: string }) {
+  if (!text.trim()) return <p />;
+  const lines = text.split("\n");
+  return (
+    <p>
+      {lines.map((line, i) => (
+        <span key={i}>
+          {renderInlineMarkdown(line, i)}
+          {i < lines.length - 1 && <br />}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function DraftPanel({
   conversationId,
   seedDraft,
@@ -440,11 +502,15 @@ function DraftPanel({
       if (field === "working_title") {
         return { ...current, working_title: value.slice(0, 160), copied_at: null };
       }
+      const plain = plainFromMarkdown(value);
       return {
         ...current,
         body: value,
-        character_count: Array.from(value).length,
-        over_limit: Array.from(value).length > 4096,
+        body_plain: plain,
+        character_count: Array.from(plain).length,
+        plain_character_count: Array.from(plain).length,
+        over_limit: Array.from(plain).length > 4096,
+        warning_threshold: Array.from(plain).length >= 3800,
         copied_at: null,
       };
     });
@@ -453,12 +519,38 @@ function DraftPanel({
   };
 
   const copy = async () => {
-    if (!draft || Array.from(draft.body).length > 4096) return;
+    if (!draft || draft.over_limit) return;
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(draft.body);
-      else {
+      // Use the authoritative plain/html from the copy endpoint when available.
+      let plain = (draft as unknown as { body_plain?: string }).body_plain ?? plainFromMarkdown(draft.body);
+      let htmlBody = (draft as unknown as { body_html?: string }).body_html ?? "";
+      if (saveState === "saved") {
+        try {
+          const result = await api<{ copied_text: string; copied_html: string }>(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } });
+          plain = result.copied_text;
+          htmlBody = result.copied_html;
+        } catch {
+          // fallback to local plain/html
+        }
+      }
+      // Try rich clipboard with both html and plain
+      const canRich = typeof navigator !== "undefined" && (navigator.clipboard as unknown as { write?: unknown })?.write && typeof (window as unknown as { ClipboardItem?: unknown }).ClipboardItem !== "undefined";
+      if (canRich) {
+        const ClipboardItemCtor = (window as unknown as { ClipboardItem: new (items: Record<string, Blob>) => unknown }).ClipboardItem;
+        const item = new ClipboardItemCtor({
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+          "text/html": new Blob([htmlBody || plain], { type: "text/html" }),
+        });
+        await (navigator.clipboard as unknown as { write: (items: unknown[]) => Promise<void> }).write([item]);
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(plain);
+        // If html available and plain fallback, also try to write html via execCommand fallback is plain only.
+        if (htmlBody && plain !== htmlBody) {
+          // plain fallback already done
+        }
+      } else {
         const node = document.createElement("textarea");
-        node.value = draft.body;
+        node.value = plain;
         node.style.position = "fixed";
         node.style.opacity = "0";
         document.body.appendChild(node);
@@ -467,8 +559,9 @@ function DraftPanel({
         node.remove();
         if (!success) throw new Error("Clipboard unavailable");
       }
-      // Do not mark a different, unsaved server revision as copied.
-      if (saveState === "saved") await api(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } });
+      if (saveState !== "saved") {
+        // Still mark as copied for UI, but don't call endpoint if not saved - already handled plain
+      }
       setCopied(true);
       setDraft((current) => current ? { ...current, copied_at: new Date().toISOString() } : current);
       window.setTimeout(() => setCopied(false), 2200);
@@ -566,9 +659,10 @@ function DraftPanel({
       ) : (
         <div className="studio-draft-content">
           <label className="studio-draft-title">Artifact title<input aria-label="Artifact title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /><span className="studio-draft-title-hint">Kept for search and cross-checking. Not copied to the post.</span></label>
+          <div className="studio-draft-preview"><div className="studio-markdown"><DraftMarkdownPreview text={draft.body} /></div></div>
           <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={draft.body} onChange={(event) => edit("body", event.target.value)} />
           <div className={`studio-char-count ${draft.over_limit ? "is-over" : draft.warning_threshold ? "is-warning" : ""}`}>
-            <span>{Array.from(draft.body).length.toLocaleString()} / 4,096 characters</span>
+            <span>{(draft.character_count ?? Array.from(plainFromMarkdown(draft.body)).length).toLocaleString()} / 4,096 plain-text characters</span>
             <span>{draft.over_limit ? "Copy blocked" : draft.warning_threshold ? "Near Telegram limit" : "Telegram ready"}</span>
           </div>
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}

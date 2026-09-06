@@ -50,10 +50,11 @@ class DraftPatchRequest(BaseModel):
 
 
 class DraftCopyResponse(BaseModel):
-    """Exact plain-text clipboard payload returned after a successful copy."""
+    """Clipboard payload with plain and Telegram HTML."""
 
     draft: dict[str, Any]
     copied_text: str
+    copied_html: str = ""
     copied_at: str
 
 

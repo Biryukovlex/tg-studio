@@ -38,6 +38,9 @@ export type Draft = {
   analysis_id?: string | null;
   working_title: string;
   body: string;
+  body_html?: string;
+  body_plain?: string;
+  plain_character_count?: number;
   status: string;
   source_ids: string[];
   claim_support: DraftClaim[];
