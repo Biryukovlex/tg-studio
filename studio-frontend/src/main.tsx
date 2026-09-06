@@ -447,12 +447,12 @@ function DraftPanel({
   };
 
   const copy = async () => {
-    if (!draft || Array.from(postText).length > 4096) return;
+    if (!draft || Array.from(draft.body).length > 4096) return;
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(postText);
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(draft.body);
       else {
         const node = document.createElement("textarea");
-        node.value = postText;
+        node.value = draft.body;
         node.style.position = "fixed";
         node.style.opacity = "0";
         document.body.appendChild(node);
@@ -462,7 +462,7 @@ function DraftPanel({
         if (!success) throw new Error("Clipboard unavailable");
       }
       // Do not mark a different, unsaved server revision as copied.
-      if (saveState === "saved" && postText === draft.body) await api(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } });
+      if (saveState === "saved") await api(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } });
       setCopied(true);
       setDraft((current) => current ? { ...current, copied_at: new Date().toISOString() } : current);
       window.setTimeout(() => setCopied(false), 2200);
@@ -510,13 +510,6 @@ function DraftPanel({
     setSaveState("saved");
   };
 
-  // Existing titles remain editable in the same field; avoid repeating a
-  // headline already present in the body. New drafts include it in body.
-  const title = draft?.working_title.trim() ?? "";
-  const body = draft?.body ?? "";
-  const normalizeTitle = (value: string) => value.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
-  const postText = title && title !== "Untitled draft" && !normalizeTitle(body.split("\n")[0]).startsWith(normalizeTitle(title))
-    ? `${title}\n\n${body}` : body;
   const sourceLinks = new Map<string, { url: string; title: string }>();
   const addSource = (id: string, url: string, label: string) => {
     try {
@@ -554,7 +547,6 @@ function DraftPanel({
           <h2>Draft workspace</h2>
         </div>
         <div className="studio-panel-actions">
-          {draft && <button type="button" className="studio-copy" onClick={() => void copy()} disabled={Array.from(postText).length > 4096}>{copied ? "Copied" : "Copy full post"}</button>}
           <span className={`studio-save-state is-${saveState}`} role="status">{saveState === "saving" ? "Saving…" : saveState === "conflict" ? "Needs review" : saveState === "error" ? "Retry needed" : "Saved"}</span>
           <button type="button" className="studio-draft-close" onClick={onClose} aria-label="Close draft">×</button>
         </div>
@@ -567,15 +559,15 @@ function DraftPanel({
         </div>
       ) : (
         <div className="studio-draft-content">
-          <label className="studio-draft-title">Title<input aria-label="Draft title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /></label>
+          <label className="studio-draft-title">Artifact title<input aria-label="Artifact title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /><span className="studio-draft-title-hint">Kept for search and cross-checking. Not copied to the post.</span></label>
           <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={draft.body} onChange={(event) => edit("body", event.target.value)} />
           <div className={`studio-char-count ${draft.over_limit ? "is-over" : draft.warning_threshold ? "is-warning" : ""}`}>
-            <span>{Array.from(postText).length.toLocaleString()} / 4,096 characters</span>
+            <span>{Array.from(draft.body).length.toLocaleString()} / 4,096 characters</span>
             <span>{draft.over_limit ? "Copy blocked" : draft.warning_threshold ? "Near Telegram limit" : "Telegram ready"}</span>
           </div>
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}
           {clickableSources.length > 0 && <div className="studio-draft-notes"><strong>Sources</strong><div className="studio-source-chips">{clickableSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}</div></div>}
-          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy for Telegram"}</button><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) restore(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version}>Restore</button></label></div>
+          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy post"}</button><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) restore(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version}>Restore</button></label></div>
         </div>
       )}
     </aside>

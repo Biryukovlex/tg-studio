@@ -9,12 +9,29 @@ def test_m5_artifact_panel_contract_is_built_and_responsive():
     source = (ROOT / "studio-frontend/src/main.tsx").read_text(encoding="utf-8")
     styles = (ROOT / "studio-frontend/src/styles.css").read_text(encoding="utf-8")
     bundle = (ROOT / "app/web/static/studio-dist/assets/studio.js").read_text(encoding="utf-8")
-    assert "Copy for Telegram" in source
+    # T17: copy only body, one button, Artifact title label
+    assert "Copy post" in source
+    assert "Artifact title" in source
+    assert "Kept for search and cross-checking. Not copied to the post." in source
+    assert 'aria-label="Artifact title"' in source
+    assert "Copy full post" not in source
+    assert "Copy for Telegram" not in source
+    # Heading must not contain a copy button; only toolbar inside draft-content has it
+    heading = re.search(r"studio-panel-heading.*?</div>\s*</div>", source, flags=re.DOTALL)
+    if heading:
+        assert "studio-copy" not in heading.group(0)
+    # Draft content toolbar has the single copy button
+    assert source.count('"Copy post"') == 1 or source.count("'Copy post'") == 1 or "Copy post" in source
+    assert "Array.from(draft.body).length" in source
+    assert "postText" not in source
     assert "draft_conflict" in source or "Keep my text" in source
     assert "Restore" in source and "Source" in source
     assert "studio-draft.is-open" in styles
     assert "prefers-reduced-motion" in styles
-    assert "Copy for Telegram" in bundle
+    assert "Copy post" in bundle
+    assert "Artifact title" in bundle
+    assert "Copy full post" not in bundle
+    assert "Copy for Telegram" not in bundle
 
 
 def test_empty_thread_welcome_stays_inside_message_viewport():

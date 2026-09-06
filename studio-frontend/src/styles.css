@@ -192,6 +192,7 @@ button { color: inherit; }
 .studio-source-chips > * { max-width: 100%; overflow-wrap: anywhere; }
 .studio-draft-title { display: grid; gap: 6px; color: var(--studio-muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .studio-draft-title input { width: 100%; border: 1px solid var(--studio-line); border-radius: 9px; padding: 9px 10px; color: var(--studio-soft); background: rgba(16,37,52,.62); font-size: 12px; outline: 0; }
+.studio-draft-title-hint { display: block; margin-top: 4px; color: var(--studio-muted); font-size: 10px; font-weight: 400; letter-spacing: 0; text-transform: none; line-height: 1.4; }
 .studio-draft-editor { width: 100%; min-height: 300px; max-height: 58vh; resize: vertical; border: 1px solid rgba(149,190,203,.24); border-radius: 12px; padding: 13px; color: #efffff; background: rgba(7,19,29,.7); font-size: 12px; line-height: 1.58; outline: 0; }
 .studio-draft-editor:focus, .studio-draft-title input:focus { border-color: rgba(110,231,221,.72); box-shadow: 0 0 0 3px rgba(110,231,221,.09); }
 .studio-char-count { display: flex; justify-content: space-between; gap: 8px; color: var(--studio-muted); font-size: 10px; }
