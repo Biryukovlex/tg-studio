@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -14,7 +15,7 @@ def _now() -> str:
 
 
 def _safe_endpoint(value: str) -> str:
-    """Return a non-secret endpoint label suitable for UI and logs."""
+    """Return a non-secret endpoint label for internal use (never exposed)."""
 
     try:
         parsed = urlsplit(value.strip())
@@ -31,6 +32,14 @@ def _safe_endpoint(value: str) -> str:
     return f"{parsed.scheme}://{host}{port}"
 
 
+def _endpoint_hash(value: str) -> str:
+    """Short opaque hash of the endpoint for public exposure."""
+
+    if not value:
+        return ""
+    return hashlib.sha256(value.encode()).hexdigest()[:12]
+
+
 @dataclass(frozen=True, slots=True)
 class SearchHealth:
     provider: str
@@ -39,6 +48,7 @@ class SearchHealth:
     available: bool | None
     degraded: bool
     endpoint: str
+    endpoint_hash: str
     checked_at: str
     message: str
 
@@ -49,7 +59,7 @@ class SearchHealth:
             "configured": self.configured,
             "available": self.available,
             "degraded": self.degraded,
-            "endpoint": self.endpoint,
+            "endpoint_hash": self.endpoint_hash,
             "checked_at": self.checked_at,
             "message": self.message,
         }
@@ -81,6 +91,7 @@ def configured_search_state(settings) -> SearchHealth:
         available=available,
         degraded=degraded,
         endpoint=endpoint,
+        endpoint_hash=_endpoint_hash(endpoint),
         checked_at=_now(),
         message=message,
     )
