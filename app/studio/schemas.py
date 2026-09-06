@@ -92,6 +92,20 @@ class ConversationResponse(BaseModel):
     archived_at: str | None = None
 
 
+class ProfileTextPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    channel_id: int
+    expected_version: int = Field(ge=0)
+    topics_text: str = Field(default="", max_length=2000)
+    editorial_text: str = Field(default="", max_length=2000)
+    style_text: str = Field(default="", max_length=2000)
+
+
+class ProfileBuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    channel_id: int
+
+
 class ProfileChangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

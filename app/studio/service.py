@@ -377,6 +377,34 @@ class StudioService:
             }
         )
 
+    async def build_profile_draft(self, channel_id: int) -> dict[str, Any]:
+        """Build a draft profile text from channel posts (no save)."""
+        reader = getattr(self.repository, "performance_rows", None)
+        if reader is None:
+            raise ValueError("performance rows unavailable")
+        channel = await self.repository.channel_context(channel_id)
+        rows = await reader(channel_id)
+        if not rows:
+            raise ValueError("too few posts")
+        min_posts = int(getattr(self.settings, "studio_min_profile_posts", 5))
+        if len(rows) < min_posts:
+            raise ValueError(f"too few posts: {len(rows)} < {min_posts}")
+        # Bound by studio_analysis_max_posts if configured
+        max_posts = int(getattr(self.settings, "studio_analysis_max_posts", 0) or 0)
+        if max_posts > 0:
+            rows = list(rows)[:max_posts]
+        analytics = analyze_posts(rows, channel_id, identifier=channel.get("identifier"))
+        from .profile import _build_draft_from_analytics
+        draft = _build_draft_from_analytics(analytics, rows)
+        return {
+            "topics_text": "\n".join(draft.topics),
+            "editorial_text": "\n".join(draft.editorial_rules),
+            "style_text": "\n".join(draft.style_rules),
+            "built_from_posts": draft.built_from_posts,
+            "limitations": draft.limitations,
+            "formatting_facts": draft.formatting_facts,
+        }
+
     async def stream_request(self, request, body: bytes) -> StreamingResponse | JSONResponse:
         if len(body) > 512 * 1024:
             return JSONResponse({"error": {"code": "request_too_large", "message": "Studio request is too large.", "retryable": False}}, status_code=413)

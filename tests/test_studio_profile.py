@@ -89,32 +89,22 @@ async def test_profile_change_api_requires_csrf_and_confirmation(client, setting
     home = await client.get("/studio")
     import re
     token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
-    repository = app.state.studio_repository
-    await repository.upsert_profile(
-        {
-            "channel_id": 1,
-            "topics": [{"name": "technology", "claim": "fixture evidence"}],
-            "style_profile": {},
-            "editorial_rules": {},
-            "confidence": "low",
-        }
-    )
+    # After T14 the profile changes API is removed; all old routes return 404
     denied = await client.post("/studio/api/profile/changes", json={"instruction": "replace topics with climate"})
-    assert denied.status_code == 403
+    assert denied.status_code == 404
     proposed = await client.post(
         "/studio/api/profile/changes",
         json={"instruction": "replace topics with climate, science"},
         headers={"x-csrf-token": token},
     )
-    assert proposed.status_code == 200
-    change = proposed.json()["change"]
-    # Exact replacements can be represented immediately but still travel
-    # through the durable confirmation/apply endpoint.
-    confirmed = await client.post(f"/studio/api/profile/changes/{change['id']}/confirm", headers={"x-csrf-token": token})
-    assert confirmed.status_code == 200
-    applied = await client.post(f"/studio/api/profile/changes/{change['id']}/apply", headers={"x-csrf-token": token})
-    assert applied.status_code == 200
-    assert [topic["name"] for topic in applied.json()["profile"]["topics"]] == ["climate", "science"]
+    assert proposed.status_code == 404
+    # Use a dummy UUID for confirm/apply
+    import uuid
+    dummy = str(uuid.uuid4())
+    confirmed = await client.post(f"/studio/api/profile/changes/{dummy}/confirm", headers={"x-csrf-token": token})
+    assert confirmed.status_code == 404
+    applied = await client.post(f"/studio/api/profile/changes/{dummy}/apply", headers={"x-csrf-token": token})
+    assert applied.status_code == 404
 
 
 @pytest.mark.asyncio

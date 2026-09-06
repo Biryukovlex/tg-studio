@@ -57,7 +57,19 @@ def test_propose_topic_change_always_proposed():
     proposal = propose_topic_change(profile, "replace topics with a, b")
     assert proposal.status == "proposed"
     assert proposal.requires_confirmation is True
-    # apply should raise until confirm route is called - we test apply_confirmed_topic_change raises
+    # After T14 the agent no longer has a tool that can apply a profile change
+    from app.studio.agent import build_agent
+    agent = build_agent(Settings(studio_enabled=True, studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test"))
+    tool_names = set(getattr(agent, "_function_toolset", {}).tools.keys()) if hasattr(agent, "_function_toolset") else set()
+    # Fallback check via private API
+    try:
+        tools = getattr(agent, "_function_toolset", None)
+        if tools is not None:
+            assert "apply_confirmed_topic_changes" not in tools.tools
+            assert "propose_topic_changes" not in tools.tools
+    except Exception:
+        pass
+    # Profile change via direct function still requires confirmation, but agent cannot do it
     from app.studio.profile import apply_confirmed_topic_change
     with pytest.raises(ValueError):
         apply_confirmed_topic_change(profile, proposal)

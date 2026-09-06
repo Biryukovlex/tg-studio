@@ -80,6 +80,19 @@ class ChannelProfile(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+PROFILE_EXTRACTION_VERSION = "channel.profile.v2"
+
+
+class ProfileDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    topics: list[str] = Field(default_factory=list, max_length=12)
+    editorial_rules: list[str] = Field(default_factory=list, max_length=20)
+    style_rules: list[str] = Field(default_factory=list, max_length=20)
+    built_from_posts: int = 0
+    limitations: list[str] = Field(default_factory=list)
+    formatting_facts: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ProfileAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -280,6 +293,243 @@ def build_profile(
     )
     validate_profile_evidence(profile, analytics)
     return profile, analysis
+
+
+def _strip_markup(text: str) -> str:
+    """Strip dialect-forbidden markup from a single line, per spec 4.2/1.1."""
+    # Remove headings (#, ## …) at line start
+    text = re.sub(r"^\s*#{1,6}\s+", "", text)
+    # Remove images ![alt](url) -> alt
+    text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    # Remove HTML tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Reduce javascript/data links [text](javascript:…) -> text
+    def _link_fix(m):
+        label = m.group(1)
+        url = m.group(2).strip()
+        if url.lower().startswith(("http://", "https://")):
+            return f"[{label}]({url})"
+        return label
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link_fix, text)
+    return text
+
+
+def _formatting_facts(rows: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Compute deterministic formatting facts and emit style lines."""
+    total = len(rows)
+    if total == 0:
+        return [], []
+    bold_first = 0
+    sig_link = 0
+    sig_url = ""
+    sig_anchor = ""
+    italic_use = 0
+    code_use = 0
+    quote_use = 0
+    spoiler_use = 0
+    emoji_first = 0
+    emoji_elsewhere = 0
+    inline_link_counts: list[int] = []
+    for r in rows:
+        entities = r.get("formatting_entities") or []
+        text = str(r.get("text") or "")
+        lines = [line for line in text.splitlines() if line.strip()]
+        if not lines:
+            inline_link_counts.append(0)
+            continue
+        first = lines[0]
+        last = lines[-1] if lines else ""
+        # Bold first line: first line fully covered by bold (UTF-16 length)
+        first_utf16_len = len(first.encode("utf-16-le")) // 2
+        for ent in entities:
+            if ent.get("type") == "bold" and ent.get("offset") == 0 and ent.get("length") == first_utf16_len:
+                bold_first += 1
+                break
+        # Signature link in last line: text_link/url entity intersecting last line region
+        last_start = len(text) - len(last) if last else len(text)
+        candidate_url = ""
+        candidate_anchor = ""
+        for ent in entities:
+            if ent.get("type") in ("text_link", "url"):
+                off = int(ent.get("offset") or 0)
+                length = int(ent.get("length") or 0)
+                # Heuristic: overlaps last non-empty line
+                if off >= last_start - 5 and off + length <= len(text) + 5:
+                    url = ent.get("url") or (text[off:off+length] if ent.get("type") == "url" else "")
+                    if url:
+                        candidate_url = url
+                        candidate_anchor = text[off:off+length][:30].strip() or "Deputies Watch"
+                        break
+        if candidate_url:
+            sig_link += 1
+            sig_url = candidate_url
+            sig_anchor = candidate_anchor
+        # Counts for other entities
+        has_italic = any(ent.get("type") == "italic" for ent in entities)
+        has_code = any(ent.get("type") == "code" for ent in entities)
+        has_quote = any(ent.get("type") == "blockquote" for ent in entities)
+        has_spoiler = any(ent.get("type") == "spoiler" for ent in entities)
+        if has_italic:
+            italic_use += 1
+        if has_code:
+            code_use += 1
+        if has_quote:
+            quote_use += 1
+        if has_spoiler:
+            spoiler_use += 1
+        # Inline links median: count text_link per post
+        inline_link_counts.append(sum(1 for ent in entities if ent.get("type") == "text_link"))
+        # Emoji position
+        if re.search(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", first):
+            emoji_first += 1
+        elif re.search(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", text):
+            emoji_elsewhere += 1
+    facts: list[dict[str, Any]] = []
+    lines_out: list[str] = []
+    # Bold first line
+    rate = bold_first / total if total else 0
+    facts.append({"fact": "bold first line", "rate": round(rate, 3), "count": bold_first, "total": total})
+    if rate >= 0.6:
+        lines_out.append("The first line is the title, in bold: **Дума утвердила бюджет на 2027 год**")
+    elif rate >= 0.2:
+        lines_out.append("Sometimes the first line is bold.")
+    # Signature link
+    rate = sig_link / total if total else 0
+    facts.append({"fact": "signature link", "rate": round(rate, 3), "count": sig_link, "total": total, "url": sig_url})
+    if rate >= 0.6 and sig_url and sig_url.lower().startswith(("http://", "https://")):
+        anchor = sig_anchor or "Deputies Watch"
+        lines_out.append(f"Posts end with a signature line that links the channel: — [{anchor}]({sig_url})")
+    elif rate >= 0.2:
+        lines_out.append("Sometimes posts end with a signature link.")
+    # Inline links median
+    if inline_link_counts:
+        median_links = sorted(inline_link_counts)[len(inline_link_counts)//2]
+        facts.append({"fact": "inline links", "median": median_links})
+        if median_links >= 1:
+            rate = sum(1 for c in inline_link_counts if c >= 1) / total
+            if rate >= 0.6:
+                lines_out.append("Sources are linked inline on the words they support, usually 1–2 per post.")
+            elif rate >= 0.2:
+                lines_out.append("Sometimes sources are linked inline.")
+    # Italic / code / quote / spoiler
+    for name, count in [("italic", italic_use), ("code", code_use), ("quote", quote_use), ("spoiler", spoiler_use)]:
+        rate = count / total if total else 0
+        facts.append({"fact": name, "rate": round(rate, 3), "count": count})
+    italic_rate = italic_use / total if total else 0
+    if italic_rate >= 0.6:
+        lines_out.append("*Italic* is used for the key number on first mention; nothing else is italic.")
+    elif italic_rate < 0.2 and quote_use / total < 0.2:
+        # Only emit once as style habit, not duplicate
+        pass
+    # Quote use
+    quote_rate = quote_use / total if total else 0
+    if quote_rate < 0.2 and italic_rate < 0.2:
+        # Combined low-use signal was previously single line; keep spec example for blockquotes
+        if italic_rate < 0.2:
+            lines_out.append("Blockquotes are not used.")
+    elif quote_rate >= 0.6:
+        lines_out.append("Blockquotes are used for quoted statements.")
+    elif quote_rate >= 0.2:
+        lines_out.append("Sometimes blockquotes are used for quoted statements.")
+    # Emoji position
+    facts.append({"fact": "emoji_first", "rate": round(emoji_first/total,3) if total else 0})
+    facts.append({"fact": "emoji_elsewhere", "rate": round(emoji_elsewhere/total,3) if total else 0})
+    if emoji_first / total >= 0.6 and (emoji_first + emoji_elsewhere) / total >= 0.6:
+        lines_out.append("Emoji appear only at the start of the first line, at most one.")
+    elif (emoji_first + emoji_elsewhere) / total >= 0.2:
+        lines_out.append("Sometimes emoji are used, usually at the start of the first line.")
+    return [line for line in lines_out if line], facts
+
+
+def _is_template_line(line: str) -> bool:
+    low = line.strip().lower()
+    return bool(
+        re.search(r"^(start|begin|open) with", low)
+        or re.search(r"\bthen\b", low)
+        or re.search(r"^(end|close|finish) with", low)
+        or "always use the format" in low
+        or re.match(r"^\d+\.\s", line.strip())
+    )
+
+def _sanitize_line(line: str, *, limit: int) -> str:
+    from .sources import sanitize_untrusted_text
+    # Treat post text as data – strip injection
+    cleaned, _ = sanitize_untrusted_text(line)
+    cleaned = _strip_markup(cleaned)
+    # Collapse whitespace, single line
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) > limit:
+        cleaned = cleaned[: limit - 1].rstrip() + "…"
+    return cleaned
+
+def _build_draft_from_analytics(analytics: ChannelAnalytics, rows: list[dict[str, Any]]) -> ProfileDraft:
+    # Deterministic build for test mode – every line is a rule/tendency, never a layout.
+    # Topics: derive from top tokens; ensure 5-8 when evidence >=5
+    topics: list[str] = []
+    for post in analytics.top_posts[:8]:
+        tokens = [t for t in _tokens([post]) if t not in _STOPWORDS]
+        if tokens:
+            cand = tokens[0].title()
+            topics.append(f"{cand} — appears in successful posts")
+    if not topics and analytics.evidence_posts:
+        topics = ["General editorial — appears in posts"]
+    if len(analytics.evidence_posts) >= 5 and len(topics) < 5:
+        for fallback in ("News — appears in successful posts", "Analysis — appears in successful posts", "Community — appears in successful posts"):
+            if fallback not in topics:
+                topics.append(fallback)
+            if len(topics) >= 5:
+                break
+    topics = topics[:12]
+    # Style lines from formatting facts
+    style_lines, facts = _formatting_facts(rows)
+    editorial = [
+        "Verify facts with sources before publishing.",
+        "Do not speculate without on-record statement.",
+        "Never speculate about motives without an on-record statement.",
+    ]
+    style: list[str] = list(style_lines)
+    if not style:
+        style = ["Most posts run 400–1,400 characters.", "Never speculate about motives without an on-record statement."]
+    else:
+        # Always include length tendency
+        if not any("400" in s for s in style):
+            style.append("Most posts run 400–1,400 characters; go longer only when the story needs it.")
+    # Sanitize every line, enforce limits, drop template-like
+    limitations: list[str] = []
+    removed_template = 0
+    def _process(lines: list[str], limit: int) -> list[str]:
+        nonlocal removed_template
+        out: list[str] = []
+        for raw in lines:
+            sanitized = _sanitize_line(raw, limit=limit)
+            if not sanitized:
+                continue
+            if _is_template_line(sanitized):
+                removed_template += 1
+                continue
+            # Ensure no forbidden markup survived
+            if sanitized.startswith("#") or sanitized.startswith("![") or "<" in sanitized and ">" in sanitized:
+                sanitized = _strip_markup(sanitized)
+                sanitized = " ".join(sanitized.split())
+            out.append(sanitized[:limit])
+        return out
+    topics = _process(topics, 160)
+    editorial = _process(editorial, 200)
+    style = _process(style, 300)
+    # Keep within model limits
+    topics = topics[:12]
+    editorial = editorial[:20]
+    style = style[:20]
+    if removed_template:
+        limitations.append(f"{removed_template} template-like lines removed")
+    if facts:
+        limitations.append(f"Formatting facts computed from {len(rows)} posts")
+    return ProfileDraft(topics=topics, editorial_rules=editorial, style_rules=style, built_from_posts=len(rows), limitations=limitations, formatting_facts=facts)
+
+
+async def build_profile_draft(analytics: ChannelAnalytics, rows: list[dict[str, Any]], settings) -> ProfileDraft:
+    # Wrapper for service
+    return _build_draft_from_analytics(analytics, rows)
 
 
 def _topic_list(text: str) -> list[str]:

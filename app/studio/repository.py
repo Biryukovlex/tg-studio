@@ -421,6 +421,58 @@ class StudioRepository:
             raise ConversationNotFound("channel is not part of the active workspace")
         return dict(row)
 
+    async def upsert_profile_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Validate and clean text fields
+        def clean(v: str) -> str:
+            lines = [line.rstrip() for line in str(v or "").splitlines()]
+            # Drop empty lines
+            return "\n".join(line for line in lines if line.strip() != "")
+        topics_text = clean(payload.get("topics_text", ""))
+        editorial_text = clean(payload.get("editorial_text", ""))
+        style_text = clean(payload.get("style_text", ""))
+        for name, txt in [("topics_text", topics_text), ("editorial_text", editorial_text), ("style_text", style_text)]:
+            if len(txt) > 2000:
+                raise ValueError(f"{name} exceeds 2000 characters")
+            if len(txt.splitlines()) > 60:
+                raise ValueError(f"{name} exceeds 60 lines")
+        # Check version
+        channel_id = int(payload["channel_id"])
+        expected = payload.get("expected_version")
+        # For new profile, expected 0
+        current = await self.get_profile(channel_id)
+        current_version = int(current["version"]) if current else 0
+        if expected is not None and int(expected) != current_version:
+            # Return conflict via exception to be handled by routes
+            from .drafts import DraftConflictError
+            raise DraftConflictError(current or {}, expected_revision=int(expected))
+        built_from = int(payload.get("built_from_posts", 0) or 0)
+        # Determine version
+        new_version = current_version + 1
+        values = {
+            "workspace_id": self.workspace_id,
+            "channel_id": channel_id,
+            "topics_text": topics_text,
+            "editorial_text": editorial_text,
+            "style_text": style_text,
+            "built_from_posts": built_from,
+            "version": new_version,
+        }
+        # Use INSERT ... ON CONFLICT to upsert
+        result = await self.db._execute(
+            """INSERT INTO studio_profiles(
+                       workspace_id, channel_id, topics_text, editorial_text, style_text, built_from_posts, built_at, version
+                   ) VALUES (:workspace_id, :channel_id, :topics_text, :editorial_text, :style_text, :built_from_posts, now(), :version)
+               ON CONFLICT (workspace_id, channel_id) DO UPDATE SET
+                   topics_text=EXCLUDED.topics_text, editorial_text=EXCLUDED.editorial_text, style_text=EXCLUDED.style_text,
+                   built_from_posts=EXCLUDED.built_from_posts, built_at=EXCLUDED.built_at, version=EXCLUDED.version, updated_at=now()
+               RETURNING *""",
+            values,
+        )
+        row = result.mappings().first()
+        if row is None:
+            raise ConversationNotFound("channel is not part of the active workspace")
+        return dict(row)
+
     async def create_profile_change(self, payload: dict[str, Any]) -> dict[str, Any]:
         change_id = payload.get("id") or uuid.uuid4()
         result = await self.db._execute(
@@ -1813,7 +1865,18 @@ class MemoryStudioRepository:
 
     async def get_profile(self, channel_id: int) -> dict[str, Any] | None:
         row = self.profiles.get(int(channel_id))
-        return dict(row) if row else None
+        if row is None:
+            return None
+        # Ensure text fields exist for legacy rows
+        result = dict(row)
+        for k in ["topics_text", "editorial_text", "style_text"]:
+            if k not in result:
+                result[k] = ""
+        if "built_at" not in result:
+            result["built_at"] = None
+        if "built_from_posts" not in result:
+            result["built_from_posts"] = 0
+        return result
 
     async def upsert_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
         channel_id = int(payload["channel_id"])
@@ -1830,6 +1893,54 @@ class MemoryStudioRepository:
             "confidence": payload.get("confidence", "low"),
             "current_analysis_id": payload.get("current_analysis_id"),
             "version": (int(previous["version"]) + 1) if previous else int(payload.get("version", 1)),
+            "topics_text": payload.get("topics_text", (previous or {}).get("topics_text", "")),
+            "editorial_text": payload.get("editorial_text", (previous or {}).get("editorial_text", "")),
+            "style_text": payload.get("style_text", (previous or {}).get("style_text", "")),
+            "built_at": payload.get("built_at", (previous or {}).get("built_at")),
+            "built_from_posts": int(payload.get("built_from_posts", (previous or {}).get("built_from_posts", 0)) or 0),
+            "created_at": (previous or {}).get("created_at", utcnow()),
+            "updated_at": utcnow(),
+        }
+        self.profiles[channel_id] = row
+        return dict(row)
+
+    async def upsert_profile_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        channel_id = int(payload["channel_id"])
+        if not any(channel["id"] == channel_id and channel["active"] for channel in self.channels):
+            raise ConversationNotFound("channel is not part of the active workspace")
+        def clean(v: str) -> str:
+            lines = [line.rstrip() for line in str(v or "").splitlines()]
+            return "\n".join(line for line in lines if line.strip() != "")
+        topics_text = clean(payload.get("topics_text", ""))
+        editorial_text = clean(payload.get("editorial_text", ""))
+        style_text = clean(payload.get("style_text", ""))
+        for name, txt in [("topics_text", topics_text), ("editorial_text", editorial_text), ("style_text", style_text)]:
+            if len(txt) > 2000:
+                raise ValueError(f"{name} exceeds 2000 characters")
+            if len(txt.splitlines()) > 60:
+                raise ValueError(f"{name} exceeds 60 lines")
+        expected = payload.get("expected_version")
+        previous = self.profiles.get(channel_id)
+        current_version = int(previous["version"]) if previous else 0
+        if expected is not None and int(expected) != current_version:
+            from .drafts import DraftConflictError
+            raise DraftConflictError(previous or {}, expected_revision=int(expected))
+        new_version = current_version + 1
+        row = {
+            "id": (previous or {}).get("id") or uuid.uuid4(),
+            "workspace_id": self.workspace_id,
+            "channel_id": channel_id,
+            "topics": (previous or {}).get("topics", []),
+            "style_profile": (previous or {}).get("style_profile", {}),
+            "editorial_rules": (previous or {}).get("editorial_rules", {}),
+            "confidence": (previous or {}).get("confidence", "low"),
+            "current_analysis_id": (previous or {}).get("current_analysis_id"),
+            "version": new_version,
+            "topics_text": topics_text,
+            "editorial_text": editorial_text,
+            "style_text": style_text,
+            "built_at": utcnow(),
+            "built_from_posts": int(payload.get("built_from_posts", 0) or 0),
             "created_at": (previous or {}).get("created_at", utcnow()),
             "updated_at": utcnow(),
         }

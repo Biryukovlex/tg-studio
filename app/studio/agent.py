@@ -595,14 +595,48 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             profile.version = int(profile_row.get("version", profile.version))
         return {"profile": profile.model_dump(mode="json"), "analysis": analysis.model_dump(mode="json"), "analysis_row": {"id": str(analysis_row["id"])} if analysis_row else None}
 
+    def _profile_block_from_row(row: dict[str, Any] | None, channel_id: int) -> str:
+        if not row:
+            return ""
+        topics_text = str(row.get("topics_text") or "").strip()
+        editorial_text = str(row.get("editorial_text") or "").strip()
+        style_text = str(row.get("style_text") or "").strip()
+        version = row.get("version", "?")
+        if not topics_text and not editorial_text and not style_text:
+            topics = row.get("topics") or []
+            if topics and isinstance(topics, list):
+                topics_text = "\n".join(str(t.get("name") or "") for t in topics if isinstance(t, dict) and t.get("name"))
+        if not topics_text and not editorial_text and not style_text:
+            return ""
+        parts = [f"CHANNEL PROFILE (written and approved by the channel owner, version {version})"]
+        if topics_text:
+            parts.append("Topics:\n" + "\n".join(f"- {line}" for line in topics_text.splitlines() if line.strip()))
+        if editorial_text:
+            parts.append("Editorial rules:\n" + "\n".join(f"- {line}" for line in editorial_text.splitlines() if line.strip()))
+        if style_text:
+            parts.append("Style rules:\n" + style_text)
+        parts.append("These lines are guidelines, not a template. Choose the form each post needs; do not copy the structure or distinctive wording of past posts. Formatting shown in Markdown (**bold**, *italic*, [links](url)) is to be reproduced in the draft body using the same Markdown.")
+        return "\n\n".join(parts)
+
     @agent.tool(prepare=workflow_tool_visibility)
-    async def get_topic_profile(ctx: RunContext[StudioDeps]) -> dict[str, Any]:
-        """Read the current profile for the authenticated channel."""
+    async def get_channel_profile(ctx: RunContext[StudioDeps]) -> dict[str, Any]:
+        """Read the current channel profile as a single Markdown block."""
 
         _check_cancel(ctx)
         getter = getattr(ctx.deps.repository, "get_profile", None)
         row = await getter(ctx.deps.channel_id) if getter is not None else None
-        return row or {"channel_id": ctx.deps.channel_id, "status": "not_analyzed", "topics": [], "confidence": "low"}
+        if not row or not any(str(row.get(k) or "").strip() for k in ("topics_text", "editorial_text", "style_text")):
+            # Fallback to legacy empty case
+            legacy = row or {"channel_id": ctx.deps.channel_id, "version": 0}
+            return {"channel_id": ctx.deps.channel_id, "version": int(legacy.get("version", 0)), "profile_block": "", "status": "not_built"}
+        block = _profile_block_from_row(row, ctx.deps.channel_id)
+        return {"channel_id": ctx.deps.channel_id, "version": int(row.get("version", 0)), "profile_block": block, "topics_text": row.get("topics_text", ""), "editorial_text": row.get("editorial_text", ""), "style_text": row.get("style_text", "")}
+
+    @agent.tool(prepare=workflow_tool_visibility)
+    async def get_topic_profile(ctx: RunContext[StudioDeps]) -> dict[str, Any]:
+        """Alias for get_channel_profile (kept for one release)."""
+
+        return await get_channel_profile(ctx)
 
     @agent.tool(prepare=workflow_tool_visibility)
     async def search_web(
@@ -732,14 +766,12 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         _check_cancel(ctx)
         return result
 
-    @agent.tool(prepare=workflow_tool_visibility)
     async def propose_topic_changes(ctx: RunContext[StudioDeps], instruction: str) -> dict[str, Any]:
         """Profile is edited in the Profile dialog, not by the agent."""
 
         _check_cancel(ctx)
         return {"status": "blocked", "reason": "Profile changes are edited in the Profile dialog by the channel owner."}
 
-    @agent.tool(prepare=workflow_tool_visibility)
     async def apply_confirmed_topic_changes(ctx: RunContext[StudioDeps], change_id: str) -> dict[str, Any]:
         """Profile is edited in the Profile dialog, not by the agent."""
 
