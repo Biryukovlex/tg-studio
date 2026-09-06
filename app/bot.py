@@ -75,7 +75,12 @@ class CommandHandlers:
                 await event.reply("Something went wrong, check logs.")
 
     def _allowed(self, event) -> bool:
-        return bool(event.is_private and event.sender_id in self.settings.admin_ids)
+        if not event.is_private:
+            return False
+        if event.sender_id in self.settings.admin_ids:
+            return True
+        # Saved Messages: the account owner talking to themselves.
+        return bool(event.out and event.chat_id == self._me_id)
 
     async def _find_channel_id(self, arg: str):
         ident = arg.strip().lstrip("@").lower()
@@ -89,10 +94,11 @@ class CommandHandlers:
         cmd = parts[0].lstrip("/").lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        # Bootstrap helper: anyone in a private chat can ask for their id.
-        # Never reply in groups or when event.out (already handled via is_private check).
+        # Bootstrap helper: anyone in a private chat (including the owner's
+        # Saved Messages) can ask for their id. Never answer in groups, where an
+        # outgoing command would post the owner's id publicly.
         if cmd == "whoami":
-            if not event.is_private or getattr(event, "out", False):
+            if not event.is_private:
                 return
             await event.reply(f"Your Telegram id: {event.sender_id or 'unknown'}")
             return

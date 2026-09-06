@@ -311,16 +311,39 @@ async def test_whoami_ignores_group():
     await handlers._dispatch(event2)
     event2.reply.assert_called_once()
 
-    # out=True should not reply
+    # Saved Messages (private, outgoing, chat is the owner) must keep working:
+    # the documented bootstrap flow sends /whoami to yourself.
     event3 = MagicMock()
     event3.raw_text = "/whoami"
     event3.is_private = True
-    event3.sender_id = 9999
+    event3.sender_id = 999
     event3.chat_id = 999
     event3.out = True
     event3.reply = AsyncMock()
     await handlers._dispatch(event3)
-    event3.reply.assert_not_called()
+    event3.reply.assert_called_once()
+
+    # An outgoing command in a group must never post the owner's id.
+    event4 = MagicMock()
+    event4.raw_text = "/whoami"
+    event4.is_private = False
+    event4.sender_id = 999
+    event4.chat_id = -100555
+    event4.out = True
+    event4.reply = AsyncMock()
+    await handlers._dispatch(event4)
+    event4.reply.assert_not_called()
+
+    # Admin commands from Saved Messages are still allowed.
+    event5 = MagicMock()
+    event5.raw_text = "/help"
+    event5.is_private = True
+    event5.sender_id = 999
+    event5.chat_id = 999
+    event5.out = True
+    event5.reply = AsyncMock()
+    await handlers._dispatch(event5)
+    event5.reply.assert_called_once()
 
 
 @pytest.mark.asyncio

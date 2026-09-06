@@ -86,12 +86,18 @@ def _clear_attempts(ip: str) -> None:
 
 
 def _sanitize_csv_cell(value: object) -> object:
+    """Neutralise spreadsheet formula triggers in free-text cells.
+
+    Only string values are touched: numeric ids such as negative discussion
+    chat ids and datetime objects must round-trip unchanged.
+    """
     if value is None:
         return ""
-    text = str(value)
-    if text and text[0] in ("=", "+", "-", "@", "\t", "\r"):
-        return "'" + text
-    return text
+    if not isinstance(value, str):
+        return value
+    if value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 
 def reset_login_rate_limiter() -> None:
@@ -447,7 +453,7 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
         ])
         for r in rows:
             writer.writerow([
-                _sanitize_csv_cell(r["id"]), _sanitize_csv_cell(r["message_id"]), _sanitize_csv_cell(r["identifier"]), _sanitize_csv_cell(r["posted_at"]),
+                _sanitize_csv_cell(r["id"]), _sanitize_csv_cell(r["message_id"]), r["identifier"], _sanitize_csv_cell(r["posted_at"]),
                 _sanitize_csv_cell((r["text"] or "").replace("\n", " ")),
                 _sanitize_csv_cell(r["views"]), _sanitize_csv_cell(r["reactions"]), _sanitize_csv_cell(r["comments"]), _sanitize_csv_cell(r["shares"]), _sanitize_csv_cell(r["updated_at"]),
             ])
@@ -472,7 +478,7 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
         for row in rows:
             writer.writerow([
                 _sanitize_csv_cell(row["id"]), _sanitize_csv_cell(row["post_id"]), _sanitize_csv_cell(row["post_message_id"]),
-                _sanitize_csv_cell(row["channel_identifier"]), _sanitize_csv_cell(row["telegram_message_id"]),
+                row["channel_identifier"], _sanitize_csv_cell(row["telegram_message_id"]),
                 _sanitize_csv_cell(row["discussion_chat_id"]), _sanitize_csv_cell(row["posted_at"]), _sanitize_csv_cell(row["edited_at"]),
                 _sanitize_csv_cell(row["sender_id"]), _sanitize_csv_cell(row["sender_name"]), _sanitize_csv_cell(row["sender_username"]),
                 _sanitize_csv_cell((row["text"] or "").replace("\n", " ")), _sanitize_csv_cell(row["media_type"]),

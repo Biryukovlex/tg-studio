@@ -198,7 +198,7 @@ async def test_csv_formula_injection_escaped(tmp_path):
     db.upsert_comment(
         post_id=post_id,
         telegram_message_id=99,
-        discussion_chat_id=123,
+        discussion_chat_id=-1001234567890,
         discussion_username="disc",
         sender_id=1,
         sender_name="Attacker",
@@ -226,6 +226,11 @@ async def test_csv_formula_injection_escaped(tmp_path):
         resp2 = await client.get("/export-comments.csv")
         assert resp2.status_code == 200
         assert "'=HYPERLINK" in resp2.text
+        # Negative numeric ids are not free text and must not be quoted.
+        assert "-1001234567890" in resp2.text
+        assert "'-1001234567890" not in resp2.text
+        # Operator-configured channel identifiers keep their leading @.
+        assert ",@sample_channel," in resp.text
         # normal text should still appear in posts export
         assert "hello" in resp.text
 
