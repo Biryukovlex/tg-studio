@@ -297,14 +297,13 @@ def propose_topic_change(profile: ChannelProfile | Mapping[str, Any], instructio
     remove_match = re.search(r"(?:remove|drop|exclude)\s+(?:the\s+)?topics?\s+(.+)$", text, re.I)
     if match:
         proposed = _topic_list(match.group(1))
-        exact = len(proposed) <= 8 and bool(proposed)
         return TopicChangeProposal(
             channel_id=current.channel_id,
             base_profile_version=current.version,
             proposed_topics=proposed,
             reason="Explicit topic replacement requested by the channel owner.",
-            status="confirmed" if exact else "proposed",
-            requires_confirmation=not exact,
+            status="proposed",
+            requires_confirmation=True,
         )
     if add_match:
         additions = _topic_list(add_match.group(1))

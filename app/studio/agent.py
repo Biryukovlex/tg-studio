@@ -355,22 +355,55 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         )
         known_order = [source.source_id for source in bundle.sources] if bundle else []
         known = set(known_order)
+        url_to_id = {str(source.url).strip(): source.source_id for source in (bundle.sources if bundle else [])}
+        # also include canonical_url if available
+        for source in (bundle.sources if bundle else []):
+            cu = getattr(source, "canonical_url", None)
+            if cu:
+                url_to_id[str(cu).strip()] = source.source_id
 
         def valid_ids(values: Any) -> list[str]:
+            if isinstance(values, str):
+                # Malformed claim_support where source_ids is a string should be treated as invalid
+                return []
             if not isinstance(values, (list, tuple, set)):
                 return []
             result: list[str] = []
             for value in values:
                 candidate = str(value).strip()
+                if not candidate:
+                    continue
+                # Map URL to source_id if it matches a known source's URL
+                if candidate not in known and candidate in url_to_id:
+                    candidate = url_to_id[candidate]
                 if candidate and candidate in known and candidate not in result:
                     result.append(candidate)
             return result[:12]
 
+        # Check for unknown IDs: if source_ids provided but after mapping still has unknown, block
+        if source_ids is not None:
+            # Normalize provided for check, handling string case
+            provided_raw = source_ids if isinstance(source_ids, (list, tuple, set, str)) else []
+            if isinstance(provided_raw, str):
+                provided_raw = [provided_raw]
+            provided = [str(v).strip() for v in provided_raw if str(v).strip()]
+            # Map URLs to IDs for check
+            mapped_provided = []
+            for v in provided:
+                if v in known:
+                    mapped_provided.append(v)
+                elif v in url_to_id:
+                    mapped_provided.append(url_to_id[v])
+                else:
+                    mapped_provided.append(v)
+            # If any still unknown, block
+            if provided and any(v not in known for v in mapped_provided):
+                return [], []
+            if not provided and not creative:
+                return [], []
         selected = valid_ids(source_ids)
         if not selected:
             selected = valid_ids(fallback_source_ids)
-        if not selected and not creative and bundle:
-            selected = valid_ids(bundle.selected_source_ids) or known_order[:12]
 
         claims: list[dict[str, Any]] = []
         for item in claim_support or []:
@@ -593,6 +626,11 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         """
 
         _check_cancel(ctx)
+        # Increment at tool start to enforce cap under concurrency
+        current = ctx.deps.tool_call_counts.get("search_web", 0)
+        if current >= 4:
+            return {"status": "blocked", "error": {"code": "search_limit_exceeded", "message": "Search limit reached for this run."}}
+        ctx.deps.tool_call_counts["search_web"] = current + 1
         _require_predecessors(ctx, "search_web")
         topics, recent_posts, evidence_ids, channel_evidence = await _research_context(ctx)
         service = _research(ctx, settings)
@@ -615,7 +653,6 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             exclude_domains=exclude_domains or (),
         )
         _check_cancel(ctx)
-        ctx.deps.tool_call_counts["search_web"] = ctx.deps.tool_call_counts.get("search_web", 0) + 1
         ctx.deps.completed_tools.add("search_web")
         return result if isinstance(result, dict) else result.model_dump(mode="json")
 
@@ -697,59 +734,26 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
 
     @agent.tool(prepare=workflow_tool_visibility)
     async def propose_topic_changes(ctx: RunContext[StudioDeps], instruction: str) -> dict[str, Any]:
-        """Turn a free-text topic request into a confirmation-gated proposal."""
+        """Profile is edited in the Profile dialog, not by the agent."""
 
         _check_cancel(ctx)
-        getter = getattr(ctx.deps.repository, "get_profile", None)
-        row = await getter(ctx.deps.channel_id) if getter is not None else None
-        if not row:
-            return {"status": "blocked", "reason": "Analyze the channel before changing its topics."}
-        current = ChannelProfile.model_validate(
-            {
-                "channel_id": row.get("channel_id", ctx.deps.channel_id),
-                "topics": row.get("topics", []),
-                "style_profile": row.get("style_profile", {}),
-                "editorial_rules": row.get("editorial_rules", {}),
-                "confidence": row.get("confidence", "low"),
-                "analysis_id": str(row["current_analysis_id"]) if row.get("current_analysis_id") else None,
-                "version": row.get("version", 1),
-            }
-        )
-        proposal = propose_topic_change(current, instruction)
-        creator = getattr(ctx.deps.repository, "create_profile_change", None)
-        persisted = None
-        if creator is not None:
-            persisted = await creator(
-                {
-                    "channel_id": ctx.deps.channel_id,
-                    "base_profile_version": proposal.base_profile_version,
-                    "proposed_topics": proposal.proposed_topics,
-                    "style_diff": proposal.style_diff,
-                    "editorial_rules": proposal.editorial_rules,
-                    "reason": proposal.reason,
-                    "status": proposal.status,
-                }
-            )
-            proposal.id = str(persisted["id"])
-        return {"proposal": proposal.model_dump(mode="json"), "change": persisted}
+        return {"status": "blocked", "reason": "Profile changes are edited in the Profile dialog by the channel owner."}
 
     @agent.tool(prepare=workflow_tool_visibility)
     async def apply_confirmed_topic_changes(ctx: RunContext[StudioDeps], change_id: str) -> dict[str, Any]:
-        """Apply only a persisted, explicitly confirmed topic proposal."""
+        """Profile is edited in the Profile dialog, not by the agent."""
 
         _check_cancel(ctx)
         try:
             parsed = __import__("uuid").UUID(str(change_id))
         except (TypeError, ValueError):
             return {"status": "blocked", "reason": "A valid profile change id is required."}
-        applier = getattr(ctx.deps.repository, "apply_profile_change", None)
         getter = getattr(ctx.deps.repository, "get_profile_change", None)
-        if applier is None or getter is None:
-            return {"status": "blocked", "reason": "Profile persistence is unavailable."}
-        scoped = await getter(parsed, channel_id=ctx.deps.channel_id)
-        if scoped is None:
-            return {"status": "blocked", "reason": "The profile change is not part of this channel."}
-        return {"status": "applied", "profile": await applier(parsed)}
+        if getter is not None:
+            scoped = await getter(parsed, channel_id=ctx.deps.channel_id)
+            if scoped is None:
+                return {"status": "blocked", "reason": "The profile change is not part of this channel."}
+        return {"status": "blocked", "reason": "Profile changes are edited in the Profile dialog by the channel owner."}
 
     @agent.tool(prepare=workflow_tool_visibility)
     async def explain_recommendation(
@@ -913,11 +917,16 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         normalized_warnings = list(warnings if warnings is not None else current.get("warnings") or [])
         if removed_commentary:
             normalized_warnings.append("Service commentary was removed from the publication text.")
+        # Use normalized claims only when body changed; otherwise keep current
+        if body != current.get("body"):
+            claim_support_value = normalized_claims
+        else:
+            claim_support_value = normalized_claims or (current.get("claim_support") or [])
         payload: dict[str, Any] = {
             "body": body,
             "working_title": working_title,
             "source_ids": normalized_source_ids,
-            "claim_support": normalized_claims or (current.get("claim_support") or []),
+            "claim_support": claim_support_value,
             "assumptions": assumptions,
             "warnings": normalized_warnings,
             "channel_evidence": channel_evidence,
@@ -952,7 +961,12 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         body: str,
         working_title: str | None = None,
     ) -> dict[str, Any]:
-        """Save an explicit agent/user-approved body as a user-edit version."""
+        """Save an explicit agent/user-approved body as a regenerated version."""
+
+        body, _ = _clean_publication_text(body)
+        _require_publication_text(body)
+        # Validate and normalize as regenerated, not user_edit
+        # The repository will set origin based on the tool; we ensure it's regenerated
 
         _check_cancel(ctx)
         _require_publication_text(body)

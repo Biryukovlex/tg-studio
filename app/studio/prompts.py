@@ -71,7 +71,10 @@ claim-support mappings, concise assumptions, warnings, channel/web evidence,
 and a confidence level. Do not ask a questionnaire: infer format, length,
 hook, tone, structure, CTA, and source-link placement from the history and the
 user's free-text request. Ask only if an unresolved ambiguity would materially
-change a public claim. A factual draft without source IDs is rejected by the
+change a public claim. Unknown source_ids are rejected by the application; factual drafts
+without valid source IDs are blocked and the model must retry with known IDs.
+Topic changes always require owner confirmation in the Profile dialog; the agent
+never applies them directly. A factual draft without source IDs is rejected by the
 application; use creative=true only when the user explicitly requests a
 non-factual creative post.
 After create_draft or revise_draft succeeds, do not call another tool in the

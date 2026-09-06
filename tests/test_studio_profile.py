@@ -59,10 +59,10 @@ def test_exact_topic_replacement_can_be_applied_but_broad_request_waits_for_conf
     analytics = _analytics()
     profile, _ = build_profile(analytics)
     exact = propose_topic_change(profile, "replace topics with climate, science")
-    assert exact.requires_confirmation is False
-    updated = apply_confirmed_topic_change(profile, exact)
-    assert [topic.name for topic in updated.topics] == ["climate", "science"]
-    assert updated.version == profile.version + 1
+    assert exact.requires_confirmation is True
+    assert exact.status == "proposed"
+    with pytest.raises(ValueError):
+        apply_confirmed_topic_change(profile, exact)
 
     broad = propose_topic_change(profile, "please rethink the topics around our audience")
     assert broad.requires_confirmation is True
