@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import functools
+import hashlib
 import io
 import logging
 import secrets
@@ -30,6 +32,7 @@ from .dependencies import csrf_token as shared_csrf_token
 from .dependencies import require_auth as shared_require_auth
 from .dependencies import require_csrf as shared_require_csrf
 from .dependencies import WorkspaceContext
+from ..studio.routes import _TEMPLATES as _studio_templates
 from ..studio.routes import _public_event_payload as _filter_event_payload
 from ..studio.routes import build_router as build_studio_router
 from ..studio.repository import MemoryStudioRepository, RunNotFound, StudioRepository
@@ -102,6 +105,19 @@ def _sanitize_csv_cell(value: object) -> object:
 
 def reset_login_rate_limiter() -> None:
     _LOGIN_ATTEMPTS.clear()
+
+
+@functools.lru_cache(maxsize=1)
+def static_asset_version() -> str:
+    """Short content hash of the first-party static assets referenced by templates."""
+    digest = hashlib.sha256()
+    for name in ("app.js", "style.css"):
+        path = WEB_DIR / "static" / name
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(name.encode("utf-8"))
+    return digest.hexdigest()[:12]
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -229,6 +245,11 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     templates.env.filters["num"] = _num
     templates.env.filters["dt"] = _dt
     templates.env.globals["app_name"] = "TG Studio"
+    # Content-hash cache busting: a changed app.js/style.css must never be
+    # served from a browser cache keyed on a hand-bumped ?v= number.
+    templates.env.globals["asset_version"] = static_asset_version()
+    _studio_templates.env.globals["asset_version"] = static_asset_version()
+    _studio_templates.env.globals["app_name"] = "TG Studio"
 
     def render(request: Request, name: str, ctx: dict, status_code: int = 200):
         ctx.update({"request": request})

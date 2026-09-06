@@ -343,3 +343,22 @@ def test_validate_required_change_me_guard(tmp_path):
         channels="@c",
     )
     assert not any("change-me" in p for p in localhost_ok.validate_required())
+
+
+async def test_static_assets_use_content_hash_versions(tmp_path):
+    """A changed app.js must never be served from a cache keyed on a hand-bumped ?v=."""
+    from app.web.routes import static_asset_version
+
+    version = static_asset_version()
+    assert len(version) == 12 and all(c in "0123456789abcdef" for c in version)
+    settings = Settings(data_dir=str(tmp_path), admin_username="admin", admin_password="pw", session_secret="sec")
+    app = _make_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        login = await client.get("/login")
+        assert f"/static/style.css?v={version}" in login.text
+        await client.post("/login", data={"username": "admin", "password": "pw"})
+        dash = await client.get("/")
+        assert f"/static/app.js?v={version}" in dash.text
+        assert f"/static/style.css?v={version}" in dash.text
+        assert 'app.js?v=2"' not in dash.text
