@@ -98,8 +98,10 @@ async def test_studio_spike_alias_preserves_auth_and_csrf_boundaries(client, set
     settings.studio_enabled = True
     settings.studio_test_mode = True
     response = await client.post("/studio-spike/api/agent", json={})
-    assert response.status_code == 303
-    assert response.headers["location"] == "/login"
+    assert response.status_code == 401
+    body = response.json()
+    err = body.get("error") or body.get("detail", {}).get("error", {})
+    assert err.get("code") == "unauthenticated"
 
     await _login(client)
     token = await _csrf(client)

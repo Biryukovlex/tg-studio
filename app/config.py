@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = ""
     session_secret: str = ""
+    behind_tls: bool = False
+    trusted_proxy_ips: str = ""
     # Runtime process topology. ``all`` is the community default; hosted
     # deployments can run the web and Telegram collector independently.
     process_role: str = "all"
@@ -153,6 +155,12 @@ class Settings(BaseSettings):
             problems.append("CHANNELS empty - e.g. CHANNELS=@my_channel")
         if needs_admin and not self.admin_password:
             problems.append("ADMIN_PASSWORD empty - required for the web admin panel.")
+        # Guard against shipping default credentials on a public interface.
+        if needs_admin and self.admin_password == "change-me":
+            host = (self.web_host or "").strip().lower()
+            loopback_hosts = {"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"}
+            if host not in loopback_hosts:
+                problems.append("ADMIN_PASSWORD must be changed from 'change-me' when WEB_HOST is not loopback.")
         return problems
 
     @property

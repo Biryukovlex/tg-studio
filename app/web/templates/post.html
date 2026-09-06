@@ -82,7 +82,7 @@
       <h2>Metric history <span>(UTC)</span></h2>
     </div>
   </div>
-  <div class="chart-wrap"><canvas id="postChart"></canvas></div>
+  <div class="chart-wrap"><canvas id="postChart" data-chart='{{ chart|tojson }}'></canvas></div>
 </section>
 
 <section class="panel" data-reveal>
@@ -109,43 +109,4 @@
   </div>
 </section>
 
-<script>
-const data = {{ chart|tojson }};
-const motionOK = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const styles = getComputedStyle(document.documentElement);
-const colors = {
-  reach: styles.getPropertyValue('--cyan').trim(),
-  reactions: styles.getPropertyValue('--coral').trim(),
-  comments: styles.getPropertyValue('--teal').trim(),
-  shares: styles.getPropertyValue('--blue').trim(),
-  muted: styles.getPropertyValue('--muted').trim(),
-  grid: styles.getPropertyValue('--chart-grid').trim()
-};
-new Chart(document.getElementById('postChart'), {
-  type: 'line',
-  data: {
-    labels: data.labels,
-    datasets: [
-      { label: 'Reach / Views', data: data.views, borderColor: colors.reach, backgroundColor: 'rgba(25, 210, 236, .10)', fill: true, tension: .36, borderWidth: 2.5, pointRadius: 2, pointHoverRadius: 6 },
-      { label: 'Reactions', data: data.reactions, borderColor: colors.reactions, tension: .36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
-      { label: 'Comments', data: data.comments, borderColor: colors.comments, tension: .36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
-      { label: 'Shares', data: data.shares, borderColor: colors.shares, tension: .36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
-    ]
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: { mode: 'index', intersect: false },
-    animation: motionOK ? { duration: 1300, easing: 'easeOutQuart' } : false,
-    plugins: {
-      legend: { position: 'top', align: 'start', labels: { color: colors.muted, boxWidth: 24, boxHeight: 2, padding: 24, font: { family: 'Manrope Variable', size: 12, weight: 550 } } },
-      tooltip: { backgroundColor: '#0d1a27', borderColor: 'rgba(119, 151, 177, .3)', borderWidth: 1, titleColor: '#f4f8fb', bodyColor: '#a6b5c3', padding: 12 }
-    },
-    scales: {
-      x: { ticks: { color: colors.muted, maxTicksLimit: 10, font: { family: 'Manrope Variable', size: 11 } }, grid: { display: false }, border: { display: false } },
-      y: { beginAtZero: true, ticks: { color: colors.muted, padding: 12, font: { family: 'Manrope Variable', size: 11 } }, grid: { color: colors.grid, borderDash: [4, 5] }, border: { display: false } }
-    }
-  }
-});
-</script>
 {% endblock %}

@@ -64,15 +64,20 @@ async def amain() -> None:
         db = Database(settings.db_path)
         db.init_db()
 
+    def _uvicorn_config(app) -> uvicorn.Config:
+        kwargs: dict = dict(host=settings.web_host, port=settings.web_port, log_level="info")
+        if settings.trusted_proxy_ips.strip():
+            kwargs["proxy_headers"] = True
+            kwargs["forwarded_allow_ips"] = settings.trusted_proxy_ips.strip()
+        return uvicorn.Config(app, **kwargs)
+
     # The web role serves read-only dashboard/Studio requests and deliberately
     # does not acquire a Telegram session. Collection/manual refresh is owned
     # by the worker role in split deployments.
     if role == "web":
         collector = Collector(None, db, settings)
         app = create_app(collector, settings)
-        server = uvicorn.Server(
-            uvicorn.Config(app, host=settings.web_host, port=settings.web_port, log_level="info")
-        )
+        server = uvicorn.Server(_uvicorn_config(app))
         log.info("Web-only panel: http://%s:%s", settings.web_host, settings.web_port)
         try:
             await server.serve()
@@ -160,9 +165,7 @@ async def amain() -> None:
         return
 
     app = create_app(collector, settings)
-    server = uvicorn.Server(
-        uvicorn.Config(app, host=settings.web_host, port=settings.web_port, log_level="info")
-    )
+    server = uvicorn.Server(_uvicorn_config(app))
 
     log.info("Web panel: http://%s:%s", settings.web_host, settings.web_port)
     log.info("First collection cycle starting...")

@@ -47,7 +47,9 @@ async def test_draft_routes_require_auth_and_csrf(client, settings):
     settings.studio_enabled = True
     settings.studio_test_mode = True
     unknown = str(uuid.uuid4())
-    assert (await client.get(f"/studio/api/drafts/{unknown}")).status_code == 303
+    unauth = await client.get(f"/studio/api/drafts/{unknown}")
+    assert unauth.status_code == 401
+    assert (unauth.json().get("error") or unauth.json().get("detail", {}).get("error", {})).get("code") == "unauthenticated"
     await _login(client, settings)
     assert (await client.post(f"/studio/api/drafts/{unknown}/copied")).status_code == 403
 
