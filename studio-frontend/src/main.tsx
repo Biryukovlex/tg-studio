@@ -27,6 +27,7 @@ import {
   type RunUsage,
   StudioApiError,
 } from "./api";
+import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
 import "./styles.css";
 
 function ToolActivity({ toolName, result }: ToolCallMessagePartProps) {
@@ -46,6 +47,7 @@ function StudioMarkdownText() {
       defer
       remarkPlugins={[remarkGfm]}
       components={{
+        img: () => null,
         a: ({ node: _node, ...props }) => (
           <a {...props} target="_blank" rel="noopener noreferrer" />
         ),
@@ -427,7 +429,19 @@ function DraftPanel({
 
   const edit = (field: "body" | "working_title", value: string) => {
     localChange.current += 1;
-    setDraft((current) => current ? { ...current, [field]: value, ...(field === "body" ? { working_title: value.split("\n")[0].slice(0, 160) || "Untitled draft", character_count: Array.from(value).length, over_limit: Array.from(value).length > 4096 } : {}), copied_at: null } : current);
+    setDraft((current) => {
+      if (!current) return current;
+      if (field === "working_title") {
+        return { ...current, working_title: value.slice(0, 160), copied_at: null };
+      }
+      return {
+        ...current,
+        body: value,
+        character_count: Array.from(value).length,
+        over_limit: Array.from(value).length > 4096,
+        copied_at: null,
+      };
+    });
     setSaveState("saving");
     setCopied(false);
   };
@@ -471,8 +485,12 @@ function DraftPanel({
       setSaveState("saved");
       setConflict(null);
     }).catch((error: unknown) => {
-      if (error instanceof StudioApiError && error.status === 409 && error.payload.server_draft) setConflict({ server: error.payload.server_draft, localBody: draft.body, localTitle: draft.working_title });
-      setSaveState("conflict");
+      if (error instanceof StudioApiError && error.status === 409 && error.payload.server_draft) {
+        setConflict({ server: error.payload.server_draft, localBody: draft.body, localTitle: draft.working_title });
+        setSaveState("conflict");
+      } else {
+        setSaveState("error");
+      }
     });
   };
 
@@ -549,7 +567,8 @@ function DraftPanel({
         </div>
       ) : (
         <div className="studio-draft-content">
-          <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={postText} onChange={(event) => edit("body", event.target.value)} />
+          <label className="studio-draft-title">Title<input aria-label="Draft title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /></label>
+          <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={draft.body} onChange={(event) => edit("body", event.target.value)} />
           <div className={`studio-char-count ${draft.over_limit ? "is-over" : draft.warning_threshold ? "is-warning" : ""}`}>
             <span>{Array.from(postText).length.toLocaleString()} / 4,096 characters</span>
             <span>{draft.over_limit ? "Copy blocked" : draft.warning_threshold ? "Near Telegram limit" : "Telegram ready"}</span>
@@ -567,11 +586,9 @@ function ProfilePrimer({ bootstrap, onGranted }: { bootstrap: Bootstrap; onGrant
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const consent = bootstrap.consent;
-  const attempted = useRef<number | null>(null);
   const semanticReady = bootstrap.profile?.editorial_rules?.extraction_version === "channel.semantic.v1";
   const analyze = () => {
     if (!bootstrap.selected_channel_id) return;
-    attempted.current = bootstrap.selected_channel_id;
     setBusy(true);
     setMessage("");
     void api<{ profile: Bootstrap["profile"] }>(`/studio/api/profile/analyze?channel_id=${bootstrap.selected_channel_id}`, {
@@ -580,9 +597,6 @@ function ProfilePrimer({ bootstrap, onGranted }: { bootstrap: Bootstrap; onGrant
       .catch((reason: unknown) => setMessage(reason instanceof Error ? reason.message : "Profile analysis failed."))
       .finally(() => setBusy(false));
   };
-  useEffect(() => {
-    if ((!consent.required || consent.granted) && !semanticReady && !busy && attempted.current !== bootstrap.selected_channel_id) analyze();
-  }, [consent.granted, semanticReady, bootstrap.selected_channel_id]);
   const grant = () => {
     setBusy(true);
     setMessage("");
@@ -787,10 +801,12 @@ function StudioThread({
         runtime.thread.reset(asThreadMessages(payload.messages));
       });
 
+    let consecutiveErrors = 0;
     const poll = (run: RunSummary) => {
       void api<{ run: RunSummary; events: RunEvent[] }>(`/studio/api/runs/${run.id}/events?after=${cursor}`)
         .then((payload) => {
           if (!alive) return;
+          consecutiveErrors = 0;
           setRecoveredRun(payload.run);
           if (payload.events.length > 0) {
             cursor = payload.events[payload.events.length - 1].sequence;
@@ -803,8 +819,22 @@ function StudioThread({
             onRunFinished();
           }
         })
-        .catch(() => {
-          if (alive) timer = window.setTimeout(() => poll(run), 1500);
+        .catch((error: unknown) => {
+          if (!alive) return;
+          const status = error instanceof StudioApiError ? error.status : 0;
+          if (isTerminalPollStatus(status)) {
+            setRecoveredRun(null);
+            onRunFinished();
+            return;
+          }
+          consecutiveErrors += 1;
+          if (shouldStopPollingAfterErrors(consecutiveErrors)) {
+            setRecoveredRun(null);
+            onRunFinished();
+            return;
+          }
+          const delay = nextPollDelay(consecutiveErrors);
+          timer = window.setTimeout(() => poll(run), delay);
         });
     };
 

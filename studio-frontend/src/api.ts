@@ -198,7 +198,32 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  const payload = (await response.json().catch(() => ({}))) as T & ApiError;
+  const contentType = response.headers.get("content-type") ?? "";
+  // Session expired: fetch follows the 303 to /login and returns HTML 200.
+  // Detect redirect, 401, or non-JSON and force a login navigation.
+  if (response.redirected || response.status === 401 || !contentType.includes("application/json")) {
+    try {
+      window.location.assign("/login");
+    } catch {
+      /* test environment without window */
+    }
+    throw new StudioApiError(401, {
+      error: { code: "unauthenticated", message: "Sign in to continue.", retryable: false },
+    });
+  }
+  let payload: T & ApiError;
+  try {
+    payload = (await response.json()) as T & ApiError;
+  } catch {
+    try {
+      window.location.assign("/login");
+    } catch {
+      /* ignore */
+    }
+    throw new StudioApiError(401, {
+      error: { code: "unauthenticated", message: "Sign in to continue.", retryable: false },
+    });
+  }
   if (!response.ok) {
     throw new StudioApiError(response.status, payload);
   }
