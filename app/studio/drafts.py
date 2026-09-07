@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from .markdown import render_markdown_html, render_markdown_plain, validate_markdown_body
+
 
 MAX_DRAFT_CHARS = 4096
 DRAFT_WARNING_CHARS = 3800
@@ -159,6 +161,13 @@ def validate_draft_input(
         raise DraftValidationError("invalid_draft", f"Correct draft fields: {details}") from exc
     if len(parsed.body) > MAX_DRAFT_BODY_INPUT:
         raise DraftValidationError("draft_too_large", "Draft text is too large to save.", field="body")
+    # Validate markdown dialect: headings, images, HTML are not allowed
+    try:
+        validate_markdown_body(parsed.body)
+    except DraftValidationError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise DraftValidationError("invalid_markdown", str(exc), field="body") from exc
 
     source_ids = _unique([str(item).strip() for item in parsed.source_ids if str(item).strip()])
     claims: list[ClaimSupport] = []
@@ -196,7 +205,8 @@ def validate_draft_input(
         )
 
     warnings = _unique([str(item).strip()[:500] for item in parsed.warnings if str(item).strip()])
-    count = len(parsed.body)
+    plain = render_markdown_plain(parsed.body)
+    count = len(plain)
     over_limit = count > MAX_DRAFT_CHARS
     warning_threshold = count >= DRAFT_WARNING_CHARS
     if warning_threshold and "Approaching Telegram's 4,096-character limit." not in warnings and not over_limit:

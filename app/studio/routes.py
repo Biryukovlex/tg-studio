@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from ..web.dependencies import require_auth, require_csrf
 from .consent import PROVIDER_NAME, configuration_fingerprint, consent_state, disclosure
 from .drafts import DraftConflictError, DraftValidationError
+from .markdown import render_markdown_html, render_markdown_plain
 from .repository import ActiveRunExists, ConversationNotFound, DraftNotFound, MemoryStudioRepository, RunNotFound, StudioRepository, StudioRepositoryError
 from .profile import ChannelProfile, propose_topic_change
 from .prompts import PROMPT_VERSION
@@ -63,9 +64,15 @@ def _draft(row: dict[str, Any] | None) -> dict[str, Any] | None:
         value[key] = _iso(value.get(key))
     body = str(value.get("body") or "")
     value["body"] = body
-    value["character_count"] = len(body)
-    value["over_limit"] = len(body) > 4096
-    value["warning_threshold"] = len(body) >= 3800
+    # T16: character_count/over_limit computed on plain rendering
+    plain = render_markdown_plain(body)
+    value["body_plain"] = plain
+    value["body_html"] = render_markdown_html(body)
+    value["plain_character_count"] = len(plain)
+    value["character_count"] = len(plain)
+    value["over_limit"] = len(plain) > 4096
+    value["warning_threshold"] = len(plain) >= 3800
+    # Keep legacy plain count under character_count for backward compat
     for key, default in (("source_ids", []), ("claim_support", []), ("assumptions", []), ("warnings", []), ("channel_evidence", []), ("web_evidence", [])):
         raw = value.get(key)
         if isinstance(raw, str):
@@ -208,6 +215,11 @@ def _profile(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "confidence": row.get("confidence", "low") or "low",
         "current_analysis_id": str(row["current_analysis_id"]) if row.get("current_analysis_id") else None,
         "version": int(row.get("version", 1)),
+        "topics_text": row.get("topics_text", "") or "",
+        "editorial_text": row.get("editorial_text", "") or "",
+        "style_text": row.get("style_text", "") or "",
+        "built_at": _iso(row.get("built_at")),
+        "built_from_posts": int(row.get("built_from_posts", 0) or 0),
         "created_at": _iso(row.get("created_at")),
         "updated_at": _iso(row.get("updated_at")),
     }
@@ -338,12 +350,11 @@ def build_router() -> APIRouter:
         if selected_channel_id is not None and setup["ready"]:
             profile_getter = getattr(service.repository, "get_profile", None)
             profile = await profile_getter(int(selected_channel_id)) if profile_getter is not None else None
-            if profile is None and consent["granted"]:
-                profile = await service.ensure_profile(int(selected_channel_id))
             if profile is not None:
-                profile_status = "low_confidence" if profile.get("confidence") == "low" else "ready"
-            elif not consent["required"]:
-                profile_status = "not_analyzed"
+                has_text = any(str(profile.get(k) or "").strip() for k in ("topics_text", "editorial_text", "style_text"))
+                profile_status = "ready" if has_text else "not_built"
+            else:
+                profile_status = "not_built"
         current_draft = None
         active_run = None
         if selected is not None and setup["ready"]:
@@ -398,12 +409,24 @@ def build_router() -> APIRouter:
         if granter is None or context.user_id is None:
             return _safe_error("consent_unavailable", "Provider consent persistence is unavailable.", status_code=503)
         row = await granter(user_id=context.user_id, provider=PROVIDER_NAME, configuration_fingerprint=expected)
-        # First-run profile preparation is local/deterministic and can happen
-        # immediately after consent without sending a provider request.
-        channels = await _service(request).repository.list_channels()
-        channel_id = int(channels[0]["id"]) if channels else None
-        profile = await _service(request).ensure_profile(channel_id) if channel_id is not None else None
-        return {"consent": consent_state(_settings(request), row), "profile": _profile(profile), "disclosure": disclosure(_settings(request), fingerprint=expected)}
+        # Keep profile in response for existing tests; bootstrap now controls profile_status.
+        profile = None
+        try:
+            channels = await _service(request).repository.list_channels()
+            if channels:
+                profile = await _service(request).repository.get_profile(int(channels[0]["id"]))
+                if profile is None:
+                    # Best-effort: create low-confidence profile without blocking consent.
+                    try:
+                        profile = await _service(request).ensure_profile(int(channels[0]["id"]))
+                    except Exception:
+                        profile = None
+        except Exception:
+            profile = None
+        resp: dict[str, Any] = {"consent": consent_state(_settings(request), row), "disclosure": disclosure(_settings(request), fingerprint=expected)}
+        if profile is not None:
+            resp["profile"] = _profile(profile)
+        return resp
 
     @router.post("/api/consent/revoke")
     async def revoke_consent(request: Request):
@@ -417,10 +440,24 @@ def build_router() -> APIRouter:
         row = await revoker(user_id=context.user_id, provider=PROVIDER_NAME)
         return {"consent": consent_state(_settings(request), row)}
 
+    def _profile_build_blockers(request: Request, channel_id: int | None, setup: dict[str, Any], consent: dict[str, Any] | None, available_posts: int | None = None) -> list[dict[str, Any]]:
+        blockers: list[dict[str, Any]] = []
+        if not setup.get("ready"):
+            blockers.append({"code": "studio_not_ready", "message": "Finish Studio setup before building."})
+            return blockers
+        if consent is not None and consent.get("required") and not consent.get("granted"):
+            blockers.append({"code": "provider_consent_required", "message": "Allow OpenRouter in the Studio banner before building."})
+        # Check post count
+        if available_posts is not None:
+            minimum = int(getattr(request.app.state.settings, "studio_min_profile_posts", 5))
+            if available_posts < minimum:
+                blockers.append({"code": "too_few_posts", "message": f"Needs at least {minimum} posts; {available_posts} collected so far.", "available": available_posts, "minimum": minimum})
+        return blockers
+
     @router.get("/api/profile")
     async def get_profile(request: Request, channel_id: int | None = None):
         _ensure_enabled(request)
-        require_auth(request)
+        context = require_auth(request)
         setup = _ensure_ready(request)
         if not setup["ready"]:
             return _safe_error("studio_not_ready", "Finish Studio setup before viewing the channel profile.", status_code=409)
@@ -429,102 +466,121 @@ def build_router() -> APIRouter:
         selected = channel_id or (int(channels[0]["id"]) if channels else None)
         if selected is None:
             return _safe_error("channel_required", "Configure a Telegram channel before opening Studio.", status_code=409)
-        profile = await service.repository.get_profile(selected)
-        return {"profile": _profile(profile), "status": "ready" if profile else "not_analyzed", "channel_id": selected}
-
-    @router.post("/api/profile/analyze")
-    async def analyze_profile(request: Request, channel_id: int):
-        _ensure_enabled(request)
-        context = require_auth(request)
-        require_csrf(request)
-        if not _ensure_ready(request)["ready"]:
-            return _safe_error("studio_not_ready", "Finish Studio setup first.", status_code=409)
-        consent = await _consent(request, context)
-        if consent["required"] and not consent["granted"]:
-            return _safe_error("provider_consent_required", "Allow OpenRouter before analyzing.", status_code=409)
-        service = _service(request)
-        if channel_id not in {int(row["id"]) for row in await service.repository.list_channels()}:
+        if selected not in {int(row["id"]) for row in channels}:
             return _safe_error("channel_not_found", "Channel not found.", status_code=404)
-        try:
-            profile = await service.ensure_profile(channel_id, force=True, semantic=True)
-        except Exception:
-            return _safe_error("profile_analysis_failed", "Profile analysis failed. Your previous profile is unchanged. Retry shortly.", status_code=502, retryable=True)
-        return {"profile": _profile(profile)}
+        profile = await service.repository.get_profile(selected)
+        consent = await _consent(request, context)
+        # Determine available posts for blocker
+        reader = getattr(service.repository, "performance_rows", None)
+        available = None
+        if reader is not None:
+            try:
+                rows = await reader(selected)
+                available = len(rows)
+            except Exception:
+                available = None
+        blockers = _profile_build_blockers(request, selected, setup, consent, available)
+        can_build = len(blockers) == 0
+        return {"profile": _profile(profile), "can_build": can_build, "build_blockers": blockers, "channel_id": selected}
 
-    @router.post("/api/profile/changes")
-    async def propose_profile_change(request: Request):
+    @router.put("/api/profile")
+    async def put_profile(request: Request):
+        _ensure_enabled(request)
+        require_auth(request)
+        require_csrf(request)
+        setup = _ensure_ready(request)
+        if not setup["ready"]:
+            return _safe_error("studio_not_ready", "Finish Studio setup before saving the channel profile.", status_code=409)
+        try:
+            from .schemas import ProfileTextPatch
+            payload = ProfileTextPatch.model_validate(await request.json())
+        except (ValidationError, ValueError, TypeError) as exc:
+            err = str(exc)
+            # surface field name if present
+            return _safe_error("invalid_profile", f"Profile details are invalid: {err}", status_code=422)
+        # Validate field limits and line counts before cleaning (spec 422 with field name)
+        for field in ["topics_text", "editorial_text", "style_text"]:
+            text = getattr(payload, field)
+            if len(text) > 2000:
+                return _safe_error("invalid_profile", f"{field} exceeds 2000 characters", status_code=422)
+            if len(text.splitlines()) > 60:
+                return _safe_error("invalid_profile", f"{field} exceeds 60 lines", status_code=422)
+        service = _service(request)
+        if payload.channel_id not in {int(row["id"]) for row in await service.repository.list_channels()}:
+            return _safe_error("channel_not_found", "Channel not found.", status_code=404)
+        current = await service.repository.get_profile(payload.channel_id)
+        expected = int(payload.expected_version)
+        current_version = int(current["version"]) if current else 0
+        if expected != current_version:
+            return JSONResponse({"error": {"code": "profile_conflict", "message": "Profile changed in another tab.", "retryable": True}, "server_profile": _profile(current)}, status_code=409)
+        def clean_text(v: str) -> str:
+            lines = [line.rstrip() for line in v.splitlines()]
+            cleaned = "\n".join(line for line in lines if line.strip() != "")
+            return cleaned
+        topics_text = clean_text(payload.topics_text)
+        editorial_text = clean_text(payload.editorial_text)
+        style_text = clean_text(payload.style_text)
+        try:
+            row = await service.repository.upsert_profile_text({
+                "channel_id": payload.channel_id,
+                "topics_text": topics_text,
+                "editorial_text": editorial_text,
+                "style_text": style_text,
+                "expected_version": expected,
+            })
+        except ValueError as exc:
+            # Validation from repository (length/line)
+            msg = str(exc)
+            field = "topics_text" if "topics_text" in msg else "editorial_text" if "editorial_text" in msg else "style_text" if "style_text" in msg else "profile"
+            return _safe_error("invalid_profile", f"{field} {msg}", status_code=422)
+        except Exception as exc:
+            if "DraftConflict" in type(exc).__name__ or "profile_conflict" in str(exc).lower():
+                cur = await service.repository.get_profile(payload.channel_id)
+                return JSONResponse({"error": {"code": "profile_conflict", "message": "Profile changed in another tab.", "retryable": True}, "server_profile": _profile(cur)}, status_code=409)
+            raise
+        return {"profile": _profile(row)}
+
+    @router.post("/api/profile/build")
+    async def build_profile(request: Request):
         _ensure_enabled(request)
         context = require_auth(request)
         require_csrf(request)
         setup = _ensure_ready(request)
         if not setup["ready"]:
-            return _safe_error("studio_not_ready", "Finish Studio setup before changing the channel profile.", status_code=409)
+            return _safe_error("studio_not_ready", "Finish Studio setup first.", status_code=409)
         try:
-            payload = ProfileChangeRequest.model_validate(await request.json())
+            from .schemas import ProfileBuildRequest
+            payload = ProfileBuildRequest.model_validate(await request.json())
         except (ValidationError, ValueError, TypeError):
-            return _safe_error("invalid_profile_change", "Profile change details are invalid.", status_code=422)
+            return _safe_error("invalid_profile_build", "Profile build details are invalid.", status_code=422)
         service = _service(request)
-        channels = await service.repository.list_channels()
-        channel_id = payload.channel_id or (int(channels[0]["id"]) if channels else None)
-        if channel_id is None:
-            return _safe_error("channel_required", "Configure a Telegram channel before changing topics.", status_code=409)
-        current_row = await service.repository.get_profile(channel_id)
-        if current_row is None:
-            return _safe_error("profile_not_ready", "Analyze the channel before changing its topics.", status_code=409)
-        current = ChannelProfile.model_validate(
-            {
-                "channel_id": channel_id,
-                "topics": current_row.get("topics", []),
-                "style_profile": current_row.get("style_profile", {}),
-                "editorial_rules": current_row.get("editorial_rules", {}),
-                "confidence": current_row.get("confidence", "low"),
-                "analysis_id": str(current_row["current_analysis_id"]) if current_row.get("current_analysis_id") else None,
-                "version": current_row.get("version", 1),
-            }
-        )
-        proposal = propose_topic_change(current, payload.instruction)
-        row = await service.repository.create_profile_change(
-            {
-                "channel_id": channel_id,
-                "base_profile_version": proposal.base_profile_version,
-                "proposed_topics": proposal.proposed_topics,
-                "style_diff": proposal.style_diff,
-                "editorial_rules": proposal.editorial_rules,
-                "reason": proposal.reason,
-                "status": proposal.status,
-                "requested_by": context.user_id,
-            }
-        )
-        return {"change": _profile_change(row), "requires_confirmation": proposal.requires_confirmation}
-
-    @router.post("/api/profile/changes/{change_id}/confirm")
-    async def confirm_profile_change(request: Request, change_id: str):
-        _ensure_enabled(request)
-        require_auth(request)
-        require_csrf(request)
+        if payload.channel_id not in {int(row["id"]) for row in await service.repository.list_channels()}:
+            return _safe_error("channel_not_found", "Channel not found.", status_code=404)
+        consent = await _consent(request, context)
+        if consent.get("required") and not consent.get("granted"):
+            return _safe_error("provider_consent_required", "Allow OpenRouter before building.", status_code=409)
+        # Check too_few_posts before building
+        reader = getattr(service.repository, "performance_rows", None)
+        if reader is not None:
+            try:
+                rows = await reader(payload.channel_id)
+                minimum = int(getattr(request.app.state.settings, "studio_min_profile_posts", 5))
+                if len(rows) < minimum:
+                    return _safe_error("too_few_posts", f"Needs at least {minimum} posts; {len(rows)} collected so far.", status_code=409)
+            except ConversationNotFound:
+                return _safe_error("channel_not_found", "Channel not found.", status_code=404)
         try:
-            parsed = uuid.UUID(change_id)
-        except ValueError:
-            return _safe_error("profile_change_not_found", "Profile change not found.", status_code=404)
-        row = await _service(request).repository.confirm_profile_change(parsed)
-        if row is None:
-            return _safe_error("profile_change_not_found", "Profile change not found or already confirmed.", status_code=404)
-        return {"change": _profile_change(row)}
-
-    @router.post("/api/profile/changes/{change_id}/apply")
-    async def apply_profile_change(request: Request, change_id: str):
-        _ensure_enabled(request)
-        require_auth(request)
-        require_csrf(request)
-        try:
-            parsed = uuid.UUID(change_id)
-        except ValueError:
-            return _safe_error("profile_change_not_found", "Profile change not found.", status_code=404)
-        try:
-            row = await _service(request).repository.apply_profile_change(parsed)
-        except (ConversationNotFound, StudioRepositoryError) as exc:
-            return _safe_error("profile_change_blocked", str(exc), status_code=409)
-        return {"profile": _profile(row)}
+            # Use asyncio.wait_for to enforce 45s provider timeout per spec
+            import asyncio
+            result = await asyncio.wait_for(service.build_profile_draft(payload.channel_id), timeout=45)
+        except asyncio.TimeoutError:
+            return _safe_error("profile_build_failed", "Profile build timed out. Your previous profile is unchanged. Retry shortly.", status_code=502, retryable=True)
+        except Exception as exc:
+            code = getattr(exc, "code", "profile_build_failed")
+            if "too few" in str(exc).lower():
+                return _safe_error("too_few_posts", str(exc), status_code=409)
+            return _safe_error("profile_build_failed", f"Profile build failed: {exc}", status_code=502, retryable=True)
+        return {"draft": result}
 
     @router.get("/api/conversations")
     async def list_conversations(request: Request):
@@ -698,22 +754,23 @@ def build_router() -> APIRouter:
             return _safe_error("invalid_draft", "Draft details are invalid.", status_code=422)
         service = _service(request)
         try:
-            if payload.restore_version is not None:
-                row = await service.repository.restore_draft_version(
+            chosen = payload.choose_version if payload.choose_version is not None else payload.restore_version
+            if chosen is not None:
+                row = await service.repository.choose_draft_version(
                     draft_id=parsed,
-                    version=payload.restore_version,
+                    version=chosen,
                     expected_revision=payload.expected_revision,
-                    instruction=f"Restored version {payload.restore_version}",
                 )
             else:
-                values = payload.model_dump(exclude={"expected_revision", "restore_version"}, exclude_none=True)
+                values = payload.model_dump(exclude={"expected_revision", "restore_version", "choose_version", "save_as_new_version"}, exclude_none=True)
                 row = await service.repository.save_draft(
                     draft_id=parsed,
                     payload=values,
                     expected_revision=payload.expected_revision,
+                    new_version=bool(payload.save_as_new_version),
                 )
         except DraftConflictError as exc:
-            local = {key: value for key, value in payload.model_dump(exclude={"expected_revision", "restore_version"}, exclude_none=True).items()}
+            local = {key: value for key, value in payload.model_dump(exclude={"expected_revision", "restore_version", "choose_version", "save_as_new_version"}, exclude_none=True).items()}
             return JSONResponse(
                 {
                     "error": {"code": exc.code, "message": str(exc), "retryable": True},
@@ -745,7 +802,10 @@ def build_router() -> APIRouter:
         except DraftNotFound:
             return _safe_error("draft_not_found", "Draft not found.", status_code=404)
         copied_at = _iso(row.get("copied_at")) or ""
-        return {"draft": _draft(row), "copied_text": str(row.get("body") or ""), "copied_at": copied_at}
+        body = str(row.get("body") or "")
+        plain = render_markdown_plain(body)
+        html_body = render_markdown_html(body)
+        return {"draft": _draft(row), "copied_text": plain, "copied_html": html_body, "copied_at": copied_at}
 
     @router.get("/api/drafts/{draft_id}/versions")
     async def draft_versions(request: Request, draft_id: str):

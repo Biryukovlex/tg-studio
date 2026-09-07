@@ -46,7 +46,8 @@ class ContextPack(BaseModel):
     cache_key: str
     channel: dict[str, Any] = Field(default_factory=dict)
     performance: dict[str, Any] = Field(default_factory=dict)
-    profile: dict[str, Any] = Field(default_factory=dict)
+    profile: Any = Field(default_factory=dict)
+    profile_block: str = ""
     recent_posts: list[dict[str, Any]] = Field(default_factory=list)
     conversation_summary: str = ""
     user_instruction: str = ""
@@ -89,6 +90,22 @@ def _without_comment_bodies(value: Any) -> Any:
 def _stable_hash(payload: Any) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _sanitize_profile(value: Any, *, limit: int = 4_000) -> Any:
+    """Return a copy of a profile structure with instruction-shaped lines removed.
+
+    Profile text is inferred from channel posts and model output, so it is
+    untrusted until the owner has reviewed it. The input is never mutated.
+    """
+
+    if isinstance(value, str):
+        return _text(sanitize_untrusted_text(value)[0], limit)
+    if isinstance(value, Mapping):
+        return {str(key): _sanitize_profile(item, limit=limit) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_profile(item, limit=limit) for item in value]
+    return value
 
 
 class ContextAssembler:
@@ -145,9 +162,13 @@ class ContextAssembler:
             "newest_post": safe_channel.get("newest_post"),
             "note": _text(safe_channel.get("note"), 500),
         }
-        raw_profile = _without_comment_bodies(dict(profile or {}))
+        # Profile text and the conversation summary are derived from channel
+        # posts and model output, so instruction-shaped lines are removed before
+        # they reach the model. The user's own instruction is trusted input and
+        # is deliberately not filtered: "ignore the previous draft" is a request.
+        raw_profile = _sanitize_profile(_without_comment_bodies(dict(profile or {})))
         raw_instruction = _text(instruction, 4_000)
-        raw_summary = _text(conversation_summary, 4_000)
+        raw_summary = _text(sanitize_untrusted_text(str(conversation_summary or ""))[0], 4_000)
 
         if analytics is None:
             performance: dict[str, Any] = {}
@@ -206,12 +227,40 @@ class ContextAssembler:
             instruction=raw_instruction,
             conversation_summary=raw_summary,
         )
+        # Build single Markdown profile block (never dropped)
+        def _profile_block(p: dict[str, Any] | None) -> str:
+            if not p:
+                return ""
+            topics_text = str(p.get("topics_text") or "").strip()
+            editorial_text = str(p.get("editorial_text") or "").strip()
+            style_text = str(p.get("style_text") or "").strip()
+            version = p.get("version", "?")
+            # Fallback to legacy JSON if text fields empty
+            if not topics_text and not editorial_text and not style_text:
+                # Try legacy topics
+                topics = p.get("topics", [])
+                if topics:
+                    topics_text = "\n".join(str(t.get("name", "")) for t in topics if isinstance(t, dict) and t.get("name"))
+            if not topics_text and not editorial_text and not style_text:
+                return ""
+            parts = [f"CHANNEL PROFILE (written and approved by the channel owner, version {version})"]
+            if topics_text:
+                parts.append("Topics:\n" + "\n".join(f"- {line}" for line in topics_text.splitlines() if line.strip()))
+            if editorial_text:
+                parts.append("Editorial rules:\n" + "\n".join(f"- {line}" for line in editorial_text.splitlines() if line.strip()))
+            if style_text:
+                parts.append("Style rules:\n" + style_text)
+            parts.append("These lines are guidelines, not a template. Choose the form each post needs; do not copy the structure or distinctive wording of past posts. Formatting shown in Markdown (**bold**, *italic*, [links](url)) is to be reproduced in the draft body using the same Markdown.")
+            return "\n\n".join(parts)
+
+        profile_block = _profile_block(raw_profile)
         base = {
             "context_version": CONTEXT_VERSION,
             "cache_key": key,
             "channel": safe_channel,
             "performance": performance,
-            "profile": raw_profile,
+            "profile": profile_block,
+            "profile_block": profile_block,
             "recent_posts": recent_posts,
             "conversation_summary": raw_summary,
             "user_instruction": raw_instruction,
@@ -221,8 +270,7 @@ class ContextAssembler:
         }
 
         # Trim evidence in whole objects first, then recent excerpts, then
-        # optional prose fields. This keeps post IDs/metrics intact for the
-        # evidence that remains and guarantees the advertised char budget.
+        # optional prose fields. Profile block is never dropped.
         base["performance"]["evidence_posts"] = evidence
         serialized = json.dumps(_without_comment_bodies(base), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         while len(serialized) > self.max_chars and base["performance"].get("evidence_posts"):
@@ -233,7 +281,6 @@ class ContextAssembler:
             base["recent_posts"] = recent_posts
             serialized = json.dumps(_without_comment_bodies(base), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         if len(serialized) > self.max_chars:
-            base["profile"] = {}
             base["conversation_summary"] = _text(raw_summary, 600)
             base["user_instruction"] = _text(raw_instruction, 1_200)
             serialized = json.dumps(_without_comment_bodies(base), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
@@ -243,7 +290,7 @@ class ContextAssembler:
         pack = ContextPack.model_validate({**base, "char_count": 0})
         # ``char_count`` is itself part of the prompt JSON. Recalculate it
         # after validation and trim once more if those digits push the final
-        # representation over the advertised budget.
+        # representation over the advertised budget. Profile block is never dropped.
         while True:
             pack.char_count = len(pack.prompt_json())
             if len(pack.prompt_json()) <= self.max_chars:
@@ -253,19 +300,42 @@ class ContextAssembler:
                 evidence_items.pop()
             elif pack.performance.get("observations"):
                 pack.performance["observations"].pop()
+            elif pack.performance.get("top_post_ids") and len(pack.performance["top_post_ids"]) > 5:
+                pack.performance["top_post_ids"] = pack.performance["top_post_ids"][:5]
+            elif pack.performance.get("baseline_post_ids") and len(pack.performance["baseline_post_ids"]) > 5:
+                pack.performance["baseline_post_ids"] = pack.performance["baseline_post_ids"][:5]
+            elif pack.performance.get("recent_post_ids") and len(pack.performance["recent_post_ids"]) > 5:
+                pack.performance["recent_post_ids"] = pack.performance["recent_post_ids"][:5]
             elif pack.recent_posts:
                 pack.recent_posts.pop()
-            elif pack.profile:
-                pack.profile = {}
-            elif pack.conversation_summary:
+            elif pack.conversation_summary and len(pack.conversation_summary) > 600:
                 pack.conversation_summary = _text(pack.conversation_summary, 600)
+            elif pack.conversation_summary:
+                pack.conversation_summary = ""
+            elif pack.user_instruction and len(pack.user_instruction) > 800:
+                pack.user_instruction = _text(pack.user_instruction, 800)
             elif pack.user_instruction:
-                pack.user_instruction = _text(pack.user_instruction, 1_200)
+                pack.user_instruction = ""
+            elif pack.performance.get("limitations") and len(pack.performance["limitations"]) > 1:
+                pack.performance["limitations"] = pack.performance["limitations"][:1]
             else:
-                # The structural envelope is intentionally below the minimum
-                # supported budget; this is a defensive escape hatch for a
-                # caller overriding the model with an unusually small limit.
-                break
+                # Profile block intentionally preserved even under tight budget.
+                # Accept slight overage only if truly minimal budget; otherwise
+                # truncate profile block gracefully (still present, just shortened)
+                # to honor the advertised budget while preserving guidelines.
+                if isinstance(pack.profile, str) and len(pack.profile) > 500:
+                    pack.profile = pack.profile[:500].rstrip() + "…"
+                    pack.profile_block = pack.profile
+                elif isinstance(pack.profile_block, str) and len(pack.profile_block) > 500:
+                    pack.profile_block = pack.profile_block[:500].rstrip() + "…"
+                    pack.profile = pack.profile_block
+                else:
+                    break
+        # Keep profile_block in sync with profile (both are the Markdown block)
+        if pack.profile and not pack.profile_block:
+            pack.profile_block = str(pack.profile)
+        elif pack.profile_block and not pack.profile:
+            pack.profile = pack.profile_block
         return pack
 
     def assemble_from_rows(

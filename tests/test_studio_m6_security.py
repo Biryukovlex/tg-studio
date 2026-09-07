@@ -90,10 +90,9 @@ async def test_agent_supplied_ids_cannot_cross_conversation_or_channel_scope():
     unchanged = await repository.get_draft(foreign_draft["id"])
     assert unchanged and unchanged["body"] == "Foreign creative draft"
 
-    apply_change = agent._function_toolset.tools["apply_confirmed_topic_changes"].function
-    blocked_change = await apply_change(ctx, str(foreign_change["id"]))
-    assert blocked_change["status"] == "blocked"
-    assert "not part of this channel" in blocked_change["reason"]
+    # After T14 the profile change tools no longer exist as agent tools
+    assert "apply_confirmed_topic_changes" not in agent._function_toolset.tools
+    assert "propose_topic_changes" not in agent._function_toolset.tools
     assert (await repository.get_profile(2))["version"] == 1
 
 

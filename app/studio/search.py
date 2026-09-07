@@ -250,6 +250,7 @@ class SearchResult:
     result_index: int
     source_id: str
     provenance: dict[str, Any] = field(default_factory=dict)
+    injection_flags: tuple[str, ...] = ()
 
     def model_dump(self, *, mode: str = "python") -> dict[str, Any]:
         data = {
@@ -641,6 +642,11 @@ class SearXNGSearchProvider:
                 continue
             title = _clean_text(raw.get("title"), limit=500)
             snippet = _clean_text(raw.get("content") or raw.get("snippet") or raw.get("description"), limit=2_000)
+            # Sanitize untrusted text and capture injection flags (local import to avoid circular)
+            from .sources import sanitize_untrusted_text as _sanitize
+            title, title_flags = _sanitize(title)
+            snippet, snippet_flags = _sanitize(snippet)
+            injection_flags = tuple(dict.fromkeys((*title_flags, *snippet_flags)))
             if not title and not snippet:
                 continue
             source_name = _clean_text(raw.get("source") or raw.get("engine") or domain, limit=160) or domain
@@ -682,7 +688,9 @@ class SearXNGSearchProvider:
                         "required_concepts": [
                             name for name, query_pattern, _result_pattern in _QUERY_CONCEPTS if query_pattern.search(query.text)
                         ],
+                        "injection_flags": list(injection_flags),
                     },
+                    injection_flags=injection_flags,
                 )
             )
             if len(out) >= (query.limit or self.max_results):

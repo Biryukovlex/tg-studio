@@ -46,14 +46,20 @@ class DraftPatchRequest(BaseModel):
     warnings: list[str] | None = Field(default=None, max_length=40)
     confidence: Literal["high", "medium", "low"] | None = None
     creative: bool | None = None
+    # Owner save modes: overwrite the current version (default) or append one.
+    save_as_new_version: bool = False
+    # Make an existing version current without creating a new one.
+    choose_version: int | None = Field(default=None, ge=1)
+    # Compatibility alias for choose_version.
     restore_version: int | None = Field(default=None, ge=1)
 
 
 class DraftCopyResponse(BaseModel):
-    """Exact plain-text clipboard payload returned after a successful copy."""
+    """Clipboard payload with plain and Telegram HTML."""
 
     draft: dict[str, Any]
     copied_text: str
+    copied_html: str = ""
     copied_at: str
 
 
@@ -90,6 +96,20 @@ class ConversationResponse(BaseModel):
     created_at: str
     updated_at: str
     archived_at: str | None = None
+
+
+class ProfileTextPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    channel_id: int
+    expected_version: int = Field(ge=0)
+    topics_text: str = Field(default="", max_length=2000)
+    editorial_text: str = Field(default="", max_length=2000)
+    style_text: str = Field(default="", max_length=2000)
+
+
+class ProfileBuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    channel_id: int
 
 
 class ProfileChangeRequest(BaseModel):

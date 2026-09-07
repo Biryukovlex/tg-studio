@@ -10,8 +10,8 @@
 {% block content %}
 {% if setup.ready %}
 <div id="studio-react-root" data-workspace="{{ setup.workspace_slug }}" aria-label="Content Studio"></div>
-<link rel="stylesheet" href="/static/studio-dist/assets/index.css">
-<script type="module" src="/static/studio-dist/assets/studio.js"></script>
+<link rel="stylesheet" href="/static/studio-dist/assets/index.css?v={{ asset_version }}">
+<script type="module" src="/static/studio-dist/assets/studio.js?v={{ asset_version }}"></script>
 {% else %}
 <section class="card studio-setup-card" data-studio="setup">
   <p class="eyebrow">Content Studio</p>

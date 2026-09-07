@@ -27,7 +27,7 @@ from pydantic_ai.ui import SSE_CONTENT_TYPE
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from starlette.responses import JSONResponse, StreamingResponse
 
-from .agent import StudioDeps, build_agent, is_short_continuation_request, workflow_tool_sequence
+from .agent import StudioDeps, build_agent, is_revision_request, is_short_continuation_request, workflow_tool_sequence
 from .analytics import analyze_posts
 from .profile import build_profile
 from .semantic_profile import build_semantic_profile
@@ -377,6 +377,49 @@ class StudioService:
             }
         )
 
+    async def build_profile_draft(self, channel_id: int) -> dict[str, Any]:
+        """Build a draft profile text from channel posts (no save)."""
+        reader = getattr(self.repository, "performance_rows", None)
+        if reader is None:
+            raise ValueError("performance rows unavailable")
+        channel = await self.repository.channel_context(channel_id)
+        rows = await reader(channel_id)
+        if not rows:
+            raise ValueError("too few posts")
+        min_posts = int(getattr(self.settings, "studio_min_profile_posts", 5))
+        if len(rows) < min_posts:
+            raise ValueError(f"too few posts: {len(rows)} < {min_posts}")
+        # Bound by studio_analysis_max_posts if configured
+        max_posts = int(getattr(self.settings, "studio_analysis_max_posts", 0) or 0)
+        if max_posts > 0:
+            rows = list(rows)[:max_posts]
+        analytics = analyze_posts(rows, channel_id, identifier=channel.get("identifier"))
+        from .semantic_profile import build_profile_text_draft
+        current = None
+        getter = getattr(self.repository, "get_profile", None)
+        if getter is not None:
+            try:
+                current = await getter(channel_id)
+            except Exception:  # noqa: BLE001 - existing text only refines the prompt
+                current = None
+        draft = await build_profile_text_draft(analytics, rows, self.settings, current=current)
+        from .profile import fit_field_lines
+        topics, dropped_topics = fit_field_lines(draft.topics)
+        editorial, dropped_editorial = fit_field_lines(draft.editorial_rules)
+        style, dropped_style = fit_field_lines(draft.style_rules)
+        limitations = list(draft.limitations)
+        dropped = dropped_topics + dropped_editorial + dropped_style
+        if dropped:
+            limitations.append(f"{dropped} lines omitted to fit the 2,000-character field limit")
+        return {
+            "topics_text": "\n".join(topics),
+            "editorial_text": "\n".join(editorial),
+            "style_text": "\n".join(style),
+            "built_from_posts": draft.built_from_posts,
+            "limitations": limitations,
+            "formatting_facts": draft.formatting_facts,
+        }
+
     async def stream_request(self, request, body: bytes) -> StreamingResponse | JSONResponse:
         if len(body) > 512 * 1024:
             return JSONResponse({"error": {"code": "request_too_large", "message": "Studio request is too large.", "retryable": False}}, status_code=413)
@@ -475,13 +518,17 @@ class StudioService:
             )
             if bundle is not None and bundle.sources:
                 required_tools = ("get_channel_context", "create_draft")
-        if "create_draft" in required_tools:
-            current_draft = await self.repository.get_current_draft(
-                conversation_id=conversation_id,
-                channel_id=int(conversation["channel_id"]),
-            )
-            if current_draft is not None:
-                required_tools = tuple("revise_draft" if name == "create_draft" else name for name in required_tools)
+        current_draft = await self.repository.get_current_draft(
+            conversation_id=conversation_id,
+            channel_id=int(conversation["channel_id"]),
+        )
+        if "create_draft" in required_tools and current_draft is not None:
+            required_tools = tuple("revise_draft" if name == "create_draft" else name for name in required_tools)
+        # A conversation that already holds a draft treats any request to
+        # change the post ("add bold title and subtitles", "make it shorter")
+        # as a revision: the change must be saved, not described in chat.
+        if current_draft is not None and "revise_draft" not in required_tools and is_revision_request(content):
+            required_tools = tuple(name for name in required_tools if name != "create_draft") + ("get_draft", "revise_draft")
         # Retain completed assistant replies: stripping them makes old user
         # requests look unanswered. History is context, not factual evidence.
         server_history = _model_history(history_rows)

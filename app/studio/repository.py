@@ -67,6 +67,8 @@ def _json_value(value: Any, default: Any) -> Any:
 def _draft_public(row: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-safe draft row with server-derived metadata."""
 
+    from .markdown import render_markdown_html, render_markdown_plain
+
     data = dict(row)
     for key, default in (
         ("source_ids", []),
@@ -91,9 +93,13 @@ def _draft_public(row: dict[str, Any]) -> dict[str, Any]:
             data[key] = _iso(data[key])
     body = str(data.get("body") or "")
     data["body"] = body
-    data["character_count"] = len(body)
-    data["over_limit"] = len(body) > MAX_DRAFT_CHARS
-    data["warning_threshold"] = len(body) >= 3800
+    plain = render_markdown_plain(body)
+    data["body_plain"] = plain
+    data["body_html"] = render_markdown_html(body)
+    data["plain_character_count"] = len(plain)
+    data["character_count"] = len(plain)
+    data["over_limit"] = len(plain) > MAX_DRAFT_CHARS
+    data["warning_threshold"] = len(plain) >= 3800
     data["revision"] = int(data.get("revision") or 1)
     data["current_version"] = int(data.get("current_version") or 1)
     data["current_version_origin"] = str(data.get("current_version_origin") or "generated")
@@ -171,8 +177,8 @@ class StudioRepositoryProtocol(Protocol):
     async def create_draft(self, *, conversation_id: uuid.UUID, channel_id: int, payload: dict[str, Any], origin: str = "generated", instruction: str = "") -> dict[str, Any]: ...
     async def get_draft(self, draft_id: uuid.UUID, *, conversation_id: uuid.UUID | None = None, channel_id: int | None = None) -> dict[str, Any] | None: ...
     async def get_current_draft(self, *, conversation_id: uuid.UUID, channel_id: int) -> dict[str, Any] | None: ...
-    async def update_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int | None = None, origin: str = "user_edit", instruction: str = "") -> dict[str, Any]: ...
-    async def save_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int, instruction: str = "") -> dict[str, Any]: ...
+    async def update_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int | None = None, origin: str = "user_edit", instruction: str = "", new_version: bool = True) -> dict[str, Any]: ...
+    async def save_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int, instruction: str = "", new_version: bool = False) -> dict[str, Any]: ...
     async def revise_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], instruction: str = "") -> dict[str, Any]: ...
     async def list_draft_versions(
         self,
@@ -182,6 +188,7 @@ class StudioRepositoryProtocol(Protocol):
         channel_id: int | None = None,
     ) -> list[dict[str, Any]]: ...
     async def restore_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int, instruction: str = "") -> dict[str, Any]: ...
+    async def choose_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int) -> dict[str, Any]: ...
     async def mark_draft_copied(self, *, draft_id: uuid.UUID) -> dict[str, Any]: ...
     async def persist_research_bundle(self, *, conversation_id: uuid.UUID, channel_id: int, bundle: dict[str, Any]) -> dict[str, int]: ...
     async def get_research_bundle(self, *, conversation_id: uuid.UUID, channel_id: int) -> dict[str, Any] | None: ...
@@ -286,7 +293,7 @@ class StudioRepository:
                                 ORDER BY workspace_id, post_id, id DESC
                            )
                            SELECT p.id AS post_id, p.message_id, p.channel_id, p.posted_at,
-                                  p.text, p.is_deleted, l.taken_at AS snapshot_at,
+                                  p.text, p.formatting_entities, p.is_deleted, l.taken_at AS snapshot_at,
                                   l.views, l.comments, l.reactions, l.shares,
                                   true AS has_snapshot
                              FROM posts p JOIN channels c
@@ -413,6 +420,68 @@ class StudioRepository:
                    editorial_rules=EXCLUDED.editorial_rules, confidence=EXCLUDED.confidence,
                    current_analysis_id=EXCLUDED.current_analysis_id,
                    version=studio_profiles.version + 1, updated_at=now()
+               RETURNING *""",
+            values,
+        )
+        row = result.mappings().first()
+        if row is None:
+            raise ConversationNotFound("channel is not part of the active workspace")
+        return dict(row)
+
+    async def upsert_profile_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Validate and clean text fields
+        def clean(v: str) -> str:
+            lines = [line.rstrip() for line in str(v or "").splitlines()]
+            # Drop empty lines
+            return "\n".join(line for line in lines if line.strip() != "")
+        topics_text = clean(payload.get("topics_text", ""))
+        editorial_text = clean(payload.get("editorial_text", ""))
+        style_text = clean(payload.get("style_text", ""))
+        for name, txt in [("topics_text", topics_text), ("editorial_text", editorial_text), ("style_text", style_text)]:
+            if len(txt) > 2000:
+                raise ValueError(f"{name} exceeds 2000 characters")
+            if len(txt.splitlines()) > 60:
+                raise ValueError(f"{name} exceeds 60 lines")
+        # Check version
+        channel_id = int(payload["channel_id"])
+        expected = payload.get("expected_version")
+        # For new profile, expected 0
+        current = await self.get_profile(channel_id)
+        current_version = int(current["version"]) if current else 0
+        if expected is not None and int(expected) != current_version:
+            # Return conflict via exception to be handled by routes
+            from .drafts import DraftConflictError
+            raise DraftConflictError(current or {}, expected_revision=int(expected))
+        built_from = int(payload.get("built_from_posts", 0) or 0)
+        # Determine version
+        new_version = current_version + 1
+        values = {
+            # ``id`` has no server default; the INSERT tuple must carry one even
+            # when ON CONFLICT ends up updating the existing row.
+            "id": uuid.uuid4(),
+            "workspace_id": self.workspace_id,
+            "channel_id": channel_id,
+            "topics_text": topics_text,
+            "editorial_text": editorial_text,
+            "style_text": style_text,
+            "built_from_posts": built_from,
+            "version": new_version,
+        }
+        # A manual edit (built_from_posts == 0) keeps the previous build
+        # provenance; only a save that carries build output refreshes it.
+        result = await self.db._execute(
+            """INSERT INTO studio_profiles(
+                       id, workspace_id, channel_id, topics_text, editorial_text, style_text,
+                       built_from_posts, built_at, version
+                   ) VALUES (
+                       :id, :workspace_id, :channel_id, :topics_text, :editorial_text, :style_text,
+                       :built_from_posts, CASE WHEN :built_from_posts > 0 THEN now() ELSE NULL END, :version
+                   )
+               ON CONFLICT (workspace_id, channel_id) DO UPDATE SET
+                   topics_text=EXCLUDED.topics_text, editorial_text=EXCLUDED.editorial_text, style_text=EXCLUDED.style_text,
+                   built_from_posts=CASE WHEN EXCLUDED.built_from_posts > 0 THEN EXCLUDED.built_from_posts ELSE studio_profiles.built_from_posts END,
+                   built_at=CASE WHEN EXCLUDED.built_from_posts > 0 THEN now() ELSE studio_profiles.built_at END,
+                   version=EXCLUDED.version, updated_at=now()
                RETURNING *""",
             values,
         )
@@ -858,7 +927,15 @@ class StudioRepository:
         expected_revision: int | None = None,
         origin: str = "user_edit",
         instruction: str = "",
+        new_version: bool = True,
     ) -> dict[str, Any]:
+        """Write a draft.
+
+        ``new_version=True`` appends an immutable version and makes it current
+        (agent output, or the owner's "Save as new version"). ``False``
+        overwrites the body of the current version in place (the owner's plain
+        "Save"); no version row is created.
+        """
         draft_id = _draft_uuid(draft_id)
         origin = self._draft_origin(origin)
         workspace_id = self.workspace_id
@@ -881,46 +958,49 @@ class StudioRepository:
                 payload=merged,
             )
             values = _draft_values(merged, known_source_ids=known, require_sources=not bool(merged.get("creative", False)))
-            next_version = int(current.get("current_version") or 1)
-            max_version = (
-                await session.execute(
-                    text("SELECT COALESCE(MAX(version), 0) FROM studio_draft_versions WHERE workspace_id=:workspace_id AND draft_id=:draft_id"),
-                    {"workspace_id": workspace_id, "draft_id": draft_id},
-                )
-            ).scalar_one()
-            next_version = max(next_version, int(max_version or 0)) + 1
-            await session.execute(
-                text(
-                    """INSERT INTO studio_draft_versions(
-                               workspace_id, draft_id, version, body, origin, instruction, character_count
-                           ) VALUES (:workspace_id, :draft_id, :version, :body, :origin, :instruction, :character_count)"""
-                ),
-                {
-                    "workspace_id": workspace_id,
-                    "draft_id": draft_id,
-                    "version": next_version,
-                    "body": values["body"],
-                    "origin": origin,
-                    "instruction": str(instruction or "")[:4_000],
-                    "character_count": values["character_count"],
-                },
-            )
-            preserved = origin in {"generated", "regenerated"} and current.get("current_version_origin") == "user_edit"
-            if preserved:
+            current_version = int(current.get("current_version") or 1)
+            if new_version:
+                max_version = (
+                    await session.execute(
+                        text("SELECT COALESCE(MAX(version), 0) FROM studio_draft_versions WHERE workspace_id=:workspace_id AND draft_id=:draft_id"),
+                        {"workspace_id": workspace_id, "draft_id": draft_id},
+                    )
+                ).scalar_one()
+                next_version = max(current_version, int(max_version or 0)) + 1
                 await session.execute(
                     text(
-                        """UPDATE studio_drafts SET updated_at=now()
-                            WHERE workspace_id=:workspace_id AND id=:draft_id"""
+                        """INSERT INTO studio_draft_versions(
+                                   workspace_id, draft_id, version, body, origin, instruction, character_count
+                               ) VALUES (:workspace_id, :draft_id, :version, :body, :origin, :instruction, :character_count)"""
                     ),
-                    {"workspace_id": workspace_id, "draft_id": draft_id},
+                    {
+                        "workspace_id": workspace_id,
+                        "draft_id": draft_id,
+                        "version": next_version,
+                        "body": values["body"],
+                        "origin": origin,
+                        "instruction": str(instruction or "")[:4_000],
+                        "character_count": values["character_count"],
+                    },
                 )
-                await session.commit()
-                result = dict(current)
-                result["updated_at"] = _iso(utcnow())
-                result["candidate_version"] = next_version
-                result["candidate_body"] = values["body"]
-                result["preserved_user_edit"] = True
-                return result
+            else:
+                next_version = current_version
+                await session.execute(
+                    text(
+                        """UPDATE studio_draft_versions
+                              SET body=:body, origin=:origin, instruction=:instruction, character_count=:character_count
+                            WHERE workspace_id=:workspace_id AND draft_id=:draft_id AND version=:version"""
+                    ),
+                    {
+                        "workspace_id": workspace_id,
+                        "draft_id": draft_id,
+                        "version": next_version,
+                        "body": values["body"],
+                        "origin": origin,
+                        "instruction": str(instruction or "")[:4_000],
+                        "character_count": values["character_count"],
+                    },
+                )
             update_params = {
                 "workspace_id": workspace_id,
                 "draft_id": draft_id,
@@ -971,6 +1051,7 @@ class StudioRepository:
         payload: dict[str, Any],
         expected_revision: int,
         instruction: str = "",
+        new_version: bool = False,
     ) -> dict[str, Any]:
         return await self.update_draft(
             draft_id=draft_id,
@@ -978,6 +1059,7 @@ class StudioRepository:
             expected_revision=expected_revision,
             origin="user_edit",
             instruction=instruction,
+            new_version=new_version,
         )
 
     async def revise_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], instruction: str = "") -> dict[str, Any]:
@@ -1015,29 +1097,55 @@ class StudioRepository:
         )
         return [_version_public(dict(row)) for row in result.mappings().all()]
 
-    async def restore_draft_version(
-        self,
-        *,
-        draft_id: uuid.UUID,
-        version: int,
-        expected_revision: int,
-        instruction: str = "",
-    ) -> dict[str, Any]:
+    async def choose_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int) -> dict[str, Any]:
+        """Make an existing version current without creating a new one."""
         draft_id = _draft_uuid(draft_id)
-        current = await self.get_draft(draft_id)
-        if current is None:
-            raise DraftNotFound("draft is not part of the active workspace")
-        versions = await self.list_draft_versions(draft_id=draft_id)
-        selected = next((item for item in versions if int(item["version"]) == int(version)), None)
-        if selected is None:
-            raise DraftNotFound("draft version not found")
-        return await self.update_draft(
-            draft_id=draft_id,
-            payload={"body": selected["body"]},
-            expected_revision=expected_revision,
-            origin="user_edit",
-            instruction=instruction or f"Restored version {version}",
-        )
+        workspace_id = self.workspace_id
+        async with self.db.sessions.session() as session:
+            current_row = (
+                await session.execute(
+                    text("SELECT * FROM studio_drafts WHERE workspace_id=:workspace_id AND id=:draft_id FOR UPDATE"),
+                    {"workspace_id": workspace_id, "draft_id": draft_id},
+                )
+            ).mappings().first()
+            if current_row is None:
+                raise DraftNotFound("draft is not part of the active workspace")
+            current = _draft_public(dict(current_row))
+            if int(current["revision"]) != int(expected_revision):
+                raise DraftConflictError(current, expected_revision=expected_revision)
+            selected = (
+                await session.execute(
+                    text("SELECT * FROM studio_draft_versions WHERE workspace_id=:workspace_id AND draft_id=:draft_id AND version=:version"),
+                    {"workspace_id": workspace_id, "draft_id": draft_id, "version": int(version)},
+                )
+            ).mappings().first()
+            if selected is None:
+                raise DraftNotFound("draft version not found")
+            if int(selected["version"]) == int(current["current_version"]):
+                return current
+            row = (
+                await session.execute(
+                    text(
+                        """UPDATE studio_drafts SET body=:body, current_version=:version,
+                                  current_version_origin=:origin, revision=:revision, updated_at=now()
+                            WHERE workspace_id=:workspace_id AND id=:draft_id RETURNING *"""
+                    ),
+                    {
+                        "workspace_id": workspace_id,
+                        "draft_id": draft_id,
+                        "body": selected["body"],
+                        "version": int(selected["version"]),
+                        "origin": selected["origin"],
+                        "revision": int(current["revision"]) + 1,
+                    },
+                )
+            ).mappings().one()
+            await session.commit()
+        return _draft_public(dict(row))
+
+    async def restore_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int, instruction: str = "") -> dict[str, Any]:
+        """Compatibility alias: choosing a version never creates a new one."""
+        return await self.choose_draft_version(draft_id=draft_id, version=version, expected_revision=expected_revision)
 
     async def mark_draft_copied(self, *, draft_id: uuid.UUID) -> dict[str, Any]:
         draft_id = _draft_uuid(draft_id)
@@ -1813,7 +1921,18 @@ class MemoryStudioRepository:
 
     async def get_profile(self, channel_id: int) -> dict[str, Any] | None:
         row = self.profiles.get(int(channel_id))
-        return dict(row) if row else None
+        if row is None:
+            return None
+        # Ensure text fields exist for legacy rows
+        result = dict(row)
+        for k in ["topics_text", "editorial_text", "style_text"]:
+            if k not in result:
+                result[k] = ""
+        if "built_at" not in result:
+            result["built_at"] = None
+        if "built_from_posts" not in result:
+            result["built_from_posts"] = 0
+        return result
 
     async def upsert_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
         channel_id = int(payload["channel_id"])
@@ -1830,6 +1949,54 @@ class MemoryStudioRepository:
             "confidence": payload.get("confidence", "low"),
             "current_analysis_id": payload.get("current_analysis_id"),
             "version": (int(previous["version"]) + 1) if previous else int(payload.get("version", 1)),
+            "topics_text": payload.get("topics_text", (previous or {}).get("topics_text", "")),
+            "editorial_text": payload.get("editorial_text", (previous or {}).get("editorial_text", "")),
+            "style_text": payload.get("style_text", (previous or {}).get("style_text", "")),
+            "built_at": payload.get("built_at", (previous or {}).get("built_at")),
+            "built_from_posts": int(payload.get("built_from_posts", (previous or {}).get("built_from_posts", 0)) or 0),
+            "created_at": (previous or {}).get("created_at", utcnow()),
+            "updated_at": utcnow(),
+        }
+        self.profiles[channel_id] = row
+        return dict(row)
+
+    async def upsert_profile_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        channel_id = int(payload["channel_id"])
+        if not any(channel["id"] == channel_id and channel["active"] for channel in self.channels):
+            raise ConversationNotFound("channel is not part of the active workspace")
+        def clean(v: str) -> str:
+            lines = [line.rstrip() for line in str(v or "").splitlines()]
+            return "\n".join(line for line in lines if line.strip() != "")
+        topics_text = clean(payload.get("topics_text", ""))
+        editorial_text = clean(payload.get("editorial_text", ""))
+        style_text = clean(payload.get("style_text", ""))
+        for name, txt in [("topics_text", topics_text), ("editorial_text", editorial_text), ("style_text", style_text)]:
+            if len(txt) > 2000:
+                raise ValueError(f"{name} exceeds 2000 characters")
+            if len(txt.splitlines()) > 60:
+                raise ValueError(f"{name} exceeds 60 lines")
+        expected = payload.get("expected_version")
+        previous = self.profiles.get(channel_id)
+        current_version = int(previous["version"]) if previous else 0
+        if expected is not None and int(expected) != current_version:
+            from .drafts import DraftConflictError
+            raise DraftConflictError(previous or {}, expected_revision=int(expected))
+        new_version = current_version + 1
+        row = {
+            "id": (previous or {}).get("id") or uuid.uuid4(),
+            "workspace_id": self.workspace_id,
+            "channel_id": channel_id,
+            "topics": (previous or {}).get("topics", []),
+            "style_profile": (previous or {}).get("style_profile", {}),
+            "editorial_rules": (previous or {}).get("editorial_rules", {}),
+            "confidence": (previous or {}).get("confidence", "low"),
+            "current_analysis_id": (previous or {}).get("current_analysis_id"),
+            "version": new_version,
+            "topics_text": topics_text,
+            "editorial_text": editorial_text,
+            "style_text": style_text,
+            "built_at": utcnow(),
+            "built_from_posts": int(payload.get("built_from_posts", 0) or 0),
             "created_at": (previous or {}).get("created_at", utcnow()),
             "updated_at": utcnow(),
         }
@@ -2105,6 +2272,7 @@ class MemoryStudioRepository:
         expected_revision: int | None = None,
         origin: str = "user_edit",
         instruction: str = "",
+        new_version: bool = True,
     ) -> dict[str, Any]:
         draft_id = _draft_uuid(draft_id)
         origin = self._draft_origin(origin)
@@ -2118,29 +2286,29 @@ class MemoryStudioRepository:
             merged = self._draft_payload(public, payload)
             values, _ = self._validate_memory_draft(current["conversation_id"], merged)
             versions = self.draft_versions.setdefault(draft_id, [])
-            next_version = max([int(item["version"]) for item in versions] or [0]) + 1
             now = utcnow()
-            self._draft_version_id += 1
-            versions.append(
-                {
-                    "id": self._draft_version_id,
-                    "workspace_id": self.workspace_id,
-                    "draft_id": draft_id,
-                    "version": next_version,
-                    "body": values["body"],
-                    "origin": origin,
-                    "instruction": str(instruction or "")[:4_000],
-                    "character_count": values["character_count"],
-                    "created_at": now,
-                }
-            )
-            preserved = origin in {"generated", "regenerated"} and public.get("current_version_origin") == "user_edit"
-            if preserved:
-                current["updated_at"] = now
-                result = dict(public)
-                result["updated_at"] = _iso(now)
-                result.update({"candidate_version": next_version, "candidate_body": values["body"], "preserved_user_edit": True})
-                return result
+            current_version = int(public.get("current_version") or 1)
+            if new_version:
+                next_version = max([int(item["version"]) for item in versions] or [0]) + 1
+                self._draft_version_id += 1
+                versions.append(
+                    {
+                        "id": self._draft_version_id,
+                        "workspace_id": self.workspace_id,
+                        "draft_id": draft_id,
+                        "version": next_version,
+                        "body": values["body"],
+                        "origin": origin,
+                        "instruction": str(instruction or "")[:4_000],
+                        "character_count": values["character_count"],
+                        "created_at": now,
+                    }
+                )
+            else:
+                next_version = current_version
+                for item in versions:
+                    if int(item["version"]) == current_version:
+                        item.update({"body": values["body"], "origin": origin, "instruction": str(instruction or "")[:4_000], "character_count": values["character_count"]})
             current.update(
                 {
                     "story_cluster_id": values.get("story_cluster_id"),
@@ -2167,8 +2335,8 @@ class MemoryStudioRepository:
             )
             return _draft_public(current)
 
-    async def save_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int, instruction: str = "") -> dict[str, Any]:
-        return await self.update_draft(draft_id=draft_id, payload=payload, expected_revision=expected_revision, origin="user_edit", instruction=instruction)
+    async def save_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int, instruction: str = "", new_version: bool = False) -> dict[str, Any]:
+        return await self.update_draft(draft_id=draft_id, payload=payload, expected_revision=expected_revision, origin="user_edit", instruction=instruction, new_version=new_version)
 
     async def revise_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], instruction: str = "") -> dict[str, Any]:
         return await self.update_draft(draft_id=draft_id, payload=payload, origin="regenerated", instruction=instruction)
@@ -2190,13 +2358,31 @@ class MemoryStudioRepository:
             raise DraftNotFound("draft is not part of the active channel")
         return [_version_public(row) for row in sorted(self.draft_versions.get(draft_id, []), key=lambda item: item["version"])]
 
-    async def restore_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int, instruction: str = "") -> dict[str, Any]:
+    async def choose_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int) -> dict[str, Any]:
         draft_id = _draft_uuid(draft_id)
-        versions = await self.list_draft_versions(draft_id=draft_id)
-        selected = next((item for item in versions if int(item["version"]) == int(version)), None)
-        if selected is None:
-            raise DraftNotFound("draft version not found")
-        return await self.update_draft(draft_id=draft_id, payload={"body": selected["body"]}, expected_revision=expected_revision, origin="user_edit", instruction=instruction or f"Restored version {version}")
+        async with self._lock:
+            current = self.drafts.get(draft_id)
+            if current is None:
+                raise DraftNotFound("draft is not part of the active workspace")
+            public = _draft_public(current)
+            if int(public["revision"]) != int(expected_revision):
+                raise DraftConflictError(public, expected_revision=expected_revision)
+            selected = next((item for item in self.draft_versions.get(draft_id, []) if int(item["version"]) == int(version)), None)
+            if selected is None:
+                raise DraftNotFound("draft version not found")
+            if int(selected["version"]) == int(public["current_version"]):
+                return public
+            current.update({
+                "body": selected["body"],
+                "current_version": int(selected["version"]),
+                "current_version_origin": selected["origin"],
+                "revision": int(public["revision"]) + 1,
+                "updated_at": utcnow(),
+            })
+            return _draft_public(current)
+
+    async def restore_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int, instruction: str = "") -> dict[str, Any]:
+        return await self.choose_draft_version(draft_id=draft_id, version=version, expected_revision=expected_revision)
 
     async def mark_draft_copied(self, *, draft_id: uuid.UUID) -> dict[str, Any]:
         draft_id = _draft_uuid(draft_id)

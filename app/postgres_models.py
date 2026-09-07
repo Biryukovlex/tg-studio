@@ -442,6 +442,11 @@ class StudioProfile(Base):
     confidence: Mapped[str] = mapped_column(Text, nullable=False, server_default="low")
     current_analysis_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    topics_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    editorial_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    style_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    built_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    built_from_posts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     __table_args__ = (

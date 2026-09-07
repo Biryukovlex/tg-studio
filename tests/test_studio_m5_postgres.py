@@ -42,6 +42,7 @@ async def test_postgres_draft_versions_survive_repository_reload_and_keep_scope(
             draft_id=draft["id"],
             payload={"body": "Owner edit\n\nwith a paragraph break."},
             expected_revision=draft["revision"],
+            new_version=True,
         )
 
         reloaded = StudioRepository(db)
@@ -53,8 +54,8 @@ async def test_postgres_draft_versions_survive_repository_reload_and_keep_scope(
             payload={"body": "Generated candidate", "source_ids": [source_id]},
             instruction="Try a shorter angle.",
         )
-        assert generated["preserved_user_edit"] is True
-        assert generated["candidate_body"] == "Generated candidate"
+        assert generated["body"] == "Generated candidate"
+        assert generated["current_version"] == 3
         versions = await reloaded.list_draft_versions(
             draft_id=draft["id"],
             conversation_id=conversation["id"],
@@ -70,7 +71,7 @@ async def test_postgres_draft_versions_survive_repository_reload_and_keep_scope(
                 expected_revision=1,
             )
         copied = await reloaded.mark_draft_copied(draft_id=draft["id"])
-        assert copied["body"] == "Owner edit\n\nwith a paragraph break."
+        assert copied["body"] == "Generated candidate"
         assert copied["copied_at"]
     finally:
         await db.close()

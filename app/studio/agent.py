@@ -84,6 +84,29 @@ _PERFORMANCE_INTENT = re.compile(
 )
 
 
+_REVISION_INTENT = re.compile(
+    r"\b(add|remove|delete|drop|change|replace|rewrite|rephrase|reword|shorten|expand|"
+    r"tighten|soften|fix|edit|update|adjust|tweak|make\s+it|bold|italic|title|subtitle|"
+    r"headline|paragraph|emoji|signature|link|tone|shorter|longer|"
+    r"добав|убер|удали|измени|замени|перепиши|перефраз|сократи|расшир|исправ|"
+    r"отредакт|обнови|подправ|сделай|жирн|курсив|заголов|подзаголов|абзац|эмодзи|подпис|"
+    r"ссылк|тон|короче|длиннее)\w*\b",
+    re.IGNORECASE,
+)
+
+
+def is_revision_request(content: str) -> bool:
+    """Return whether a message asks to change the existing post.
+
+    When a draft exists in the conversation, requests like "add bold title and
+    subtitles" or "make it shorter" must produce a saved revision, not a chat
+    reply describing the change.
+    """
+
+    text = " ".join(str(content or "").split())
+    return bool(_REVISION_INTENT.search(text))
+
+
 def is_short_continuation_request(content: str) -> bool:
     """Return whether a message is a terse request to continue prior work.
 
@@ -166,8 +189,44 @@ def _require_publication_text(body: str) -> None:
         raise ModelRetry("Remove service/research-process commentary from the post body. Put limitations in warnings or the chat, and retry with publication text only.")
 
 
+_SOURCE_LIST_HEADER = re.compile(
+    r"^\s*(?:\*\*|__)?\s*(?:sources?|references?|links?|источники?|ссылки|материалы|подробнее)\s*(?:\*\*|__)?\s*[:：—–-]?\s*$",
+    re.I,
+)
+_SOURCE_LIST_LINE = re.compile(r"https?://|\]\(https?://", re.I)
+
+
+def _strip_trailing_source_list(body: str) -> tuple[str, bool]:
+    """Remove a trailing "Sources:" block; sources live on the artifact, not in the post.
+
+    A block is removed only when it sits at the end, opens with a header such
+    as "Sources:" or "Источники:", and every following line carries a link.
+    Inline links inside the prose are untouched.
+    """
+
+    paragraphs = re.split(r"\n\s*\n", str(body or "").strip())
+    removed = False
+    while paragraphs:
+        lines = [line for line in paragraphs[-1].splitlines() if line.strip()]
+        if not lines:
+            paragraphs.pop()
+            continue
+        header, rest = lines[0], lines[1:]
+        header_only = _SOURCE_LIST_HEADER.match(header)
+        inline_header = re.match(r"^\s*(?:\*\*|__)?\s*(?:sources?|references?|links?|источники?|ссылки)\s*(?:\*\*|__)?\s*[:：—–-]\s*\S", header, re.I)
+        is_list = bool(
+            (header_only and rest and all(_SOURCE_LIST_LINE.search(line) for line in rest))
+            or (inline_header and _SOURCE_LIST_LINE.search(header) and all(_SOURCE_LIST_LINE.search(line) for line in rest))
+        )
+        if not is_list:
+            break
+        paragraphs.pop()
+        removed = True
+    return "\n\n".join(paragraphs).strip(), removed
+
+
 def _clean_publication_text(body: str) -> tuple[str, bool]:
-    """Drop standalone service-note paragraphs without rewriting publication prose."""
+    """Drop service-note paragraphs and a trailing source list without rewriting prose."""
 
     parts = re.split(r"(\n\s*\n)", str(body or ""))
     kept: list[str] = []
@@ -178,8 +237,8 @@ def _clean_publication_text(body: str) -> tuple[str, bool]:
             continue
         if kept or part.strip():
             kept.append(part)
-    cleaned = "".join(kept).strip()
-    return cleaned, removed
+    cleaned, removed_sources = _strip_trailing_source_list("".join(kept).strip())
+    return cleaned, removed or removed_sources
 
 
 def _require_predecessors(ctx: RunContext[StudioDeps], tool_name: str) -> None:
@@ -355,22 +414,55 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         )
         known_order = [source.source_id for source in bundle.sources] if bundle else []
         known = set(known_order)
+        url_to_id = {str(source.url).strip(): source.source_id for source in (bundle.sources if bundle else [])}
+        # also include canonical_url if available
+        for source in (bundle.sources if bundle else []):
+            cu = getattr(source, "canonical_url", None)
+            if cu:
+                url_to_id[str(cu).strip()] = source.source_id
 
         def valid_ids(values: Any) -> list[str]:
+            if isinstance(values, str):
+                # Malformed claim_support where source_ids is a string should be treated as invalid
+                return []
             if not isinstance(values, (list, tuple, set)):
                 return []
             result: list[str] = []
             for value in values:
                 candidate = str(value).strip()
+                if not candidate:
+                    continue
+                # Map URL to source_id if it matches a known source's URL
+                if candidate not in known and candidate in url_to_id:
+                    candidate = url_to_id[candidate]
                 if candidate and candidate in known and candidate not in result:
                     result.append(candidate)
             return result[:12]
 
+        # Check for unknown IDs: if source_ids provided but after mapping still has unknown, block
+        if source_ids is not None:
+            # Normalize provided for check, handling string case
+            provided_raw = source_ids if isinstance(source_ids, (list, tuple, set, str)) else []
+            if isinstance(provided_raw, str):
+                provided_raw = [provided_raw]
+            provided = [str(v).strip() for v in provided_raw if str(v).strip()]
+            # Map URLs to IDs for check
+            mapped_provided = []
+            for v in provided:
+                if v in known:
+                    mapped_provided.append(v)
+                elif v in url_to_id:
+                    mapped_provided.append(url_to_id[v])
+                else:
+                    mapped_provided.append(v)
+            # If any still unknown, block
+            if provided and any(v not in known for v in mapped_provided):
+                return [], []
+            if not provided and not creative:
+                return [], []
         selected = valid_ids(source_ids)
         if not selected:
             selected = valid_ids(fallback_source_ids)
-        if not selected and not creative and bundle:
-            selected = valid_ids(bundle.selected_source_ids) or known_order[:12]
 
         claims: list[dict[str, Any]] = []
         for item in claim_support or []:
@@ -562,14 +654,48 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             profile.version = int(profile_row.get("version", profile.version))
         return {"profile": profile.model_dump(mode="json"), "analysis": analysis.model_dump(mode="json"), "analysis_row": {"id": str(analysis_row["id"])} if analysis_row else None}
 
+    def _profile_block_from_row(row: dict[str, Any] | None, channel_id: int) -> str:
+        if not row:
+            return ""
+        topics_text = str(row.get("topics_text") or "").strip()
+        editorial_text = str(row.get("editorial_text") or "").strip()
+        style_text = str(row.get("style_text") or "").strip()
+        version = row.get("version", "?")
+        if not topics_text and not editorial_text and not style_text:
+            topics = row.get("topics") or []
+            if topics and isinstance(topics, list):
+                topics_text = "\n".join(str(t.get("name") or "") for t in topics if isinstance(t, dict) and t.get("name"))
+        if not topics_text and not editorial_text and not style_text:
+            return ""
+        parts = [f"CHANNEL PROFILE (written and approved by the channel owner, version {version})"]
+        if topics_text:
+            parts.append("Topics:\n" + "\n".join(f"- {line}" for line in topics_text.splitlines() if line.strip()))
+        if editorial_text:
+            parts.append("Editorial rules:\n" + "\n".join(f"- {line}" for line in editorial_text.splitlines() if line.strip()))
+        if style_text:
+            parts.append("Style rules:\n" + style_text)
+        parts.append("These lines are guidelines, not a template. Choose the form each post needs; do not copy the structure or distinctive wording of past posts. Formatting shown in Markdown (**bold**, *italic*, [links](url)) is to be reproduced in the draft body using the same Markdown.")
+        return "\n\n".join(parts)
+
     @agent.tool(prepare=workflow_tool_visibility)
-    async def get_topic_profile(ctx: RunContext[StudioDeps]) -> dict[str, Any]:
-        """Read the current profile for the authenticated channel."""
+    async def get_channel_profile(ctx: RunContext[StudioDeps]) -> dict[str, Any]:
+        """Read the current channel profile as a single Markdown block."""
 
         _check_cancel(ctx)
         getter = getattr(ctx.deps.repository, "get_profile", None)
         row = await getter(ctx.deps.channel_id) if getter is not None else None
-        return row or {"channel_id": ctx.deps.channel_id, "status": "not_analyzed", "topics": [], "confidence": "low"}
+        if not row or not any(str(row.get(k) or "").strip() for k in ("topics_text", "editorial_text", "style_text")):
+            # Fallback to legacy empty case
+            legacy = row or {"channel_id": ctx.deps.channel_id, "version": 0}
+            return {"channel_id": ctx.deps.channel_id, "version": int(legacy.get("version", 0)), "profile_block": "", "status": "not_built"}
+        block = _profile_block_from_row(row, ctx.deps.channel_id)
+        return {"channel_id": ctx.deps.channel_id, "version": int(row.get("version", 0)), "profile_block": block, "topics_text": row.get("topics_text", ""), "editorial_text": row.get("editorial_text", ""), "style_text": row.get("style_text", "")}
+
+    @agent.tool(prepare=workflow_tool_visibility)
+    async def get_topic_profile(ctx: RunContext[StudioDeps]) -> dict[str, Any]:
+        """Alias for get_channel_profile (kept for one release)."""
+
+        return await get_channel_profile(ctx)
 
     @agent.tool(prepare=workflow_tool_visibility)
     async def search_web(
@@ -593,6 +719,11 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         """
 
         _check_cancel(ctx)
+        # Increment at tool start to enforce cap under concurrency
+        current = ctx.deps.tool_call_counts.get("search_web", 0)
+        if current >= 4:
+            return {"status": "blocked", "error": {"code": "search_limit_exceeded", "message": "Search limit reached for this run."}}
+        ctx.deps.tool_call_counts["search_web"] = current + 1
         _require_predecessors(ctx, "search_web")
         topics, recent_posts, evidence_ids, channel_evidence = await _research_context(ctx)
         service = _research(ctx, settings)
@@ -615,7 +746,6 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             exclude_domains=exclude_domains or (),
         )
         _check_cancel(ctx)
-        ctx.deps.tool_call_counts["search_web"] = ctx.deps.tool_call_counts.get("search_web", 0) + 1
         ctx.deps.completed_tools.add("search_web")
         return result if isinstance(result, dict) else result.model_dump(mode="json")
 
@@ -695,61 +825,26 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         _check_cancel(ctx)
         return result
 
-    @agent.tool(prepare=workflow_tool_visibility)
     async def propose_topic_changes(ctx: RunContext[StudioDeps], instruction: str) -> dict[str, Any]:
-        """Turn a free-text topic request into a confirmation-gated proposal."""
+        """Profile is edited in the Profile dialog, not by the agent."""
 
         _check_cancel(ctx)
-        getter = getattr(ctx.deps.repository, "get_profile", None)
-        row = await getter(ctx.deps.channel_id) if getter is not None else None
-        if not row:
-            return {"status": "blocked", "reason": "Analyze the channel before changing its topics."}
-        current = ChannelProfile.model_validate(
-            {
-                "channel_id": row.get("channel_id", ctx.deps.channel_id),
-                "topics": row.get("topics", []),
-                "style_profile": row.get("style_profile", {}),
-                "editorial_rules": row.get("editorial_rules", {}),
-                "confidence": row.get("confidence", "low"),
-                "analysis_id": str(row["current_analysis_id"]) if row.get("current_analysis_id") else None,
-                "version": row.get("version", 1),
-            }
-        )
-        proposal = propose_topic_change(current, instruction)
-        creator = getattr(ctx.deps.repository, "create_profile_change", None)
-        persisted = None
-        if creator is not None:
-            persisted = await creator(
-                {
-                    "channel_id": ctx.deps.channel_id,
-                    "base_profile_version": proposal.base_profile_version,
-                    "proposed_topics": proposal.proposed_topics,
-                    "style_diff": proposal.style_diff,
-                    "editorial_rules": proposal.editorial_rules,
-                    "reason": proposal.reason,
-                    "status": proposal.status,
-                }
-            )
-            proposal.id = str(persisted["id"])
-        return {"proposal": proposal.model_dump(mode="json"), "change": persisted}
+        return {"status": "blocked", "reason": "Profile changes are edited in the Profile dialog by the channel owner."}
 
-    @agent.tool(prepare=workflow_tool_visibility)
     async def apply_confirmed_topic_changes(ctx: RunContext[StudioDeps], change_id: str) -> dict[str, Any]:
-        """Apply only a persisted, explicitly confirmed topic proposal."""
+        """Profile is edited in the Profile dialog, not by the agent."""
 
         _check_cancel(ctx)
         try:
             parsed = __import__("uuid").UUID(str(change_id))
         except (TypeError, ValueError):
             return {"status": "blocked", "reason": "A valid profile change id is required."}
-        applier = getattr(ctx.deps.repository, "apply_profile_change", None)
         getter = getattr(ctx.deps.repository, "get_profile_change", None)
-        if applier is None or getter is None:
-            return {"status": "blocked", "reason": "Profile persistence is unavailable."}
-        scoped = await getter(parsed, channel_id=ctx.deps.channel_id)
-        if scoped is None:
-            return {"status": "blocked", "reason": "The profile change is not part of this channel."}
-        return {"status": "applied", "profile": await applier(parsed)}
+        if getter is not None:
+            scoped = await getter(parsed, channel_id=ctx.deps.channel_id)
+            if scoped is None:
+                return {"status": "blocked", "reason": "The profile change is not part of this channel."}
+        return {"status": "blocked", "reason": "Profile changes are edited in the Profile dialog by the channel owner."}
 
     @agent.tool(prepare=workflow_tool_visibility)
     async def explain_recommendation(
@@ -835,7 +930,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         )
         normalized_warnings = list(warnings or [])
         if removed_commentary:
-            normalized_warnings.append("Service commentary was removed from the publication text.")
+            normalized_warnings.append("Service commentary or a trailing source list was removed from the publication text; sources stay on the artifact.")
         creator = getattr(ctx.deps.repository, "create_draft", None)
         if creator is None:
             return {"status": "blocked", "error": {"code": "draft_unavailable", "message": "Draft persistence is unavailable."}}
@@ -912,12 +1007,17 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         )
         normalized_warnings = list(warnings if warnings is not None else current.get("warnings") or [])
         if removed_commentary:
-            normalized_warnings.append("Service commentary was removed from the publication text.")
+            normalized_warnings.append("Service commentary or a trailing source list was removed from the publication text; sources stay on the artifact.")
+        # Use normalized claims only when body changed; otherwise keep current
+        if body != current.get("body"):
+            claim_support_value = normalized_claims
+        else:
+            claim_support_value = normalized_claims or (current.get("claim_support") or [])
         payload: dict[str, Any] = {
             "body": body,
             "working_title": working_title,
             "source_ids": normalized_source_ids,
-            "claim_support": normalized_claims or (current.get("claim_support") or []),
+            "claim_support": claim_support_value,
             "assumptions": assumptions,
             "warnings": normalized_warnings,
             "channel_evidence": channel_evidence,
@@ -938,9 +1038,9 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         _check_cancel(ctx)
         ctx.deps.completed_tools.add("revise_draft")
         return {
-            "status": "preserved_user_edit" if row.get("preserved_user_edit") else "revised",
+            "status": "revised",
             "draft": row,
-            "version": row.get("candidate_version", row.get("current_version")),
+            "version": row.get("current_version"),
             "decision_summary": _draft_summary(row),
         }
 
@@ -952,9 +1052,15 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         body: str,
         working_title: str | None = None,
     ) -> dict[str, Any]:
-        """Save an explicit agent/user-approved body as a user-edit version."""
+        """Save an agent-written body as a *regenerated* version.
+
+        ``user_edit`` is reserved for the owner's own edits through the draft
+        panel; a model-authored save must never claim that origin, otherwise
+        later revisions would be preserved away as if the owner had typed it.
+        """
 
         _check_cancel(ctx)
+        body, _ = _clean_publication_text(body)
         _require_publication_text(body)
         try:
             parsed_id = __import__("uuid").UUID(str(draft_id))
@@ -978,10 +1084,11 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
                 },
             }
         try:
-            row = await ctx.deps.repository.save_draft(
+            row = await ctx.deps.repository.update_draft(
                 draft_id=parsed_id,
                 payload=payload,
                 expected_revision=expected_revision,
+                origin="regenerated",
                 instruction="Saved at the user's request.",
             )
         except (DraftValidationError, DraftConflictError) as exc:

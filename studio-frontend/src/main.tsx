@@ -28,6 +28,8 @@ import {
   StudioApiError,
 } from "./api";
 import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
+import { copyRenderedSelection, copyRichText, htmlFromMarkdown, plainFromMarkdown, telegramMarkupFromMarkdown } from "./markdownCopy";
+import ChannelProfileDialog from "./ChannelProfileDialog";
 import "./styles.css";
 
 function ToolActivity({ toolName, result }: ToolCallMessagePartProps) {
@@ -189,6 +191,7 @@ function ConversationRail({
   onDelete,
   deletingId,
   onSettings,
+  onProfile,
 }: {
   conversations: Conversation[];
   selected: Conversation | null;
@@ -197,6 +200,7 @@ function ConversationRail({
   onDelete: (conversation: Conversation) => void;
   deletingId: string | null;
   onSettings: () => void;
+  onProfile: () => void;
 }) {
   return (
     <aside className="studio-rail" aria-label="Studio conversations">
@@ -248,7 +252,10 @@ function ConversationRail({
       <div className="studio-rail-foot">
         <span className="studio-status-dot" aria-hidden="true" />
         <span>Private workspace</span>
-        <button type="button" onClick={onSettings}>Settings</button>
+        <div className="studio-rail-foot-buttons">
+          <button type="button" onClick={onProfile}>Profile</button>
+          <button type="button" onClick={onSettings}>Settings</button>
+        </div>
       </div>
     </aside>
   );
@@ -286,6 +293,48 @@ function StudioSettings({ onClose }: { onClose: () => void }) {
   </dialog>;
 }
 
+function renderInlineMarkdown(line: string, key: number) {
+  let text = line.replace(/!\[([^\]]*)\]\([^)]*\)/g, "");
+  text = text.replace(/<[a-zA-Z\/][^>]*>/g, "");
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|`[^`]+`|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|\[([^\]]+)\]\([^)]+\)|> .+)/g;
+  let match: RegExpExecArray | null;
+  let idx = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    const start = match.index;
+    if (start > lastIndex) parts.push(<span key={`t-${key}-${idx++}`}>{text.slice(lastIndex, start)}</span>);
+    const token = match[0];
+    if (token.startsWith("**")) parts.push(<strong key={`b-${key}-${idx++}`}>{token.slice(2, -2)}</strong>);
+    else if (token.startsWith("~~")) parts.push(<s key={`s-${key}-${idx++}`}>{token.slice(2, -2)}</s>);
+    else if (token.startsWith("`")) parts.push(<code key={`c-${key}-${idx++}`}>{token.slice(1, -1)}</code>);
+    else if (token.startsWith("[") && match[3]) parts.push(<a key={`a-${key}-${idx++}`} href={match[3]} target="_blank" rel="noopener noreferrer">{match[2]}</a>);
+    else if (token.startsWith("[") && match[4]) parts.push(<span key={`l-${key}-${idx++}`}>{match[4]}</span>);
+    else if (token.startsWith("*") && !token.startsWith("**")) parts.push(<em key={`i-${key}-${idx++}`}>{token.slice(1, -1)}</em>);
+    else if (token.startsWith("> ")) parts.push(<blockquote key={`q-${key}-${idx++}`}><span>{token.slice(2)}</span></blockquote>);
+    else parts.push(<span key={`u-${key}-${idx++}`}>{token}</span>);
+    lastIndex = pattern.lastIndex;
+  }
+  if (lastIndex < text.length) parts.push(<span key={`t-${key}-${idx++}`}>{text.slice(lastIndex)}</span>);
+  if (parts.length === 0) return <span key={key}>{line}</span>;
+  return <span key={key}>{parts}</span>;
+}
+
+function DraftMarkdownPreview({ text }: { text: string }) {
+  if (!text.trim()) return <p />;
+  const lines = text.split("\n");
+  return (
+    <p>
+      {lines.map((line, i) => (
+        <span key={i}>
+          {renderInlineMarkdown(line, i)}
+          {i < lines.length - 1 && <br />}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function DraftPanel({
   conversationId,
   seedDraft,
@@ -312,15 +361,22 @@ function DraftPanel({
     try { localStorage.setItem("studio-artifact-width", String(panelWidth)); } catch { /* Optional preference. */ }
   }, [panelWidth]);
   const [versions, setVersions] = useState<DraftVersion[]>([]);
-  const [saveState, setSaveState] = useState<"saved" | "saving" | "conflict" | "error">("saved");
+  const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving" | "conflict" | "error">("saved");
   const [copied, setCopied] = useState(false);
+  const [copyNote, setCopyNote] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [conflict, setConflict] = useState<{ server: Draft; localBody: string; localTitle: string } | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  // Selecting a version in the selector shows it read-only; only Choose makes
+  // it the current version (a pointer move, never a copy).
+  const viewedVersion = versions.find((item) => item.version === selectedVersion);
+  const viewingOld = !!(draft && viewedVersion && selectedVersion !== draft.current_version);
+  const shownBody = viewingOld && viewedVersion ? viewedVersion.body : (draft?.body ?? "");
+  const canSave = saveState === "unsaved" || saveState === "error";
   const hydrated = useRef(false);
   const draftRef = useRef<Draft | null>(seedDraft);
   const saveStateRef = useRef(saveState);
   const localChange = useRef(0);
-  const saveTimer = useRef<number | undefined>(undefined);
   const loadedConversation = useRef<string | null>(conversationId);
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
@@ -390,17 +446,20 @@ function DraftPanel({
     return () => window.clearInterval(poll);
   }, [conversationId, watchForAgentChanges]);
 
-  const save = (local: Draft, changeId: number) => {
+  const save = (local: Draft, changeId: number, newVersion = false) => {
     setSaveState("saving");
     void api<{ draft: Draft }>(`/studio/api/drafts/${local.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
-      body: JSON.stringify({ expected_revision: local.revision, body: local.body, working_title: local.working_title }),
+      body: JSON.stringify({ expected_revision: local.revision, body: local.body, working_title: local.working_title, save_as_new_version: newVersion }),
     })
       .then((payload) => {
         if (loadedConversation.current !== local.conversation_id) return;
         const latest = localChange.current === changeId;
-        setVersions((items) => items.some((item) => item.version === payload.draft.current_version) ? items : [...items, { id: Date.now(), draft_id: payload.draft.id, version: payload.draft.current_version, body: payload.draft.body, origin: "user_edit", instruction: "", character_count: payload.draft.character_count, created_at: payload.draft.updated_at }]);
+        // Versions are server truth: a plain Save rewrites the current one, a
+        // Save as new version appends one. Refetch rather than guess.
+        void api<{ versions: DraftVersion[] }>(`/studio/api/drafts/${payload.draft.id}/versions`).then((history) => setVersions(history.versions)).catch(() => undefined);
+        setSelectedVersion(payload.draft.current_version);
         setDraft((current) => {
           if (!current || localChange.current === changeId) {
             if (localChange.current === changeId) localChange.current = 0;
@@ -419,13 +478,19 @@ function DraftPanel({
       });
   };
 
+  // Edits stay local until the owner presses Save or Save as new version;
+  // nothing is written, and no version is created, on its own.
   useEffect(() => {
-    if (!draft || !hydrated.current || localChange.current === 0) return;
-    if (saveTimer.current !== undefined) window.clearTimeout(saveTimer.current);
-    const changeId = localChange.current;
-    saveTimer.current = window.setTimeout(() => save(draft, changeId), 650);
-    return () => { if (saveTimer.current !== undefined) window.clearTimeout(saveTimer.current); };
-  }, [draft?.body, draft?.working_title, draft?.id]);
+    if (saveState !== "unsaved") return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [saveState]);
+
+  const saveNow = (newVersion: boolean) => {
+    if (!draft) return;
+    save(draft, localChange.current, newVersion);
+  };
 
   const edit = (field: "body" | "working_title", value: string) => {
     localChange.current += 1;
@@ -434,51 +499,76 @@ function DraftPanel({
       if (field === "working_title") {
         return { ...current, working_title: value.slice(0, 160), copied_at: null };
       }
+      const plain = plainFromMarkdown(value);
       return {
         ...current,
         body: value,
-        character_count: Array.from(value).length,
-        over_limit: Array.from(value).length > 4096,
+        body_plain: plain,
+        // The server-rendered HTML belongs to the previous body; until the
+        // edit is saved, a rich copy must fall back to plain text.
+        body_html: undefined,
+        character_count: Array.from(plain).length,
+        plain_character_count: Array.from(plain).length,
+        over_limit: Array.from(plain).length > 4096,
+        warning_threshold: Array.from(plain).length >= 3800,
         copied_at: null,
       };
     });
-    setSaveState("saving");
+    setSaveState("unsaved");
     setCopied(false);
   };
 
   const copy = async () => {
-    if (!draft || Array.from(postText).length > 4096) return;
+    if (!draft || draft.over_limit) return;
+    // Both flavours come from the Markdown shown in the editor (the current
+    // draft, or the version being viewed), saved or not.
+    // text/plain carries Telegram's own markup (**bold**, __italic__), which
+    // every Telegram app converts on send even when it ignores rich flavours;
+    // text/html carries real tags and links for clients that read them.
+    const plain = telegramMarkupFromMarkdown(shownBody);
+    const html = htmlFromMarkdown(shownBody);
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(postText);
-      else {
-        const node = document.createElement("textarea");
-        node.value = postText;
-        node.style.position = "fixed";
-        node.style.opacity = "0";
-        document.body.appendChild(node);
-        node.select();
-        const success = document.execCommand("copy");
-        node.remove();
-        if (!success) throw new Error("Clipboard unavailable");
+      // 1. Copy-event handler: both flavours under our control, synchronous
+      //    inside the click, no permission prompt.
+      // 2. Rendered selection: browser-serialised flavours (adds RTF in Safari).
+      // 3. Async Clipboard API; last because Safari rejects it after an await
+      //    and plain-HTTP origins do not offer it.
+      let done = copyRichText(plain, html) || copyRenderedSelection(html);
+      let rich = done;
+      if (!done) {
+        const clip = navigator.clipboard as unknown as { write?: (items: unknown[]) => Promise<void>; writeText?: (text: string) => Promise<void> } | undefined;
+        const ClipboardItemCtor = (window as unknown as { ClipboardItem?: new (items: Record<string, Blob>) => unknown }).ClipboardItem;
+        if (clip?.write && ClipboardItemCtor) {
+          await clip.write([new ClipboardItemCtor({ "text/plain": new Blob([plain], { type: "text/plain" }), "text/html": new Blob([html], { type: "text/html" }) })]);
+          done = rich = true;
+        } else if (clip?.writeText) {
+          await clip.writeText(plain);
+          done = true;
+        }
       }
-      // Do not mark a different, unsaved server revision as copied.
-      if (saveState === "saved" && postText === draft.body) await api(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } });
+      if (!done) throw new Error("Clipboard unavailable");
       setCopied(true);
+      // Say which flavour landed so a plain-text paste can be diagnosed at once.
+      setCopyNote(rich ? "Copied. Formatting travels as rich text and as Telegram markup." : "Copied as Telegram markup only (this browser blocks rich copy).");
       setDraft((current) => current ? { ...current, copied_at: new Date().toISOString() } : current);
-      window.setTimeout(() => setCopied(false), 2200);
+      window.setTimeout(() => { setCopied(false); setCopyNote(""); }, 3200);
+      // Record the copy on the saved revision; failures here must not undo a successful copy.
+      if (saveState === "saved") void api(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } }).catch(() => undefined);
     } catch {
       setSaveState("error");
     }
   };
 
-  const restore = (version: DraftVersion) => {
+  const choose = (version: DraftVersion) => {
     if (!draft) return;
+    if (saveState === "unsaved" && !window.confirm(`Discard unsaved changes and make v${version.version} the current version?`)) return;
     setSaveState("saving");
     void api<{ draft: Draft }>(`/studio/api/drafts/${draft.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
-      body: JSON.stringify({ expected_revision: draft.revision, restore_version: version.version }),
+      body: JSON.stringify({ expected_revision: draft.revision, choose_version: version.version }),
     }).then((payload) => {
+      // Choosing moves the current pointer; no version is created.
       localChange.current = 0;
       setDraft(payload.draft);
       setSelectedVersion(payload.draft.current_version);
@@ -497,9 +587,10 @@ function DraftPanel({
   const keepLocal = () => {
     if (!conflict) return;
     localChange.current += 1;
+    // Adopt the server revision so the next Save is accepted, keep the text.
     setDraft({ ...conflict.server, body: conflict.localBody, working_title: conflict.localTitle });
     setConflict(null);
-    setSaveState("saving");
+    setSaveState("unsaved");
   };
 
   const useServer = () => {
@@ -510,13 +601,6 @@ function DraftPanel({
     setSaveState("saved");
   };
 
-  // Existing titles remain editable in the same field; avoid repeating a
-  // headline already present in the body. New drafts include it in body.
-  const title = draft?.working_title.trim() ?? "";
-  const body = draft?.body ?? "";
-  const normalizeTitle = (value: string) => value.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
-  const postText = title && title !== "Untitled draft" && !normalizeTitle(body.split("\n")[0]).startsWith(normalizeTitle(title))
-    ? `${title}\n\n${body}` : body;
   const sourceLinks = new Map<string, { url: string; title: string }>();
   const addSource = (id: string, url: string, label: string) => {
     try {
@@ -554,8 +638,7 @@ function DraftPanel({
           <h2>Draft workspace</h2>
         </div>
         <div className="studio-panel-actions">
-          {draft && <button type="button" className="studio-copy" onClick={() => void copy()} disabled={Array.from(postText).length > 4096}>{copied ? "Copied" : "Copy full post"}</button>}
-          <span className={`studio-save-state is-${saveState}`} role="status">{saveState === "saving" ? "Saving…" : saveState === "conflict" ? "Needs review" : saveState === "error" ? "Retry needed" : "Saved"}</span>
+          <span className={`studio-save-state is-${saveState}`} role="status">{saveState === "saving" ? "Saving…" : saveState === "unsaved" ? "Unsaved changes" : saveState === "conflict" ? "Needs review" : saveState === "error" ? "Retry needed" : "Saved"}</span>
           <button type="button" className="studio-draft-close" onClick={onClose} aria-label="Close draft">×</button>
         </div>
       </div>
@@ -567,36 +650,28 @@ function DraftPanel({
         </div>
       ) : (
         <div className="studio-draft-content">
-          <label className="studio-draft-title">Title<input aria-label="Draft title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /></label>
-          <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={draft.body} onChange={(event) => edit("body", event.target.value)} />
+          <label className="studio-draft-title">Artifact title<input aria-label="Artifact title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /><span className="studio-draft-title-hint">Kept for search and cross-checking. Not copied to the post.</span></label>
+          {viewingOld && <p className="studio-draft-viewing" role="status">Viewing v{selectedVersion} (read-only). Choose makes it the current version.</p>}
+          {previewOpen
+            ? <div className="studio-draft-preview" role="region" aria-label="Post preview"><div className="studio-markdown"><DraftMarkdownPreview text={shownBody} /></div></div>
+            : <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={shownBody} readOnly={viewingOld} onChange={(event) => edit("body", event.target.value)} />}
           <div className={`studio-char-count ${draft.over_limit ? "is-over" : draft.warning_threshold ? "is-warning" : ""}`}>
-            <span>{Array.from(postText).length.toLocaleString()} / 4,096 characters</span>
+            <span>{(draft.character_count ?? Array.from(plainFromMarkdown(draft.body)).length).toLocaleString()} / 4,096 plain-text characters</span>
             <span>{draft.over_limit ? "Copy blocked" : draft.warning_threshold ? "Near Telegram limit" : "Telegram ready"}</span>
           </div>
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}
           {clickableSources.length > 0 && <div className="studio-draft-notes"><strong>Sources</strong><div className="studio-source-chips">{clickableSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}</div></div>}
-          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy for Telegram"}</button><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) restore(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version}>Restore</button></label></div>
+          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button>{copyNote && <span className="studio-copy-note" role="status">{copyNote}</span>}<span className="studio-draft-save-group"><button type="button" className="studio-draft-save" onClick={() => saveNow(false)} disabled={!canSave || viewingOld} title="Overwrite the current version with your edits">Save</button><button type="button" className="studio-draft-save" onClick={() => saveNow(true)} disabled={!canSave || viewingOld} title="Keep the current version and add your edits as a new one">Save as new version</button></span><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) choose(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version || saveState === "saving"}>Choose</button></label></div>
         </div>
       )}
     </aside>
   );
 }
 
-function ProfilePrimer({ bootstrap, onGranted }: { bootstrap: Bootstrap; onGranted: (payload: Bootstrap) => void }) {
+function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Bootstrap; onProfile: () => void; onBootstrap: (next: Bootstrap) => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const consent = bootstrap.consent;
-  const semanticReady = bootstrap.profile?.editorial_rules?.extraction_version === "channel.semantic.v1";
-  const analyze = () => {
-    if (!bootstrap.selected_channel_id) return;
-    setBusy(true);
-    setMessage("");
-    void api<{ profile: Bootstrap["profile"] }>(`/studio/api/profile/analyze?channel_id=${bootstrap.selected_channel_id}`, {
-      method: "POST", headers: { "x-csrf-token": csrfToken() },
-    }).then(({ profile }) => onGranted({ ...bootstrap, profile, profile_status: profile?.confidence === "low" ? "low_confidence" : "ready" }))
-      .catch((reason: unknown) => setMessage(reason instanceof Error ? reason.message : "Profile analysis failed."))
-      .finally(() => setBusy(false));
-  };
   const grant = () => {
     setBusy(true);
     setMessage("");
@@ -605,7 +680,13 @@ function ProfilePrimer({ bootstrap, onGranted }: { bootstrap: Bootstrap; onGrant
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
       body: JSON.stringify({ confirm: true, configuration_fingerprint: consent.configuration_fingerprint }),
     })
-      .then((payload) => onGranted({ ...bootstrap, consent: payload.consent, profile: payload.profile, profile_status: payload.profile ? (payload.profile.confidence === "low" ? "low_confidence" : "ready") : "not_analyzed" }))
+      .then(() =>
+        // Consent changes what the primer shows, so reload the bootstrap
+        // payload instead of leaving the consent card on screen.
+        api<Bootstrap>("/studio/api/bootstrap")
+          .then((next) => onBootstrap(next))
+          .catch(() => setMessage("Consent granted. Reload the page to continue.")),
+      )
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Consent could not be saved."))
       .finally(() => setBusy(false));
   };
@@ -623,19 +704,39 @@ function ProfilePrimer({ bootstrap, onGranted }: { bootstrap: Bootstrap; onGrant
       </section>
     );
   }
-  if (!semanticReady) return <section className="studio-primer" aria-label="Channel profile status"><p role="status">{busy ? "Analyzing successful posts: topics and writing style…" : message || "Channel profile has not been analyzed yet."}</p><button type="button" onClick={analyze} disabled={busy}>Analyze channel</button></section>;
-  if (!bootstrap.profile) return null;
+  const profile = bootstrap.profile;
+  const hasProfile = !!(profile && (profile.topics_text?.trim() || profile.editorial_text?.trim() || profile.style_text?.trim()));
+  if (!hasProfile) {
+    return (
+      <section className="studio-primer" aria-label="Channel profile status">
+        <p role="status">No channel profile yet. Build it from your posts or write the guidelines yourself.</p>
+        <button type="button" onClick={onProfile}>Profile</button>
+      </section>
+    );
+  }
+  // Chips show the topic name only; the scope after the dash belongs in the dialog.
+  const topicName = (line: string) => {
+    const name = line.split(/\s[—–-]\s|:\s/)[0].trim();
+    return name.length > 48 ? `${name.slice(0, 47)}…` : name;
+  };
+  const topicLines = (profile.topics_text ?? "").split("\n").filter((line) => line.trim());
+  const editorialCount = (profile.editorial_text ?? "").split("\n").filter((l) => l.trim()).length;
+  const styleCount = (profile.style_text ?? "").split("\n").filter((l) => l.trim()).length;
+  const topicsCount = topicLines.length;
+  const rulesCount = editorialCount + styleCount;
+  const remainingTopics = topicsCount > 4 ? `+${topicsCount - 4}` : null;
+  const chips = topicLines.slice(0, 4).map(topicName);
   return (
-    <section className={`studio-primer studio-primer-profile ${bootstrap.profile_status === "low_confidence" ? "is-low" : ""}`} aria-label="Channel profile status">
+    <section className="studio-primer studio-primer-profile" aria-label="Channel profile status">
       <div>
-        <p className="studio-overline">Channel profile · v{bootstrap.profile.version}</p>
-        <p>{bootstrap.profile_status === "low_confidence" ? "Early signal only — the agent will keep recommendations cautious." : "Profile ready — the agent will use these signals as working context."}</p>
+        <p className="studio-overline">Channel profile · v{profile.version}</p>
+        <p>{topicsCount} topics · {rulesCount} rules. The agent receives these guidelines with every message.</p>
       </div>
-      <div className="studio-topic-chips" aria-label="Inferred topics">
-        {bootstrap.profile.topics.slice(0, 6).map((topic) => <span key={topic.name} title={topic.claim}>{topic.name}</span>)}
+      <div className="studio-topic-chips" aria-label="Topics">
+        {chips.map((topic, index) => <span key={`${index}-${topic}`} title={topicLines[index]}>{topic}</span>)}
+        {remainingTopics && <span>{remainingTopics}</span>}
       </div>
-      <button type="button" onClick={analyze} disabled={busy}>{busy ? "Analyzing…" : "Refresh profile"}</button>
-      {message && <p role="alert">{message}</p>}
+      <button type="button" onClick={onProfile}>Profile</button>
     </section>
   );
 }
@@ -933,6 +1034,7 @@ function StudioThread({
 
 function StudioApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [error, setError] = useState("");
@@ -1031,8 +1133,17 @@ function StudioApp() {
 
   return (
     <div className="studio-app">
-      <ConversationRail conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} onDelete={deleteConversation} deletingId={deletingId} onSettings={() => setSettingsOpen(true)} />
+      <ConversationRail conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} onDelete={deleteConversation} deletingId={deletingId} onSettings={() => setSettingsOpen(true)} onProfile={() => setProfileOpen(true)} />
       {settingsOpen && <StudioSettings onClose={() => setSettingsOpen(false)} />}
+      {profileOpen && bootstrap.selected_channel_id && (
+        <ChannelProfileDialog
+          channelId={bootstrap.selected_channel_id}
+          onClose={() => setProfileOpen(false)}
+          onSaved={(profile) => {
+            setBootstrap((current) => current ? { ...current, profile, profile_status: (profile.topics_text?.trim() || profile.editorial_text?.trim() || profile.style_text?.trim()) ? "ready" : "not_built" } : current);
+          }}
+        />
+      )}
       <main className="studio-main">
         <header className="studio-topbar">
           <div>
@@ -1041,10 +1152,11 @@ function StudioApp() {
             {titleError && <p role="alert">{titleError}</p>}
           </div>
           <button type="button" className="studio-draft-toggle" onClick={() => setDraftOpen(true)}>Draft</button>
+          <button type="button" className="studio-settings-mobile" onClick={() => setProfileOpen(true)}>Profile</button>
           <button type="button" className="studio-settings-mobile" onClick={() => setSettingsOpen(true)}>Settings</button>
           <div className="studio-topbar-meta"><span className="studio-status-dot" aria-hidden="true" /> Agent context connected</div>
         </header>
-        <ProfilePrimer bootstrap={bootstrap} onGranted={(payload) => setBootstrap((current) => current ? { ...current, consent: payload.consent, profile: payload.profile, profile_status: payload.profile_status } : payload)} />
+        <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
         {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
       </main>
       <DraftPanel conversationId={selected?.id ?? null} seedDraft={bootstrap.draft} open={draftOpen} onClose={() => setDraftOpen(false)} watchForAgentChanges={agentRunActive} refreshToken={draftRefreshToken} />
