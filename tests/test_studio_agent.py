@@ -68,9 +68,11 @@ def test_production_model_requires_openrouter_key_without_test_mode():
 
 
 def test_default_agent_output_budget_supports_evidence_backed_answers():
-    assert Settings().studio_max_output_tokens == 8192
-    assert Settings().studio_run_timeout_seconds == 300
-    assert Settings().studio_max_tool_calls == 12
+    from app import limits
+
+    assert limits.MAX_OUTPUT_TOKENS == 8192
+    assert limits.RUN_TIMEOUT_SECONDS == 300
+    assert limits.MAX_TOOL_CALLS == 12
 
 
 def test_explicit_intents_require_the_evidence_tools_before_text_output():

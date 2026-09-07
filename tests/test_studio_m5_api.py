@@ -26,7 +26,6 @@ async def _csrf(client) -> str:
 
 
 async def _conversation_and_draft(client, app, settings, *, body: str = "Line one\n\nLine two"):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)
@@ -44,7 +43,6 @@ async def _conversation_and_draft(client, app, settings, *, body: str = "Line on
 
 @pytest.mark.asyncio
 async def test_draft_routes_require_auth_and_csrf(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     unknown = str(uuid.uuid4())
     unauth = await client.get(f"/studio/api/drafts/{unknown}")

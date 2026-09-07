@@ -44,7 +44,6 @@ def _events(stream: str) -> list[dict]:
 
 @pytest.mark.asyncio
 async def test_studio_bootstrap_create_stream_and_reload(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)
@@ -92,7 +91,6 @@ async def test_studio_bootstrap_create_stream_and_reload(client, settings):
 
 @pytest.mark.asyncio
 async def test_studio_rejects_cross_workspace_or_missing_csrf_ids(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)
@@ -114,7 +112,6 @@ async def test_studio_rejects_cross_workspace_or_missing_csrf_ids(client, settin
 
 @pytest.mark.asyncio
 async def test_studio_api_contract_rejects_invalid_requests_and_paginates_events(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)
@@ -188,7 +185,6 @@ async def test_studio_api_contract_rejects_invalid_requests_and_paginates_events
 
 @pytest.mark.asyncio
 async def test_studio_mutations_all_require_csrf(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await _login(client, settings)
 
@@ -209,7 +205,6 @@ async def test_studio_mutations_all_require_csrf(client, settings):
 
 @pytest.mark.asyncio
 async def test_agent_uses_persisted_conversation_and_authorized_channel_context(client, app, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)

@@ -9,7 +9,7 @@ posts, and shows everything in a web admin panel + Telegram commands.
 - Collector: Telethon **user session** (the only way Telegram exposes views/share counts)
 - Current panel: FastAPI + PostgreSQL (with a read-only SQLite import/rollback archive),
   login-protected, charts via Chart.js
-- Commands in Telegram: `/stats`, `/top`, `/last`, `/refresh` — send them to yourself in **Saved Messages** (or from any id listed in `ADMIN_TG_IDS`)
+- Commands in Telegram: `/stats`, `/top`, `/last`, `/refresh` — send them to yourself in **Saved Messages**
 - Community release is self-hostable with `.env` plus a persistent PostgreSQL volume;
   keep the legacy `data/` archive until migration reconciliation is complete.
 
@@ -74,10 +74,9 @@ Docker build, and continuous integration.
 - [Security policy](SECURITY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 
-Studio is available behind `STUDIO_ENABLED`. Configure the OpenRouter key only
-on the server; it is never sent to the browser. For routine tests,
-`STUDIO_TEST_MODE=true` selects PydanticAI's deterministic local `TestModel`
-and makes no network request. Studio routes also require authentication and
+Studio is always available. Configure the OpenRouter key only
+on the server; it is never sent to the browser. Agent and research bounds are
+fixed in `app/limits.py`. Studio routes require authentication and
 PostgreSQL readiness.
 
 ---
@@ -114,31 +113,15 @@ server later.
 
 | Key | Meaning |
 |---|---|
-| `CHANNELS` | comma-separated channels, e.g. `@my_channel` (must be public username, or numeric id) |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | web panel login |
-| `ADMIN_TG_IDS` | your numeric Telegram id(s) allowed to use commands (send `/whoami` once running to find it) |
-| `STUDIO_ENABLED` | set `true` after PostgreSQL, the encryption key, and provider configuration are ready |
-| `STUDIO_TEST_MODE` | explicit local-only deterministic TestModel seam; keep `false` for any real deployment |
-| `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | backend-only provider settings; the key is never sent to the browser; Studio asks for one-time workspace consent before a real request |
-| `STUDIO_RUN_CONCURRENCY` | maximum agent/provider runs in one app process (default 2) |
-| `STUDIO_MAX_OUTPUT_TOKENS` | cumulative output budget across the whole agent/tool loop (default 8,192; raise deliberately for unusually long research reports) |
-| `STUDIO_RUN_TIMEOUT_SECONDS` | end-to-end budget for a real multi-tool run (default 300 seconds) |
-| `STUDIO_RUN_LEASE_SECONDS` / `STUDIO_RUN_HEARTBEAT_SECONDS` | durable PostgreSQL ownership lease and renewal/cancellation interval |
-| `STUDIO_QUEUED_RUN_GRACE_SECONDS` | age at which abandoned queued work is recovered as interrupted |
-| `STUDIO_CONTEXT_MAX_CHARS` | maximum serialized evidence context sent to the agent (default 18,000) |
-| `STUDIO_MAX_EVIDENCE_POSTS` | maximum bounded post evidence objects in a context pack (default 20) |
-| `STUDIO_MIN_PROFILE_POSTS` | local first-run profile readiness hint; low-data profiles remain visible (default 5) |
-| `STUDIO_SEARCH_ENABLED` | opt in to the private SearXNG research provider (default `false`) |
-| `STUDIO_SEARCH_BASE_URL` | private SearXNG URL, normally `http://searxng:8080` in the optional Compose profile |
-| `STUDIO_SEARCH_TIMEOUT_SECONDS` / `STUDIO_SEARCH_RETRIES` | bounded provider health/search timeout and retry count |
-| `STUDIO_SEARCH_ENGINES` / `STUDIO_SEARCH_ALLOWED_ENGINES` | fallback engine mix and bounded catalog the agent may choose from per search |
-| `STUDIO_SEARCH_BLOCKED_DOMAINS` | optional deployment domain exclusions; empty by default, otherwise chosen by the agent per request |
-| `STUDIO_SEARCH_MAX_QUERIES` / `STUDIO_SEARCH_MAX_RESULTS` | server-side query/result bounds per request |
-| `STUDIO_SEARCH_CACHE_TTL_SECONDS` | freshness window for normalized search-result cache entries |
-| `STUDIO_SOURCE_READER_ENABLED` | enable the bounded, SSRF-safe source reader (default `true`) |
-| `POLL_MINUTES` | how often stats refresh (default 15) |
-| `TRACK_DAYS` | post age to keep scanning; `0` means the whole channel history |
-| `BACKFILL_LIMIT` | maximum posts per scan; `0` means unlimited |
+| `WEB_HOST` / `WEB_PORT` | web panel bind address and port |
+| `SESSION_SECRET` | optional cookie secret (auto-generated if empty) |
+| `DATABASE_URL` | PostgreSQL connection for the workspace store |
+| `TELEGRAM_SESSION_ENCRYPTION_KEY` | key for encrypted session and secrets |
+| `DATA_DIR` | filesystem location for secrets and import source |
+| `STUDIO_SEARCH_BASE_URL` | private SearXNG endpoint when using web research |
+
+> Channels, collection windows, provider keys, and research toggles are now configured at **/settings** in the web panel after login. The `.env` values for `CHANNELS`, `POLL_MINUTES`, `TRACK_DAYS`, `BACKFILL_LIMIT`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `STUDIO_SEARCH_ENABLED`, and `STUDIO_SEARCH_BLOCKED_DOMAINS` are optional first-start seeds; edit them in **/settings** afterwards.
 
 > The bot account must be able to **read the channel** — your own account that
 > owns/is subscribed to the channel already can.
@@ -231,8 +214,7 @@ mirror; the final workspace-owned schema is delivered in M1.
 
 ### 1.9 Run the Content Studio (M5)
 
-The production Studio is disabled by default. Complete the PostgreSQL setup
-and set `STUDIO_ENABLED=true`, then start the app, sign in, and open
+Complete the PostgreSQL setup, then start the app, sign in, and open
 http://127.0.0.1:8080/studio. The first screen shows a setup state instead of
 making provider calls when a required setting is missing.
 
@@ -248,8 +230,8 @@ first profile is prepared from local deterministic channel evidence and shows a
 low-confidence warning when the channel has too little history. Discussion
 comment bodies are never sent to the model.
 
-For a local no-network protocol check only, set `STUDIO_TEST_MODE=true` along
-with `STUDIO_ENABLED=true`. This selects PydanticAI's deterministic TestModel;
+For a local no-network protocol check only, set `STUDIO_TEST_MODE=true`.
+This selects PydanticAI's deterministic TestModel;
 it is an explicit test seam and must not be enabled for a hosted deployment.
 With setup ready, create a conversation, send a free-text request, and the
 assistant-ui shell streams the bounded agent response through the authenticated

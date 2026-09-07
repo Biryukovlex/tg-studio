@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
+from app import limits
 from app.config import Settings
 from app.studio.research import ResearchService
 from app.studio.search import SearchQuery, SearchResponse, SearchResult, SearXNGSearchProvider
@@ -56,25 +57,27 @@ async def test_twelve_parallel_queries_preserve_all_candidate_ids_and_provider_w
 
 
 @pytest.mark.asyncio
-async def test_novel_topics_keeps_user_instruction_first_without_canned_suffix():
+async def test_novel_topics_keeps_user_instruction_first_without_canned_suffix(monkeypatch):
     provider = ParallelProvider()
-    service = ResearchService(Settings(studio_search_max_queries=3), provider=provider)
+    monkeypatch.setattr(limits, "SEARCH_MAX_QUERIES", 3)
+    service = ResearchService(Settings(), provider=provider)
     await service.find_novel_topics(workspace_id="w", conversation_id="c", channel_id=1,
                                    instruction="Exact user angle", topics=["Alpha", "Beta", "Gamma"])
     assert provider.queries == ["Exact user angle", "Alpha", "Beta"]
 
 
 @pytest.mark.asyncio
-async def test_engine_failures_and_effective_settings_are_not_hidden_by_cache():
+async def test_engine_failures_and_effective_settings_are_not_hidden_by_cache(monkeypatch):
     calls = []
     def handler(request):
         calls.append(dict(request.url.params))
         return httpx.Response(200, json={"results": [], "unresponsive_engines": [["github", "timeout"]]})
-    settings = Settings(studio_search_enabled=True, studio_search_base_url="http://search:8080", studio_search_engines="github")
+    monkeypatch.setattr(limits, "SEARCH_ENGINES", "github")
+    settings = Settings(studio_search_enabled=True, studio_search_base_url="http://search:8080")
     provider = SearXNGSearchProvider(settings, transport=httpx.MockTransport(handler))
     first = await provider.search("Any wording")
     assert first.degraded and "github" in " ".join(first.warnings)
-    settings.studio_search_engines = "arxiv"
+    monkeypatch.setattr(provider, "engines", ("arxiv",))
     await provider.search("Any wording")
     assert [item["engines"] for item in calls] == ["github", "arxiv"]
     rejected = await provider.search("Any wording", engines=["unavailable-engine"])

@@ -86,7 +86,7 @@ async def test_profile_dialog_flow_saves_through_the_http_api(tmp_path):
         settings = Settings(
             api_id=1, api_hash="h", session_string="s", channels=identifier, data_dir=str(tmp_path),
             admin_username="t18-admin", admin_password="t18-password", session_secret="t18-secret",
-            studio_enabled=True, studio_test_mode=True, database_url=_url(),
+            studio_test_mode=True, database_url=_url(),
             telegram_session_encryption_key="x" * 40,
         )
         app = create_app(FakeCollector(db), settings)

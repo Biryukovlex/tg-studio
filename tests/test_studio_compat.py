@@ -43,16 +43,7 @@ def _events(stream: str) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_studio_spike_alias_is_disabled_by_default(client):
-    await _login(client)
-    response = await client.get("/studio-spike", follow_redirects=False)
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Studio is disabled"
-
-
-@pytest.mark.asyncio
 async def test_studio_spike_alias_redirects_to_production_surface(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await _login(client)
     response = await client.get("/studio-spike", follow_redirects=False)
@@ -62,7 +53,6 @@ async def test_studio_spike_alias_redirects_to_production_surface(client, settin
 
 @pytest.mark.asyncio
 async def test_studio_spike_alias_uses_durable_m2_stream_and_events(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await _login(client)
     token = await _csrf(client)
@@ -95,7 +85,6 @@ async def test_studio_spike_alias_uses_durable_m2_stream_and_events(client, sett
 
 @pytest.mark.asyncio
 async def test_studio_spike_alias_preserves_auth_and_csrf_boundaries(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     response = await client.post("/studio-spike/api/agent", json={})
     assert response.status_code == 401

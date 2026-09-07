@@ -51,7 +51,7 @@ async def test_postgres_expired_lease_recovers_with_durable_event():
 
         restarted = StudioService(
             StudioRepository(db),
-            Settings(studio_enabled=True, studio_test_mode=True),
+            Settings(studio_test_mode=True),
         )
         assert await restarted.recover_stale_runs() == 1
         recovered = await restarted.repository.get_run(run["id"])

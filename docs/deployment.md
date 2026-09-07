@@ -63,17 +63,15 @@ docker compose ps
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-The `all` role owns the Telegram session, scheduled collection, Telegram admin
+The `all` role owns the Telegram session, scheduled collection, Telegram
 commands, and the web panel. Open <http://127.0.0.1:8080>, sign in, and use
-<http://127.0.0.1:8080/studio> when `STUDIO_ENABLED=true`.
+<http://127.0.0.1:8080/studio>.
 
 ## Studio and web research
 
-Studio is disabled by default. To use the real provider, set:
+To use the real provider, set:
 
 ```dotenv
-STUDIO_ENABLED=true
-STUDIO_TEST_MODE=false
 OPENROUTER_API_KEY=<server-only-key>
 OPENROUTER_MODEL=openai/gpt-4o-mini
 ```
@@ -87,7 +85,6 @@ Enable the optional private SearXNG profile for current stories:
 
 ```dotenv
 STUDIO_SEARCH_ENABLED=true
-STUDIO_SEARCH_PROVIDER=searxng
 STUDIO_SEARCH_BASE_URL=http://searxng:8080
 ```
 
@@ -102,13 +99,6 @@ unreachable, or rate-limited, `/studio/api/research/health` reports degraded
 research while collection, the dashboard, and local channel analysis continue.
 Pin `SEARXNG_IMAGE` to a reviewed tag or digest before a hosted release and
 review SearXNG's AGPL obligations separately.
-
-To disable Studio without changing analytics, set `STUDIO_ENABLED=false` and
-recreate the app container:
-
-```bash
-docker compose up -d --build tg-studio
-```
 
 ## Explicit process roles
 

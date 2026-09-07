@@ -299,7 +299,7 @@ async def test_emitted_agui_error_cannot_be_recorded_as_a_success(monkeypatch):
     monkeypatch.setattr(service_module, "AGUIAdapter", _EmittedRunErrorAdapter)
     repository = MemoryStudioRepository()
     conversation = await repository.create_conversation(channel_id=1)
-    service = StudioService(repository, Settings(studio_enabled=True, studio_test_mode=True))
+    service = StudioService(repository, Settings(studio_test_mode=True))
     run_id = uuid.uuid4()
     response = await service.stream_request(
         None,
@@ -333,7 +333,7 @@ async def test_missing_final_reply_keeps_completed_artifact_as_success(monkeypat
     monkeypatch.setattr(service_module, "AGUIAdapter", _EmittedArtifactRunErrorAdapter)
     repository = MemoryStudioRepository()
     conversation = await repository.create_conversation(channel_id=1)
-    service = StudioService(repository, Settings(studio_enabled=True, studio_test_mode=True))
+    service = StudioService(repository, Settings(studio_test_mode=True))
     run_id = uuid.uuid4()
     response = await service.stream_request(
         None,
@@ -377,7 +377,7 @@ async def test_provider_failures_recover_to_safe_persisted_errors(monkeypatch, f
     monkeypatch.setattr(service_module, "AGUIAdapter", _FailureAdapter)
     repository = MemoryStudioRepository()
     conversation = await repository.create_conversation(channel_id=1)
-    service = StudioService(repository, Settings(studio_enabled=True, studio_test_mode=True))
+    service = StudioService(repository, Settings(studio_test_mode=True))
     run_id = uuid.uuid4()
     response = await service.stream_request(
         None,

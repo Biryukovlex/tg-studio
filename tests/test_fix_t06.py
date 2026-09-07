@@ -22,7 +22,7 @@ async def test_unknown_source_ids_blocked():
     from datetime import datetime, timezone
     # We need to simulate a bundle with known source
     # Use the repository's research bundle via direct insertion? Simplify: mock get_bundle
-    settings = Settings(studio_enabled=True, studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
+    settings = Settings(studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
     # Mock research service to return bundle with known source
     known_id = "known-source-123"
     mock_bundle = MagicMock()
@@ -59,7 +59,7 @@ def test_propose_topic_change_always_proposed():
     assert proposal.requires_confirmation is True
     # After T14 the agent no longer has a tool that can apply a profile change
     from app.studio.agent import build_agent
-    agent = build_agent(Settings(studio_enabled=True, studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test"))
+    agent = build_agent(Settings(studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test"))
     tool_names = set(getattr(agent, "_function_toolset", {}).tools.keys()) if hasattr(agent, "_function_toolset") else set()
     # Fallback check via private API
     try:
@@ -79,7 +79,7 @@ from types import SimpleNamespace
 
 
 def _settings() -> Settings:
-    return Settings(studio_enabled=True, studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
+    return Settings(studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
 
 
 def _deps(repo: MemoryStudioRepository, conversation) -> StudioDeps:

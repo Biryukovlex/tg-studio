@@ -65,7 +65,6 @@ async def test_memory_delete_is_scoped_cascades_studio_records_and_blocks_active
 
 @pytest.mark.asyncio
 async def test_delete_route_requires_csrf_blocks_active_runs_and_removes_history(client, app, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     token = await _login(client, settings)
 

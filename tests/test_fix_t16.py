@@ -60,7 +60,6 @@ def test_plain_counts_over_limit():
 
 @pytest.mark.asyncio
 async def test_copy_endpoint_returns_both(client, app, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password}, follow_redirects=False)
     import re, uuid

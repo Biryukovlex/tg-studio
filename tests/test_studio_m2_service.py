@@ -33,7 +33,7 @@ async def _read_stream(response) -> str:
 async def test_service_persists_messages_and_safe_events_on_completion():
     repository = MemoryStudioRepository()
     conversation = await repository.create_conversation(channel_id=1)
-    service = StudioService(repository, Settings(studio_test_mode=True, studio_enabled=True))
+    service = StudioService(repository, Settings(studio_test_mode=True))
     run_id = uuid.uuid4()
 
     response = await service.stream_request(None, _payload(conversation["id"], run_id))

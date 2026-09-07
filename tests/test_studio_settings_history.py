@@ -17,7 +17,7 @@ from app.studio.service import StudioService
 
 @pytest.mark.asyncio
 async def test_settings_authenticated_csrf_validated_and_workspace_scoped(client, settings, app):
-    settings.studio_enabled = settings.studio_test_mode = True
+    settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password})
     home = await client.get("/studio")
     token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)

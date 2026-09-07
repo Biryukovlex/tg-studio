@@ -52,7 +52,7 @@ async def test_auto_title_does_not_overwrite_user_title():
 
 @pytest.mark.asyncio
 async def test_rename_endpoint_validation_and_csrf(client, settings, app):
-    settings.studio_enabled = settings.studio_test_mode = True
+    settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password})
     home = await client.get("/studio")
     token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)

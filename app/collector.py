@@ -19,6 +19,7 @@ from typing import Any
 
 from telethon import TelegramClient, errors
 
+from . import limits
 from .config import Settings
 from .db import Database, utcnow
 from .async_compat import maybe_await
@@ -67,6 +68,8 @@ class Collector:
         self.client = client
         self.db = db
         self.settings = settings
+        self.workspace_settings = None  # type: ignore[attr-defined]
+        self.on_poll_interval_change = None  # type: ignore[attr-defined]
         self._entities: dict[str, Any] = {}
         self._lock = asyncio.Lock()  # one cycle at a time (scheduler + manual refresh)
         self._background: asyncio.Task | None = None
@@ -88,7 +91,34 @@ class Collector:
     async def sync_channels(self) -> list[str]:
         """Resolve configured channels into the DB. Returns identifiers that failed."""
         failed: list[str] = []
-        for ident in self.settings.channel_list:
+        # Union of env channel_list and DB rows with chat_id IS NULL (added via page)
+        idents = list(self.settings.channel_list)
+        # Also include DB rows with chat_id IS NULL (not yet resolved)
+        try:
+            # Fetch all channels and filter those with chat_id is None and not already in idents
+            channels = await maybe_await(self.db.get_channels())
+            # get_channels only returns active=true, but we need to include those with chat_id NULL even if active?
+            # For Postgres, we can query directly for chat_id IS NULL
+            # Use _execute if available to get all with chat_id NULL
+            if hasattr(self.db, "_execute"):
+                try:
+                    result = await self.db._execute(
+                        "SELECT identifier FROM channels WHERE workspace_id=:workspace_id AND chat_id IS NULL AND active=true",
+                        {},
+                    )
+                    for row in result.mappings().all():
+                        ident = row["identifier"]
+                        if ident not in idents:
+                            idents.append(ident)
+                except Exception:
+                    pass
+            else:
+                for ch in channels:
+                    if ch.get("chat_id") is None and ch.get("identifier") not in idents:
+                        idents.append(ch["identifier"])
+        except Exception:
+            pass
+        for ident in idents:
             try:
                 await self.resolve_entity(ident)
                 log.info("channel %s resolved", ident)
@@ -161,8 +191,8 @@ class Collector:
             cutoff = utcnow().replace(tzinfo=None) - timedelta(days=self.settings.track_days)
             limit = self.settings.backfill_limit if self.settings.backfill_limit > 0 else None
         else:
-            # Whole-history mode with pacing: full scan only every full_rescan_hours
-            full_hours = int(getattr(self.settings, "full_rescan_hours", 24))
+            # Whole-history mode with pacing: full scan only every FULL_RESCAN_HOURS
+            full_hours = int(limits.FULL_RESCAN_HOURS)
             now = datetime.now(timezone.utc)
             last = self._last_full_scan.get(ch["id"])
             if last is None or (now - last).total_seconds() >= full_hours * 3600:
@@ -248,6 +278,19 @@ class Collector:
         return seen, written, comments_seen, comments_written, comments_deleted, comment_errors
 
     async def poll_all(self, reason: str = "scheduled") -> dict[str, Any]:
+        # Cross-process refresh: reload workspace settings and reschedule if poll interval changed
+        if getattr(self, "workspace_settings", None) is not None:
+            try:
+                prev = float(self.settings.poll_minutes)
+                await self.workspace_settings.load()  # type: ignore[attr-defined]
+                new = float(self.settings.poll_minutes)
+                if new != prev and getattr(self, "on_poll_interval_change", None):
+                    try:
+                        self.on_poll_interval_change(new)  # type: ignore[attr-defined]
+                    except Exception:
+                        log.warning("on_poll_interval_change failed")
+            except Exception:
+                log.warning("workspace_settings load failed in poll_all")
         async with self._lock:
             started = utcnow()
             total_seen = total_new = 0

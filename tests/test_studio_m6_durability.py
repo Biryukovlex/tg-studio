@@ -7,6 +7,7 @@ from datetime import timedelta
 import pytest
 from pydantic_ai.ui.ag_ui import AGUIAdapter as RealAGUIAdapter
 
+from app import limits
 from app.config import Settings
 from app.studio.repository import MemoryStudioRepository, RunClaimLost, utcnow
 from app.studio.service import RunCoordinator, StudioService
@@ -109,14 +110,12 @@ async def test_provider_execution_continues_after_http_stream_disconnect(monkeyp
     monkeypatch.setattr(service_module, "AGUIAdapter", _SlowAdapter)
     repository = MemoryStudioRepository()
     conversation = await repository.create_conversation(channel_id=1)
-    service = StudioService(
-        repository,
-        Settings(
-            studio_enabled=True,
+    settings = Settings(
             studio_test_mode=True,
-            studio_run_heartbeat_seconds=0.05,
-        ),
-    )
+        )
+    monkeypatch.setattr(limits, "RUN_HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(limits, "RUN_LEASE_SECONDS", 60)
+    service = StudioService(repository, settings)
     run_id = uuid.uuid4()
 
     response = await service.stream_request(None, _payload(conversation["id"], run_id))
@@ -142,10 +141,10 @@ async def test_durable_cancel_is_seen_without_local_registry(monkeypatch):
     repository = MemoryStudioRepository()
     conversation = await repository.create_conversation(channel_id=1)
     settings = Settings(
-        studio_enabled=True,
         studio_test_mode=True,
-        studio_run_heartbeat_seconds=0.05,
     )
+    monkeypatch.setattr(limits, "RUN_HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(limits, "RUN_LEASE_SECONDS", 60)
     worker = StudioService(repository, settings)
     other_process = StudioService(repository, settings)
     run_id = uuid.uuid4()

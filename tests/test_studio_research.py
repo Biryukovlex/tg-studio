@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app import limits
 from app.config import Settings
 from app.studio.agent import StudioDeps, build_agent
 from app.studio.research import ResearchService
@@ -107,9 +108,10 @@ async def test_research_service_scopes_results_and_returns_source_backed_bundle(
 async def test_research_service_runs_agent_planned_query_variants():
     provider = FakeProvider()
     service = ResearchService(
-        Settings(studio_search_enabled=True, studio_search_max_queries=3),
+        Settings(studio_search_enabled=True),
         provider=provider,
         reader=FakeReader(),
+        max_queries=3,
     )
     result = await service.search(
         workspace_id="w",
@@ -131,7 +133,7 @@ async def test_research_service_runs_agent_planned_query_variants():
 @pytest.mark.asyncio
 async def test_research_service_bounds_queries_and_read_sources():
     provider = FakeProvider()
-    service = ResearchService(Settings(studio_search_enabled=True, studio_search_max_queries=2), provider=provider, reader=FakeReader(), max_sources=2)
+    service = ResearchService(Settings(studio_search_enabled=True), provider=provider, reader=FakeReader(), max_sources=2, max_queries=2)
     novel = await service.find_novel_topics(
         workspace_id="w", conversation_id="c", channel_id=1, topics=["one", "two", "three"], instruction="four"
     )

@@ -17,7 +17,6 @@ async def _login(client, settings):
 
 @pytest.mark.asyncio
 async def test_research_health_and_bootstrap_never_block_on_optional_search(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     settings.studio_search_enabled = True
     settings.studio_search_base_url = ""
@@ -37,7 +36,6 @@ async def test_research_health_and_bootstrap_never_block_on_optional_search(clie
 
 @pytest.mark.asyncio
 async def test_research_health_preserves_authentication(client, settings):
-    settings.studio_enabled = True
     response = await client.get("/studio/api/research/health", follow_redirects=False)
     assert response.status_code == 401
     body = response.json()

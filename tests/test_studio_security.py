@@ -65,11 +65,11 @@ async def test_openrouter_smoke_uses_configured_openai_compatible_boundary(monke
     monkeypatch.setattr("app.studio.provider.OpenAIProvider", FakeProvider)
     monkeypatch.setattr("app.studio.provider.Agent", FakeAgent)
 
+    monkeypatch.setattr("app.limits.OPENROUTER_BASE_URL", "https://example.test/v1")
     result = await run_openrouter_smoke(
         Settings(
             openrouter_api_key="secret-key",
             openrouter_model="openai/test-model",
-            openrouter_base_url="https://example.test/v1",
         )
     )
 

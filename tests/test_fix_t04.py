@@ -131,20 +131,20 @@ async def test_stats_last_poll_datetime_formatting():
     fake_db.kpis = AsyncMock(return_value={"posts": 1, "views": 100, "reactions": 5, "comments": 2, "shares": 1, "last_poll": datetime(2026, 9, 6, 12, 30, tzinfo=timezone.utc)})
     fake_db.get_channels = AsyncMock(return_value=[{"id": 1, "identifier": "@test"}])
     fake_db.latest_stats = AsyncMock(return_value=[])
-    settings = Settings(api_id=1, api_hash="h", session_string="s", channels="@test", admin_tg_ids="123")
+    settings = Settings(api_id=1, api_hash="h", session_string="s", channels="@test")
     collector = Collector(None, fake_db, settings)
     # need client mock for handlers
     client = AsyncMock()
     client.get_me = AsyncMock(return_value=MagicMock(id=999))
     handlers = CommandHandlers(client, collector, settings)
     handlers._me_id = 999
-    # create event
+    # create event - Saved Messages (outgoing, private, chat is owner)
     event = MagicMock()
     event.raw_text = "/stats"
     event.is_private = True
-    event.sender_id = 123
-    event.chat_id = 123
-    event.out = False
+    event.sender_id = 999
+    event.chat_id = 999
+    event.out = True
     event.reply = AsyncMock()
     await handlers._dispatch(event)
     # reply should have been called, check it contains formatted time "2026-09-06 12:30"
@@ -203,7 +203,7 @@ async def test_persisted_session_fallback(monkeypatch):
     # Simulate main startup: persisted unauthorized, env authorized
     persisted = "persisted_string"
     env = "env_string_different"
-    settings = Settings(api_id=123, api_hash="hash", session_string=env, channels="@test", postgres_enabled=False)
+    settings = Settings(api_id=123, api_hash="hash", session_string=env, channels="@test")
     # Mock PostgresDatabase.load and persist
     mock_db = MagicMock(spec=PostgresDatabase)
     mock_db.load_telegram_session = AsyncMock(return_value=persisted)
@@ -284,7 +284,7 @@ async def test_expire_stale_collection_jobs_in_memory():
 @pytest.mark.asyncio
 async def test_whoami_ignores_group():
     fake_db = MagicMock()
-    settings = Settings(api_id=1, api_hash="h", session_string="s", channels="@test", admin_tg_ids="123")
+    settings = Settings(api_id=1, api_hash="h", session_string="s", channels="@test")
     collector = Collector(None, fake_db, settings)
     client = AsyncMock()
     client.get_me = AsyncMock(return_value=MagicMock(id=999))
@@ -300,7 +300,7 @@ async def test_whoami_ignores_group():
     await handlers._dispatch(event)
     event.reply.assert_not_called()
 
-    # private whoami from non-admin should still reply, but not when out=True
+    # private whoami from non-admin should not reply (whoami removed)
     event2 = MagicMock()
     event2.raw_text = "/whoami"
     event2.is_private = True
@@ -309,10 +309,9 @@ async def test_whoami_ignores_group():
     event2.out = False
     event2.reply = AsyncMock()
     await handlers._dispatch(event2)
-    event2.reply.assert_called_once()
+    event2.reply.assert_not_called()
 
-    # Saved Messages (private, outgoing, chat is the owner) must keep working:
-    # the documented bootstrap flow sends /whoami to yourself.
+    # Saved Messages whoami also no longer replies (feature removed)
     event3 = MagicMock()
     event3.raw_text = "/whoami"
     event3.is_private = True
@@ -321,7 +320,7 @@ async def test_whoami_ignores_group():
     event3.out = True
     event3.reply = AsyncMock()
     await handlers._dispatch(event3)
-    event3.reply.assert_called_once()
+    event3.reply.assert_not_called()
 
     # An outgoing command in a group must never post the owner's id.
     event4 = MagicMock()
@@ -334,7 +333,7 @@ async def test_whoami_ignores_group():
     await handlers._dispatch(event4)
     event4.reply.assert_not_called()
 
-    # Admin commands from Saved Messages are still allowed.
+    # Saved Messages commands are still allowed.
     event5 = MagicMock()
     event5.raw_text = "/help"
     event5.is_private = True

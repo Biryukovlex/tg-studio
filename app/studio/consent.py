@@ -6,6 +6,8 @@ import hashlib
 import json
 from typing import Any
 
+from .. import limits
+
 
 CONSENT_VERSION = "m3.consent.v1"
 PROVIDER_NAME = "openrouter"
@@ -18,7 +20,7 @@ def configuration_fingerprint(settings, *, provider: str = PROVIDER_NAME) -> str
         "consent_version": CONSENT_VERSION,
         "provider": provider,
         "model": str(getattr(settings, "openrouter_model", "") or "").strip() or "openai/gpt-4o-mini",
-        "base_url": str(getattr(settings, "openrouter_base_url", "") or "").strip() or "https://openrouter.ai/api/v1",
+        "base_url": limits.OPENROUTER_BASE_URL,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 

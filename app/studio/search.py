@@ -21,6 +21,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
+from .. import limits
 from .search_health import configured_search_state
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -477,18 +478,18 @@ class SearXNGSearchProvider:
         self.settings = settings
         self._fixed_base_url = base_url is not None
         self.base_url = (base_url if base_url is not None else getattr(settings, "studio_search_base_url", "") or "").strip().rstrip("/")
-        self.timeout_seconds = max(0.2, min(float(timeout_seconds if timeout_seconds is not None else getattr(settings, "studio_search_timeout_seconds", 10.0)), 30.0))
-        self.retries = max(0, min(int(retries if retries is not None else getattr(settings, "studio_search_retries", 1)), 3))
-        self.max_results = max(1, min(int(max_results if max_results is not None else getattr(settings, "studio_search_max_results", 10)), 50))
-        self.max_queries = max(1, min(int(getattr(settings, "studio_search_max_queries", 3)), 8))
-        self.engines = _normalize_engines(getattr(settings, "studio_search_engines", ""))
-        self.allowed_engines = set(_normalize_engines(getattr(settings, "studio_search_allowed_engines", "")))
+        self.timeout_seconds = max(0.2, min(float(timeout_seconds if timeout_seconds is not None else limits.SEARCH_TIMEOUT_SECONDS), 30.0))
+        self.retries = max(0, min(int(retries if retries is not None else limits.SEARCH_RETRIES), 3))
+        self.max_results = max(1, min(int(max_results if max_results is not None else limits.SEARCH_MAX_RESULTS), 50))
+        self.max_queries = limits.SEARCH_MAX_QUERIES
+        self.engines = _normalize_engines(limits.SEARCH_ENGINES)
+        self.allowed_engines = set(_normalize_engines(limits.SEARCH_ALLOWED_ENGINES))
         self.blocked_domains = tuple(
             item.lower().lstrip(".")
             for item in str(getattr(settings, "studio_search_blocked_domains", "") or "").split(",")
             if item.strip()
         )
-        self.cache = cache or SearchCache(ttl_seconds=float(cache_ttl_seconds if cache_ttl_seconds is not None else getattr(settings, "studio_search_cache_ttl_seconds", 900)))
+        self.cache = cache or SearchCache(ttl_seconds=float(cache_ttl_seconds if cache_ttl_seconds is not None else limits.SEARCH_CACHE_TTL_SECONDS))
         self.transport = transport
         self.client = client
 
@@ -496,15 +497,9 @@ class SearXNGSearchProvider:
         return SearchResponse(query=query, provider=self.provider, degraded=True, warnings=(message,))
 
     async def search(self, query: SearchQuery | str, **kwargs: Any) -> SearchResponse:
-        # Settings are normally immutable for a process, but refreshing these
-        # values makes test/reload configuration changes fail closed instead of
-        # retaining a stale endpoint or bound.
+        # Settings base_url may change at runtime; other bounds are from limits.
         if self.settings is not None and not self._fixed_base_url:
             self.base_url = str(getattr(self.settings, "studio_search_base_url", self.base_url) or "").strip().rstrip("/")
-            self.max_results = max(1, min(int(getattr(self.settings, "studio_search_max_results", self.max_results)), 50))
-            self.retries = max(0, min(int(getattr(self.settings, "studio_search_retries", self.retries)), 3))
-            self.engines = _normalize_engines(getattr(self.settings, "studio_search_engines", self.engines))
-            self.allowed_engines = set(_normalize_engines(getattr(self.settings, "studio_search_allowed_engines", ",".join(self.allowed_engines))))
             self.blocked_domains = tuple(
                 item.strip().lower().lstrip(".")
                 for item in str(getattr(self.settings, "studio_search_blocked_domains", ",".join(self.blocked_domains)) or "").split(",")
@@ -701,7 +696,7 @@ class SearXNGSearchProvider:
 def build_search_provider(settings, *, cache: SearchCache | None = None, transport=None) -> SearchProvider:
     """Return a provider selected by server configuration, never by the browser."""
 
-    provider = str(getattr(settings, "studio_search_provider", "searxng") or "searxng").strip().lower()
+    provider = limits.SEARCH_PROVIDER
     if provider != "searxng":
         return DegradedSearchProvider(provider=provider, message="The configured search provider is not supported in this deployment.")
     if not bool(getattr(settings, "studio_search_enabled", False)):

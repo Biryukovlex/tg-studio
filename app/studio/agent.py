@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from pydantic_ai import Agent, ModelRetry, RunContext
 
+from .. import limits
 from .model import build_model
 from .prompts import SYSTEM_INSTRUCTIONS
 from .analytics import analyze_posts
@@ -385,7 +386,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             # again until the request budget is exhausted.
             "tool_choice": "required" if missing else ("none" if artifact_ready else "auto"),
             "parallel_tool_calls": True,
-            "timeout": max(1.0, float(settings.studio_provider_timeout_seconds)),
+            "timeout": max(1.0, float(limits.PROVIDER_TIMEOUT_SECONDS)),
         }
 
     def workflow_tool_visibility(ctx: RunContext[StudioDeps], tool_definition):
@@ -487,16 +488,16 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             f"{SYSTEM_INSTRUCTIONS}\n\nRuntime date: {datetime.now(timezone.utc).date().isoformat()} (UTC). "
             "Build freshness windows and date-bearing search queries from this date. "
             "Never substitute a different year from model memory.\n"
-            f"Run budget: {settings.studio_max_tool_calls} tool calls, {settings.studio_run_timeout_seconds:g} seconds, "
-            f"{settings.studio_max_output_tokens} cumulative output tokens. "
-            f"Queries per search_web: {min(settings.studio_search_max_queries, 12)}; results per query: {settings.studio_search_max_results}. "
-            f"Configured engine names (availability is not guaranteed): {settings.studio_search_allowed_engines or 'all provider engines'}. "
-            f"Default engines: {settings.studio_search_engines or 'provider defaults'}."
+            f"Run budget: {limits.MAX_TOOL_CALLS} tool calls, {limits.RUN_TIMEOUT_SECONDS:g} seconds, "
+            f"{limits.MAX_OUTPUT_TOKENS} cumulative output tokens. "
+            f"Queries per search_web: {limits.SEARCH_MAX_QUERIES}; results per query: {limits.SEARCH_MAX_RESULTS}. "
+            f"Configured engine names (availability is not guaranteed): {limits.SEARCH_ALLOWED_ENGINES or 'all provider engines'}. "
+            f"Default engines: {limits.SEARCH_ENGINES or 'provider defaults'}."
         ),
         model_settings=workflow_model_settings,
         retries=4,
-        tool_timeout=max(1.0, float(settings.studio_tool_timeout_seconds)),
-        max_concurrency=max(1, int(settings.studio_tool_concurrency)),
+        tool_timeout=max(1.0, float(limits.TOOL_TIMEOUT_SECONDS)),
+        max_concurrency=max(1, int(limits.TOOL_CONCURRENCY)),
     )
 
     @agent.output_validator
@@ -525,8 +526,8 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             performance_rows = await reader(ctx.deps.channel_id)
             _check_cancel(ctx)
         assembler = ContextAssembler(
-            max_chars=int(getattr(settings, "studio_context_max_chars", 18_000)),
-            max_evidence_posts=int(getattr(settings, "studio_max_evidence_posts", 20)),
+            max_chars=int(limits.CONTEXT_MAX_CHARS),
+            max_evidence_posts=int(limits.MAX_EVIDENCE_POSTS),
         )
         profile_getter = getattr(ctx.deps.repository, "get_profile", None)
         profile = await profile_getter(ctx.deps.channel_id) if profile_getter is not None else None
@@ -591,8 +592,8 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         conversation_getter = getattr(ctx.deps.repository, "get_conversation", None)
         conversation = await conversation_getter(ctx.deps.conversation_id) if conversation_getter is not None else None
         return ContextAssembler(
-            max_chars=int(getattr(settings, "studio_context_max_chars", 18_000)),
-            max_evidence_posts=int(getattr(settings, "studio_max_evidence_posts", 20)),
+            max_chars=int(limits.CONTEXT_MAX_CHARS),
+            max_evidence_posts=int(limits.MAX_EVIDENCE_POSTS),
         ).assemble_from_rows(
             raw,
             rows,

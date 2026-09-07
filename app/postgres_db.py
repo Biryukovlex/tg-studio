@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from . import limits
 from .db_session import DatabaseSessionManager, normalize_database_url
 from .telegram_formatting import normalize_entities
 
@@ -50,6 +51,7 @@ class PostgresDatabase:
         self.database_url = normalize_database_url(database_url)
         self.workspace_slug = workspace_slug.strip() or "community"
         self.workspace_id: uuid.UUID | None = None
+        self.active_channel_count: int | None = None
         self.user_id: uuid.UUID | None = None
         self.sessions = DatabaseSessionManager(
             self.database_url,
@@ -63,11 +65,11 @@ class PostgresDatabase:
     def from_settings(cls, settings) -> "PostgresDatabase":
         return cls(
             settings.database_url,
-            workspace_slug=settings.local_workspace_slug,
-            pool_size=settings.database_pool_size,
-            max_overflow=settings.database_max_overflow,
-            pool_timeout=settings.database_pool_timeout,
-            pool_recycle=settings.database_pool_recycle,
+            workspace_slug=limits.WORKSPACE_SLUG,
+            pool_size=limits.DATABASE_POOL_SIZE,
+            max_overflow=limits.DATABASE_MAX_OVERFLOW,
+            pool_timeout=limits.DATABASE_POOL_TIMEOUT,
+            pool_recycle=limits.DATABASE_POOL_RECYCLE,
         )
 
     async def init_db(self, *, admin_username: str = "admin", workspace_name: str = "Community") -> None:
@@ -276,7 +278,82 @@ class PostgresDatabase:
             """SELECT id, workspace_id, identifier, title, chat_id, active
                FROM channels WHERE workspace_id=:workspace_id AND active=true ORDER BY id"""
         )
-        return [dict(row) for row in result.mappings().all()]
+        rows = [dict(row) for row in result.mappings().all()]
+        # Studio readiness reads this count synchronously; the collector and the
+        # dashboard refresh it on every call, so it never goes stale for long.
+        self.active_channel_count = len(rows)
+        return rows
+
+    async def add_channel(self, identifier: str) -> int:
+        # Normalize identifier: strip, ensure non-empty, basic validation
+        ident = identifier.strip()
+        if not ident:
+            raise ValueError("Channel identifier must not be empty")
+        # Basic validation matching T23 spec: @name, t.me/name, or -100...
+        # We keep it permissive but reject strings with spaces
+        if " " in ident:
+            raise ValueError("Channel identifier must not contain spaces")
+        # Insert with chat_id NULL so next poll resolves it; reactivate if inactive
+        row = (
+            await self._execute(
+                """INSERT INTO channels(workspace_id, identifier, title, chat_id, active, created_at)
+                   VALUES (:workspace_id, :identifier, '', NULL, true, now())
+                   ON CONFLICT (workspace_id, identifier) DO UPDATE SET active=true
+                   RETURNING id""",
+                {"identifier": ident},
+            )
+        ).first()
+        assert row is not None
+        await self.get_channels()
+        return int(row[0])
+
+    async def deactivate_channel(self, channel_id: int) -> bool:
+        result = await self._execute(
+            """UPDATE channels SET active=false
+               WHERE workspace_id=:workspace_id AND id=:channel_id AND active=true""",
+            {"channel_id": channel_id},
+        )
+        await self.get_channels()
+        return bool(result.rowcount and result.rowcount > 0)
+
+    async def telegram_connection_secrets(self, label: str, *, cipher) -> dict[str, Any] | None:
+        """Server-side read of the stored connection so a partial edit can be merged.
+
+        Never expose the result to a template or an API response.
+        """
+        row = (
+            await self._execute(
+                """SELECT api_id, api_hash, encrypted_session FROM telegram_connections
+                   WHERE workspace_id=:workspace_id AND label=:label""",
+                {"label": label},
+            )
+        ).mappings().first()
+        if not row:
+            return None
+        session_string = None
+        if row["encrypted_session"] is not None and cipher is not None:
+            try:
+                session_string = cipher.decrypt(bytes(row["encrypted_session"]))
+            except Exception:  # noqa: BLE001 - a rotated key means the session is unusable
+                session_string = None
+        return {"api_id": row["api_id"], "api_hash": row["api_hash"], "session_string": session_string}
+
+    async def telegram_connection_status(self, label: str) -> dict[str, Any]:
+        row = (
+            await self._execute(
+                """SELECT api_id, encrypted_session, updated_at, status FROM telegram_connections
+                   WHERE workspace_id=:workspace_id AND label=:label""",
+                {"label": label},
+            )
+        ).mappings().first()
+        if not row:
+            return {"configured": False, "api_id": None, "has_session": False, "updated_at": None}
+        d = dict(row)
+        has_session = bool(d.get("encrypted_session"))
+        api_id = d.get("api_id")
+        updated_at = d.get("updated_at")
+        configured = bool(api_id and has_session)
+        return {"configured": configured, "api_id": api_id, "has_session": has_session, "updated_at": updated_at}
 
     # ---------- posts / snapshots ----------
 

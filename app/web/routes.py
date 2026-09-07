@@ -37,6 +37,7 @@ from ..studio.routes import _public_event_payload as _filter_event_payload
 from ..studio.routes import build_router as build_studio_router
 from ..studio.repository import MemoryStudioRepository, RunNotFound, StudioRepository
 from ..studio.service import StudioService
+from .settings_routes import router as settings_router
 
 log = logging.getLogger("web")
 
@@ -217,7 +218,7 @@ def _load_or_create_secret(settings: Settings) -> str:
     return key
 
 
-def create_app(collector: Collector, settings: Settings) -> FastAPI:
+def create_app(collector: Collector, settings: Settings, workspace_settings=None) -> FastAPI:
     db = collector.db
     app = FastAPI(title="TG Studio", docs_url=None, redoc_url=None)
     app.add_middleware(
@@ -237,6 +238,7 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     )
     app.state.workspace_context = db_context
     app.state.settings = settings
+    app.state.workspace_settings = workspace_settings
     app.state.db = db
     studio_repository = StudioRepository(db) if getattr(db, "is_postgres", False) else MemoryStudioRepository()
     app.state.studio_repository = studio_repository
@@ -250,8 +252,17 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     templates.env.globals["asset_version"] = static_asset_version()
     _studio_templates.env.globals["asset_version"] = static_asset_version()
     _studio_templates.env.globals["app_name"] = "TG Studio"
+    # Settings page needs the same globals
+    from .settings_routes import templates as _settings_templates
+
+    _settings_templates.env.filters["num"] = _num
+    _settings_templates.env.filters["dt"] = _dt
+    _settings_templates.env.globals["app_name"] = "TG Studio"
+    _settings_templates.env.globals["asset_version"] = static_asset_version()
 
     def render(request: Request, name: str, ctx: dict, status_code: int = 200):
+        # can_manage_settings is owner-only, used for sidebar link
+        ctx.setdefault("can_manage_settings", getattr(request.app.state.workspace_context, "role", "") == "owner")
         ctx.update({"request": request})
         return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 
@@ -267,6 +278,7 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     # Keep auth/CSRF and service wiring in one production Studio router.
     app.state.csrf_token = csrf_token
     app.include_router(build_studio_router())
+    app.include_router(settings_router)
 
     # ---------------- auth ----------------
 
@@ -323,24 +335,18 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     async def studio_spike_compat(request: Request):
         """Redirect the M0 URL to the durable M2 Studio surface."""
         require_auth(request)
-        if not settings.studio_enabled:
-            raise HTTPException(status_code=404, detail="Studio is disabled")
         return RedirectResponse("/studio", status_code=307)
 
     @app.post("/studio-spike/api/agent")
     async def studio_spike_agent_compat(request: Request):
         """Accept one release cycle of clients that still use the M0 path."""
         require_auth(request)
-        if not settings.studio_enabled:
-            raise HTTPException(status_code=404, detail="Studio is disabled")
         require_csrf(request)
         return await app.state.studio_service.stream_request(request, await request.body())
 
     @app.post("/studio-spike/api/runs/{run_id}/cancel")
     async def studio_spike_cancel_compat(request: Request, run_id: str):
         require_auth(request)
-        if not settings.studio_enabled:
-            raise HTTPException(status_code=404, detail="Studio is disabled")
         require_csrf(request)
         try:
             parsed = uuid.UUID(run_id)
@@ -356,8 +362,6 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     @app.get("/studio-spike/api/runs/{run_id}/events")
     async def studio_spike_events_compat(request: Request, run_id: str, after: int = 0):
         require_auth(request)
-        if not settings.studio_enabled:
-            raise HTTPException(status_code=404, detail="Studio is disabled")
         try:
             parsed = uuid.UUID(run_id)
         except ValueError:

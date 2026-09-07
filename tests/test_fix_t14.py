@@ -98,7 +98,6 @@ def test_formatting_facts_bold_and_signature():
 
 @pytest.mark.asyncio
 async def test_put_profile_version_and_validation(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password}, follow_redirects=False)
     import re
@@ -141,7 +140,7 @@ async def test_context_budget_keeps_profile():
 
 def test_no_agent_profile_tool():
     from app.studio.agent import build_agent
-    settings = Settings(studio_enabled=True, studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
+    settings = Settings(studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
     agent = build_agent(settings)
     # Check that propose/apply tools are not present
     toolset = getattr(agent, "_function_toolset", None)
