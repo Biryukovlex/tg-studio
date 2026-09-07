@@ -86,7 +86,11 @@ The artifact body is ONLY the publication text for channel readers. Never put
 research process notes, tool failures, inaccessible-site reports, confidence
 labels, evidence-review comments, or messages to the owner inside the post.
 Keep those in structured warnings/assumptions or a concise chat explanation.
-Ordinary reader-facing source links may be included. Before saving, inspect
+Link a source inline on the words it supports, as [text](https://url), only
+when the channel profile or the story calls for a reader-facing link. Never
+append a list or section of sources, references, or links at the end of the
+post: sources are stored on the artifact through source_ids and shown beside
+it, and the application removes such a trailing list. Before saving, inspect
 the complete body and remove your editorial/service commentary. The same rule
 applies to revisions and titles. Do not present unsupported facts as certain;
 omit them or ask the owner in chat if they are essential.

@@ -166,8 +166,44 @@ def _require_publication_text(body: str) -> None:
         raise ModelRetry("Remove service/research-process commentary from the post body. Put limitations in warnings or the chat, and retry with publication text only.")
 
 
+_SOURCE_LIST_HEADER = re.compile(
+    r"^\s*(?:\*\*|__)?\s*(?:sources?|references?|links?|источники?|ссылки|материалы|подробнее)\s*(?:\*\*|__)?\s*[:：—–-]?\s*$",
+    re.I,
+)
+_SOURCE_LIST_LINE = re.compile(r"https?://|\]\(https?://", re.I)
+
+
+def _strip_trailing_source_list(body: str) -> tuple[str, bool]:
+    """Remove a trailing "Sources:" block; sources live on the artifact, not in the post.
+
+    A block is removed only when it sits at the end, opens with a header such
+    as "Sources:" or "Источники:", and every following line carries a link.
+    Inline links inside the prose are untouched.
+    """
+
+    paragraphs = re.split(r"\n\s*\n", str(body or "").strip())
+    removed = False
+    while paragraphs:
+        lines = [line for line in paragraphs[-1].splitlines() if line.strip()]
+        if not lines:
+            paragraphs.pop()
+            continue
+        header, rest = lines[0], lines[1:]
+        header_only = _SOURCE_LIST_HEADER.match(header)
+        inline_header = re.match(r"^\s*(?:\*\*|__)?\s*(?:sources?|references?|links?|источники?|ссылки)\s*(?:\*\*|__)?\s*[:：—–-]\s*\S", header, re.I)
+        is_list = bool(
+            (header_only and rest and all(_SOURCE_LIST_LINE.search(line) for line in rest))
+            or (inline_header and _SOURCE_LIST_LINE.search(header) and all(_SOURCE_LIST_LINE.search(line) for line in rest))
+        )
+        if not is_list:
+            break
+        paragraphs.pop()
+        removed = True
+    return "\n\n".join(paragraphs).strip(), removed
+
+
 def _clean_publication_text(body: str) -> tuple[str, bool]:
-    """Drop standalone service-note paragraphs without rewriting publication prose."""
+    """Drop service-note paragraphs and a trailing source list without rewriting prose."""
 
     parts = re.split(r"(\n\s*\n)", str(body or ""))
     kept: list[str] = []
@@ -178,8 +214,8 @@ def _clean_publication_text(body: str) -> tuple[str, bool]:
             continue
         if kept or part.strip():
             kept.append(part)
-    cleaned = "".join(kept).strip()
-    return cleaned, removed
+    cleaned, removed_sources = _strip_trailing_source_list("".join(kept).strip())
+    return cleaned, removed or removed_sources
 
 
 def _require_predecessors(ctx: RunContext[StudioDeps], tool_name: str) -> None:
@@ -871,7 +907,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         )
         normalized_warnings = list(warnings or [])
         if removed_commentary:
-            normalized_warnings.append("Service commentary was removed from the publication text.")
+            normalized_warnings.append("Service commentary or a trailing source list was removed from the publication text; sources stay on the artifact.")
         creator = getattr(ctx.deps.repository, "create_draft", None)
         if creator is None:
             return {"status": "blocked", "error": {"code": "draft_unavailable", "message": "Draft persistence is unavailable."}}
@@ -948,7 +984,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         )
         normalized_warnings = list(warnings if warnings is not None else current.get("warnings") or [])
         if removed_commentary:
-            normalized_warnings.append("Service commentary was removed from the publication text.")
+            normalized_warnings.append("Service commentary or a trailing source list was removed from the publication text; sources stay on the artifact.")
         # Use normalized claims only when body changed; otherwise keep current
         if body != current.get("body"):
             claim_support_value = normalized_claims

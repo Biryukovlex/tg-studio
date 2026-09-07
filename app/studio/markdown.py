@@ -83,10 +83,9 @@ def render_markdown_html(body: str) -> str:
             rendered_lines.append(f"<blockquote>{inner}</blockquote>")
         else:
             rendered_lines.append(_render_inline_html(line))
-    # Join with newline - Telegram preserves \n; for HTML copy we use \n as well
-    # Spec says single newlines as line breaks; we keep \n (Telegram will treat as line break)
-    # For HTML clipboard, we keep as \n inside <b> etc - but also could use <br>? Keep \n.
-    return "\n".join(rendered_lines)
+    # This HTML is a clipboard payload. Bare newlines collapse to spaces when
+    # pasted as HTML, so line breaks must be explicit <br> tags.
+    return "<br>".join(rendered_lines)
 
 
 def _render_inline_html(line: str) -> str:
@@ -113,7 +112,7 @@ def _render_inline_html(line: str) -> str:
         else:
             return label
 
-    line = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", link_repl, line)
+    line = re.sub(r"\[([^\]]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)", link_repl, line)
 
     # Handle bold: **bold**
     line = re.sub(r"\*\*([^*]+)\*\*", lambda m: f"<b>{html.escape(m.group(1), quote=False)}</b>", line)
@@ -179,7 +178,7 @@ def render_markdown_plain(body: str) -> str:
             else:
                 return label
 
-        line = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", plain_link, line)
+        line = re.sub(r"\[([^\]]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)", plain_link, line)
         plain_lines.append(line)
     return "\n".join(plain_lines)
 

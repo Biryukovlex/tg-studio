@@ -28,6 +28,7 @@ import {
   StudioApiError,
 } from "./api";
 import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
+import { copyRichText, htmlFromMarkdown, plainFromMarkdown } from "./markdownCopy";
 import ChannelProfileDialog from "./ChannelProfileDialog";
 import "./styles.css";
 
@@ -292,26 +293,6 @@ function StudioSettings({ onClose }: { onClose: () => void }) {
   </dialog>;
 }
 
-function plainFromMarkdown(text: string): string {
-  let t = text.replace(/`([^`]+)`/g, "$1");
-  t = t.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
-  t = t.replace(/^\s*#{1,6}\s+/gm, "");
-  t = t.replace(/<[a-zA-Z\/][^>]*>/g, "");
-  t = t.replace(/\*\*([^*]+)\*\*/g, "$1");
-  t = t.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "$1");
-  t = t.replace(/~~([^~]+)~~/g, "$1");
-  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, url: string) => {
-    const safe = url.trim().toLowerCase().startsWith("http://") || url.trim().toLowerCase().startsWith("https://") ? url.trim() : null;
-    if (safe) {
-      if (label.trim() === safe.trim()) return label;
-      return `${label} (${safe})`;
-    }
-    return label;
-  });
-  t = t.split("\n").map((line) => line.replace(/^\s*>\s?/, "")).join("\n");
-  return t;
-}
-
 function renderInlineMarkdown(line: string, key: number) {
   let text = line.replace(/!\[([^\]]*)\]\([^)]*\)/g, "");
   text = text.replace(/<[a-zA-Z\/][^>]*>/g, "");
@@ -524,51 +505,32 @@ function DraftPanel({
 
   const copy = async () => {
     if (!draft || draft.over_limit) return;
+    // Both flavours come from the local Markdown source, so what is copied is
+    // exactly what the editor shows, saved or not.
+    const plain = plainFromMarkdown(draft.body);
+    const html = htmlFromMarkdown(draft.body);
     try {
-      // Use the authoritative plain/html from the copy endpoint when available.
-      let plain = (draft as unknown as { body_plain?: string }).body_plain ?? plainFromMarkdown(draft.body);
-      let htmlBody = (draft as unknown as { body_html?: string }).body_html ?? "";
-      if (saveState === "saved") {
-        try {
-          const result = await api<{ copied_text: string; copied_html: string }>(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } });
-          plain = result.copied_text;
-          htmlBody = result.copied_html;
-        } catch {
-          // fallback to local plain/html
+      // Synchronous rich copy inside the click gesture first; the async
+      // Clipboard API is only a fallback because Safari rejects it after an
+      // await and some browsers or plain-HTTP origins do not offer it at all.
+      let done = copyRichText(plain, html);
+      if (!done) {
+        const clip = navigator.clipboard as unknown as { write?: (items: unknown[]) => Promise<void>; writeText?: (text: string) => Promise<void> } | undefined;
+        const ClipboardItemCtor = (window as unknown as { ClipboardItem?: new (items: Record<string, Blob>) => unknown }).ClipboardItem;
+        if (clip?.write && ClipboardItemCtor) {
+          await clip.write([new ClipboardItemCtor({ "text/plain": new Blob([plain], { type: "text/plain" }), "text/html": new Blob([html], { type: "text/html" }) })]);
+          done = true;
+        } else if (clip?.writeText) {
+          await clip.writeText(plain);
+          done = true;
         }
       }
-      // Try rich clipboard with both html and plain
-      const canRich = typeof navigator !== "undefined" && (navigator.clipboard as unknown as { write?: unknown })?.write && typeof (window as unknown as { ClipboardItem?: unknown }).ClipboardItem !== "undefined";
-      if (canRich) {
-        const ClipboardItemCtor = (window as unknown as { ClipboardItem: new (items: Record<string, Blob>) => unknown }).ClipboardItem;
-        const item = new ClipboardItemCtor({
-          "text/plain": new Blob([plain], { type: "text/plain" }),
-          "text/html": new Blob([htmlBody || plain], { type: "text/html" }),
-        });
-        await (navigator.clipboard as unknown as { write: (items: unknown[]) => Promise<void> }).write([item]);
-      } else if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(plain);
-        // If html available and plain fallback, also try to write html via execCommand fallback is plain only.
-        if (htmlBody && plain !== htmlBody) {
-          // plain fallback already done
-        }
-      } else {
-        const node = document.createElement("textarea");
-        node.value = plain;
-        node.style.position = "fixed";
-        node.style.opacity = "0";
-        document.body.appendChild(node);
-        node.select();
-        const success = document.execCommand("copy");
-        node.remove();
-        if (!success) throw new Error("Clipboard unavailable");
-      }
-      if (saveState !== "saved") {
-        // Still mark as copied for UI, but don't call endpoint if not saved - already handled plain
-      }
+      if (!done) throw new Error("Clipboard unavailable");
       setCopied(true);
       setDraft((current) => current ? { ...current, copied_at: new Date().toISOString() } : current);
       window.setTimeout(() => setCopied(false), 2200);
+      // Record the copy on the saved revision; failures here must not undo a successful copy.
+      if (saveState === "saved") void api(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } }).catch(() => undefined);
     } catch {
       setSaveState("error");
     }
