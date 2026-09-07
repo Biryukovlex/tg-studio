@@ -754,22 +754,23 @@ def build_router() -> APIRouter:
             return _safe_error("invalid_draft", "Draft details are invalid.", status_code=422)
         service = _service(request)
         try:
-            if payload.restore_version is not None:
-                row = await service.repository.restore_draft_version(
+            chosen = payload.choose_version if payload.choose_version is not None else payload.restore_version
+            if chosen is not None:
+                row = await service.repository.choose_draft_version(
                     draft_id=parsed,
-                    version=payload.restore_version,
+                    version=chosen,
                     expected_revision=payload.expected_revision,
-                    instruction=f"Restored version {payload.restore_version}",
                 )
             else:
-                values = payload.model_dump(exclude={"expected_revision", "restore_version"}, exclude_none=True)
+                values = payload.model_dump(exclude={"expected_revision", "restore_version", "choose_version", "save_as_new_version"}, exclude_none=True)
                 row = await service.repository.save_draft(
                     draft_id=parsed,
                     payload=values,
                     expected_revision=payload.expected_revision,
+                    new_version=bool(payload.save_as_new_version),
                 )
         except DraftConflictError as exc:
-            local = {key: value for key, value in payload.model_dump(exclude={"expected_revision", "restore_version"}, exclude_none=True).items()}
+            local = {key: value for key, value in payload.model_dump(exclude={"expected_revision", "restore_version", "choose_version", "save_as_new_version"}, exclude_none=True).items()}
             return JSONResponse(
                 {
                     "error": {"code": exc.code, "message": str(exc), "retryable": True},

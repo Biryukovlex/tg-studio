@@ -53,7 +53,7 @@ import pytest as _pytest
 
 
 @_pytest.mark.asyncio
-async def test_restore_identical_version_does_not_mint_a_new_version():
+async def test_restore_alias_moves_the_pointer_and_never_mints_a_version():
     from app.studio.repository import MemoryStudioRepository
 
     repo = MemoryStudioRepository()
@@ -62,11 +62,10 @@ async def test_restore_identical_version_does_not_mint_a_new_version():
     v2 = await repo.update_draft(draft_id=draft["id"], payload={"body": "v2 body"}, expected_revision=draft["revision"], origin="user_edit")
     assert v2["current_version"] == 2
     restored = await repo.restore_draft_version(draft_id=draft["id"], version=1, expected_revision=v2["revision"])
-    assert restored["body"] == "v1 body" and restored["current_version"] == 3
-    # Restoring v1 again (identical to the current text) returns the current row unchanged.
+    assert restored["body"] == "v1 body" and restored["current_version"] == 1
     again = await repo.restore_draft_version(draft_id=draft["id"], version=1, expected_revision=restored["revision"])
-    assert again["current_version"] == 3
-    assert len(await repo.list_draft_versions(draft_id=draft["id"])) == 3
+    assert again["current_version"] == 1 and again["revision"] == restored["revision"]
+    assert len(await repo.list_draft_versions(draft_id=draft["id"])) == 2
 
 
 def test_revision_requests_are_recognised_in_both_languages():

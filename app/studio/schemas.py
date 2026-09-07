@@ -46,6 +46,11 @@ class DraftPatchRequest(BaseModel):
     warnings: list[str] | None = Field(default=None, max_length=40)
     confidence: Literal["high", "medium", "low"] | None = None
     creative: bool | None = None
+    # Owner save modes: overwrite the current version (default) or append one.
+    save_as_new_version: bool = False
+    # Make an existing version current without creating a new one.
+    choose_version: int | None = Field(default=None, ge=1)
+    # Compatibility alias for choose_version.
     restore_version: int | None = Field(default=None, ge=1)
 
 

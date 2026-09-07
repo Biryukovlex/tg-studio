@@ -62,7 +62,7 @@ async def test_draft_get_patch_conflict_versions_and_exact_copy(client, app, set
     assert fetched.json()["draft"]["body"] == "Line one\n\nLine two"
     patch = await client.patch(
         f"/studio/api/drafts/{draft['id']}",
-        json={"expected_revision": 1, "body": "Edited 🙂\nsecond"},
+        json={"expected_revision": 1, "body": "Edited 🙂\nsecond", "save_as_new_version": True},
         headers={"x-csrf-token": token},
     )
     assert patch.status_code == 200
@@ -79,14 +79,16 @@ async def test_draft_get_patch_conflict_versions_and_exact_copy(client, app, set
     assert conflict.json()["local_draft"]["body"] == "Local stale text"
     restored = await client.patch(
         f"/studio/api/drafts/{draft['id']}",
-        json={"expected_revision": current["revision"], "restore_version": 1},
+        json={"expected_revision": current["revision"], "choose_version": 1},
         headers={"x-csrf-token": token},
     )
     assert restored.status_code == 200
     assert restored.json()["draft"]["body"] == "Line one\n\nLine two"
     versions = await client.get(f"/studio/api/drafts/{draft['id']}/versions")
     assert versions.status_code == 200
-    assert [item["version"] for item in versions.json()["versions"]] == [1, 2, 3]
+    # Choose moves the current pointer back to v1; it does not mint a version.
+    assert [item["version"] for item in versions.json()["versions"]] == [1, 2]
+    assert restored.json()["draft"]["current_version"] == 1
     copied = await client.post(f"/studio/api/drafts/{draft['id']}/copied", headers={"x-csrf-token": token})
     assert copied.status_code == 200
     assert copied.json()["copied_text"] == "Line one\n\nLine two"
@@ -125,10 +127,10 @@ async def test_generated_candidate_is_visible_without_replacing_owner_edit(clien
         payload={"body": "model candidate"},
         instruction="Try a tighter version.",
     )
-    assert candidate["preserved_user_edit"] is True
+    assert candidate["current_version_origin"] == "regenerated"
     current = await client.get(f"/studio/api/drafts/{draft['id']}")
     assert current.status_code == 200
-    assert current.json()["draft"]["body"] == owner["body"]
+    assert current.json()["draft"]["body"] == "model candidate"
     versions = await client.get(f"/studio/api/drafts/{draft['id']}/versions")
     assert versions.status_code == 200
     assert versions.json()["versions"][-1]["body"] == "model candidate"

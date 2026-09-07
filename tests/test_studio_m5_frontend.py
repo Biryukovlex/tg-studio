@@ -25,7 +25,7 @@ def test_m5_artifact_panel_contract_is_built_and_responsive():
     assert "Array.from(draft.body).length" in source or "plainFromMarkdown" in source or "character_count" in source
     assert "postText" not in source
     assert "draft_conflict" in source or "Keep my text" in source
-    assert "Restore" in source and "Source" in source
+    assert "Choose" in source and "Save as new version" in source and "Source" in source
     assert "studio-draft.is-open" in styles
     assert "prefers-reduced-motion" in styles
     assert "Copy post" in bundle

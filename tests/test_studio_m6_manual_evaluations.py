@@ -102,6 +102,7 @@ async def test_manual_draft_and_revision_sets_keep_grounding_and_owner_edits():
         draft_id=draft["id"],
         payload={"body": "Owner's manual edit remains authoritative."},
         expected_revision=draft["revision"],
+        new_version=True,
     )
     candidates = []
     for index in range(1, 21):
@@ -121,11 +122,14 @@ async def test_manual_draft_and_revision_sets_keep_grounding_and_owner_edits():
         )
         candidates.append(candidate)
     assert len(candidates) == 20
-    assert all(item["preserved_user_edit"] is True for item in candidates)
+    assert all(item["current_version_origin"] == "regenerated" for item in candidates)
     current = await repository.get_current_draft(
         conversation_id=conversation["id"], channel_id=1
     )
-    assert current and current["body"] == owner["body"]
+    # The latest agent revision is current; the owner's version is retained.
+    assert current and current["body"] == candidates[-1]["body"]
+    kept = await repository.list_draft_versions(draft_id=draft["id"])
+    assert any(item["body"] == owner["body"] and item["origin"] == "user_edit" for item in kept)
     versions = await repository.list_draft_versions(draft_id=draft["id"])
     assert len(versions) == 22  # initial + owner edit + 20 generated candidates
     assert versions[1]["origin"] == "user_edit"

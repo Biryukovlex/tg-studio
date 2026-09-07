@@ -177,8 +177,8 @@ class StudioRepositoryProtocol(Protocol):
     async def create_draft(self, *, conversation_id: uuid.UUID, channel_id: int, payload: dict[str, Any], origin: str = "generated", instruction: str = "") -> dict[str, Any]: ...
     async def get_draft(self, draft_id: uuid.UUID, *, conversation_id: uuid.UUID | None = None, channel_id: int | None = None) -> dict[str, Any] | None: ...
     async def get_current_draft(self, *, conversation_id: uuid.UUID, channel_id: int) -> dict[str, Any] | None: ...
-    async def update_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int | None = None, origin: str = "user_edit", instruction: str = "") -> dict[str, Any]: ...
-    async def save_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int, instruction: str = "") -> dict[str, Any]: ...
+    async def update_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int | None = None, origin: str = "user_edit", instruction: str = "", new_version: bool = True) -> dict[str, Any]: ...
+    async def save_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int, instruction: str = "", new_version: bool = False) -> dict[str, Any]: ...
     async def revise_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], instruction: str = "") -> dict[str, Any]: ...
     async def list_draft_versions(
         self,
@@ -188,6 +188,7 @@ class StudioRepositoryProtocol(Protocol):
         channel_id: int | None = None,
     ) -> list[dict[str, Any]]: ...
     async def restore_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int, instruction: str = "") -> dict[str, Any]: ...
+    async def choose_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int) -> dict[str, Any]: ...
     async def mark_draft_copied(self, *, draft_id: uuid.UUID) -> dict[str, Any]: ...
     async def persist_research_bundle(self, *, conversation_id: uuid.UUID, channel_id: int, bundle: dict[str, Any]) -> dict[str, int]: ...
     async def get_research_bundle(self, *, conversation_id: uuid.UUID, channel_id: int) -> dict[str, Any] | None: ...
@@ -926,7 +927,15 @@ class StudioRepository:
         expected_revision: int | None = None,
         origin: str = "user_edit",
         instruction: str = "",
+        new_version: bool = True,
     ) -> dict[str, Any]:
+        """Write a draft.
+
+        ``new_version=True`` appends an immutable version and makes it current
+        (agent output, or the owner's "Save as new version"). ``False``
+        overwrites the body of the current version in place (the owner's plain
+        "Save"); no version row is created.
+        """
         draft_id = _draft_uuid(draft_id)
         origin = self._draft_origin(origin)
         workspace_id = self.workspace_id
@@ -949,46 +958,49 @@ class StudioRepository:
                 payload=merged,
             )
             values = _draft_values(merged, known_source_ids=known, require_sources=not bool(merged.get("creative", False)))
-            next_version = int(current.get("current_version") or 1)
-            max_version = (
-                await session.execute(
-                    text("SELECT COALESCE(MAX(version), 0) FROM studio_draft_versions WHERE workspace_id=:workspace_id AND draft_id=:draft_id"),
-                    {"workspace_id": workspace_id, "draft_id": draft_id},
-                )
-            ).scalar_one()
-            next_version = max(next_version, int(max_version or 0)) + 1
-            await session.execute(
-                text(
-                    """INSERT INTO studio_draft_versions(
-                               workspace_id, draft_id, version, body, origin, instruction, character_count
-                           ) VALUES (:workspace_id, :draft_id, :version, :body, :origin, :instruction, :character_count)"""
-                ),
-                {
-                    "workspace_id": workspace_id,
-                    "draft_id": draft_id,
-                    "version": next_version,
-                    "body": values["body"],
-                    "origin": origin,
-                    "instruction": str(instruction or "")[:4_000],
-                    "character_count": values["character_count"],
-                },
-            )
-            preserved = origin in {"generated", "regenerated"} and current.get("current_version_origin") == "user_edit"
-            if preserved:
+            current_version = int(current.get("current_version") or 1)
+            if new_version:
+                max_version = (
+                    await session.execute(
+                        text("SELECT COALESCE(MAX(version), 0) FROM studio_draft_versions WHERE workspace_id=:workspace_id AND draft_id=:draft_id"),
+                        {"workspace_id": workspace_id, "draft_id": draft_id},
+                    )
+                ).scalar_one()
+                next_version = max(current_version, int(max_version or 0)) + 1
                 await session.execute(
                     text(
-                        """UPDATE studio_drafts SET updated_at=now()
-                            WHERE workspace_id=:workspace_id AND id=:draft_id"""
+                        """INSERT INTO studio_draft_versions(
+                                   workspace_id, draft_id, version, body, origin, instruction, character_count
+                               ) VALUES (:workspace_id, :draft_id, :version, :body, :origin, :instruction, :character_count)"""
                     ),
-                    {"workspace_id": workspace_id, "draft_id": draft_id},
+                    {
+                        "workspace_id": workspace_id,
+                        "draft_id": draft_id,
+                        "version": next_version,
+                        "body": values["body"],
+                        "origin": origin,
+                        "instruction": str(instruction or "")[:4_000],
+                        "character_count": values["character_count"],
+                    },
                 )
-                await session.commit()
-                result = dict(current)
-                result["updated_at"] = _iso(utcnow())
-                result["candidate_version"] = next_version
-                result["candidate_body"] = values["body"]
-                result["preserved_user_edit"] = True
-                return result
+            else:
+                next_version = current_version
+                await session.execute(
+                    text(
+                        """UPDATE studio_draft_versions
+                              SET body=:body, origin=:origin, instruction=:instruction, character_count=:character_count
+                            WHERE workspace_id=:workspace_id AND draft_id=:draft_id AND version=:version"""
+                    ),
+                    {
+                        "workspace_id": workspace_id,
+                        "draft_id": draft_id,
+                        "version": next_version,
+                        "body": values["body"],
+                        "origin": origin,
+                        "instruction": str(instruction or "")[:4_000],
+                        "character_count": values["character_count"],
+                    },
+                )
             update_params = {
                 "workspace_id": workspace_id,
                 "draft_id": draft_id,
@@ -1039,6 +1051,7 @@ class StudioRepository:
         payload: dict[str, Any],
         expected_revision: int,
         instruction: str = "",
+        new_version: bool = False,
     ) -> dict[str, Any]:
         return await self.update_draft(
             draft_id=draft_id,
@@ -1046,6 +1059,7 @@ class StudioRepository:
             expected_revision=expected_revision,
             origin="user_edit",
             instruction=instruction,
+            new_version=new_version,
         )
 
     async def revise_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], instruction: str = "") -> dict[str, Any]:
@@ -1083,33 +1097,55 @@ class StudioRepository:
         )
         return [_version_public(dict(row)) for row in result.mappings().all()]
 
-    async def restore_draft_version(
-        self,
-        *,
-        draft_id: uuid.UUID,
-        version: int,
-        expected_revision: int,
-        instruction: str = "",
-    ) -> dict[str, Any]:
+    async def choose_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int) -> dict[str, Any]:
+        """Make an existing version current without creating a new one."""
         draft_id = _draft_uuid(draft_id)
-        current = await self.get_draft(draft_id)
-        if current is None:
-            raise DraftNotFound("draft is not part of the active workspace")
-        versions = await self.list_draft_versions(draft_id=draft_id)
-        selected = next((item for item in versions if int(item["version"]) == int(version)), None)
-        if selected is None:
-            raise DraftNotFound("draft version not found")
-        if str(selected["body"]) == str(current.get("body") or ""):
-            # Restoring text identical to the current draft must not mint a
-            # new version on every click.
-            return current
-        return await self.update_draft(
-            draft_id=draft_id,
-            payload={"body": selected["body"]},
-            expected_revision=expected_revision,
-            origin="user_edit",
-            instruction=instruction or f"Restored version {version}",
-        )
+        workspace_id = self.workspace_id
+        async with self.db.sessions.session() as session:
+            current_row = (
+                await session.execute(
+                    text("SELECT * FROM studio_drafts WHERE workspace_id=:workspace_id AND id=:draft_id FOR UPDATE"),
+                    {"workspace_id": workspace_id, "draft_id": draft_id},
+                )
+            ).mappings().first()
+            if current_row is None:
+                raise DraftNotFound("draft is not part of the active workspace")
+            current = _draft_public(dict(current_row))
+            if int(current["revision"]) != int(expected_revision):
+                raise DraftConflictError(current, expected_revision=expected_revision)
+            selected = (
+                await session.execute(
+                    text("SELECT * FROM studio_draft_versions WHERE workspace_id=:workspace_id AND draft_id=:draft_id AND version=:version"),
+                    {"workspace_id": workspace_id, "draft_id": draft_id, "version": int(version)},
+                )
+            ).mappings().first()
+            if selected is None:
+                raise DraftNotFound("draft version not found")
+            if int(selected["version"]) == int(current["current_version"]):
+                return current
+            row = (
+                await session.execute(
+                    text(
+                        """UPDATE studio_drafts SET body=:body, current_version=:version,
+                                  current_version_origin=:origin, revision=:revision, updated_at=now()
+                            WHERE workspace_id=:workspace_id AND id=:draft_id RETURNING *"""
+                    ),
+                    {
+                        "workspace_id": workspace_id,
+                        "draft_id": draft_id,
+                        "body": selected["body"],
+                        "version": int(selected["version"]),
+                        "origin": selected["origin"],
+                        "revision": int(current["revision"]) + 1,
+                    },
+                )
+            ).mappings().one()
+            await session.commit()
+        return _draft_public(dict(row))
+
+    async def restore_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int, instruction: str = "") -> dict[str, Any]:
+        """Compatibility alias: choosing a version never creates a new one."""
+        return await self.choose_draft_version(draft_id=draft_id, version=version, expected_revision=expected_revision)
 
     async def mark_draft_copied(self, *, draft_id: uuid.UUID) -> dict[str, Any]:
         draft_id = _draft_uuid(draft_id)
@@ -2236,6 +2272,7 @@ class MemoryStudioRepository:
         expected_revision: int | None = None,
         origin: str = "user_edit",
         instruction: str = "",
+        new_version: bool = True,
     ) -> dict[str, Any]:
         draft_id = _draft_uuid(draft_id)
         origin = self._draft_origin(origin)
@@ -2249,29 +2286,29 @@ class MemoryStudioRepository:
             merged = self._draft_payload(public, payload)
             values, _ = self._validate_memory_draft(current["conversation_id"], merged)
             versions = self.draft_versions.setdefault(draft_id, [])
-            next_version = max([int(item["version"]) for item in versions] or [0]) + 1
             now = utcnow()
-            self._draft_version_id += 1
-            versions.append(
-                {
-                    "id": self._draft_version_id,
-                    "workspace_id": self.workspace_id,
-                    "draft_id": draft_id,
-                    "version": next_version,
-                    "body": values["body"],
-                    "origin": origin,
-                    "instruction": str(instruction or "")[:4_000],
-                    "character_count": values["character_count"],
-                    "created_at": now,
-                }
-            )
-            preserved = origin in {"generated", "regenerated"} and public.get("current_version_origin") == "user_edit"
-            if preserved:
-                current["updated_at"] = now
-                result = dict(public)
-                result["updated_at"] = _iso(now)
-                result.update({"candidate_version": next_version, "candidate_body": values["body"], "preserved_user_edit": True})
-                return result
+            current_version = int(public.get("current_version") or 1)
+            if new_version:
+                next_version = max([int(item["version"]) for item in versions] or [0]) + 1
+                self._draft_version_id += 1
+                versions.append(
+                    {
+                        "id": self._draft_version_id,
+                        "workspace_id": self.workspace_id,
+                        "draft_id": draft_id,
+                        "version": next_version,
+                        "body": values["body"],
+                        "origin": origin,
+                        "instruction": str(instruction or "")[:4_000],
+                        "character_count": values["character_count"],
+                        "created_at": now,
+                    }
+                )
+            else:
+                next_version = current_version
+                for item in versions:
+                    if int(item["version"]) == current_version:
+                        item.update({"body": values["body"], "origin": origin, "instruction": str(instruction or "")[:4_000], "character_count": values["character_count"]})
             current.update(
                 {
                     "story_cluster_id": values.get("story_cluster_id"),
@@ -2298,8 +2335,8 @@ class MemoryStudioRepository:
             )
             return _draft_public(current)
 
-    async def save_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int, instruction: str = "") -> dict[str, Any]:
-        return await self.update_draft(draft_id=draft_id, payload=payload, expected_revision=expected_revision, origin="user_edit", instruction=instruction)
+    async def save_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], expected_revision: int, instruction: str = "", new_version: bool = False) -> dict[str, Any]:
+        return await self.update_draft(draft_id=draft_id, payload=payload, expected_revision=expected_revision, origin="user_edit", instruction=instruction, new_version=new_version)
 
     async def revise_draft(self, *, draft_id: uuid.UUID, payload: dict[str, Any], instruction: str = "") -> dict[str, Any]:
         return await self.update_draft(draft_id=draft_id, payload=payload, origin="regenerated", instruction=instruction)
@@ -2321,16 +2358,31 @@ class MemoryStudioRepository:
             raise DraftNotFound("draft is not part of the active channel")
         return [_version_public(row) for row in sorted(self.draft_versions.get(draft_id, []), key=lambda item: item["version"])]
 
-    async def restore_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int, instruction: str = "") -> dict[str, Any]:
+    async def choose_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int) -> dict[str, Any]:
         draft_id = _draft_uuid(draft_id)
-        versions = await self.list_draft_versions(draft_id=draft_id)
-        selected = next((item for item in versions if int(item["version"]) == int(version)), None)
-        if selected is None:
-            raise DraftNotFound("draft version not found")
-        current = await self.get_draft(draft_id)
-        if current is not None and str(selected["body"]) == str(current.get("body") or ""):
-            return current
-        return await self.update_draft(draft_id=draft_id, payload={"body": selected["body"]}, expected_revision=expected_revision, origin="user_edit", instruction=instruction or f"Restored version {version}")
+        async with self._lock:
+            current = self.drafts.get(draft_id)
+            if current is None:
+                raise DraftNotFound("draft is not part of the active workspace")
+            public = _draft_public(current)
+            if int(public["revision"]) != int(expected_revision):
+                raise DraftConflictError(public, expected_revision=expected_revision)
+            selected = next((item for item in self.draft_versions.get(draft_id, []) if int(item["version"]) == int(version)), None)
+            if selected is None:
+                raise DraftNotFound("draft version not found")
+            if int(selected["version"]) == int(public["current_version"]):
+                return public
+            current.update({
+                "body": selected["body"],
+                "current_version": int(selected["version"]),
+                "current_version_origin": selected["origin"],
+                "revision": int(public["revision"]) + 1,
+                "updated_at": utcnow(),
+            })
+            return _draft_public(current)
+
+    async def restore_draft_version(self, *, draft_id: uuid.UUID, version: int, expected_revision: int, instruction: str = "") -> dict[str, Any]:
+        return await self.choose_draft_version(draft_id=draft_id, version=version, expected_revision=expected_revision)
 
     async def mark_draft_copied(self, *, draft_id: uuid.UUID) -> dict[str, Any]:
         draft_id = _draft_uuid(draft_id)

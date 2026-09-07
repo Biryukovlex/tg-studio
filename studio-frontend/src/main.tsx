@@ -361,22 +361,22 @@ function DraftPanel({
     try { localStorage.setItem("studio-artifact-width", String(panelWidth)); } catch { /* Optional preference. */ }
   }, [panelWidth]);
   const [versions, setVersions] = useState<DraftVersion[]>([]);
-  const [saveState, setSaveState] = useState<"saved" | "saving" | "conflict" | "error">("saved");
+  const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving" | "conflict" | "error">("saved");
   const [copied, setCopied] = useState(false);
   const [copyNote, setCopyNote] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [conflict, setConflict] = useState<{ server: Draft; localBody: string; localTitle: string } | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
-  // Choosing an older version in the selector shows it read-only; only Restore
-  // writes it back as the current draft.
+  // Selecting a version in the selector shows it read-only; only Choose makes
+  // it the current version (a pointer move, never a copy).
   const viewedVersion = versions.find((item) => item.version === selectedVersion);
   const viewingOld = !!(draft && viewedVersion && selectedVersion !== draft.current_version);
   const shownBody = viewingOld && viewedVersion ? viewedVersion.body : (draft?.body ?? "");
+  const canSave = saveState === "unsaved" || saveState === "error";
   const hydrated = useRef(false);
   const draftRef = useRef<Draft | null>(seedDraft);
   const saveStateRef = useRef(saveState);
   const localChange = useRef(0);
-  const saveTimer = useRef<number | undefined>(undefined);
   const loadedConversation = useRef<string | null>(conversationId);
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
@@ -446,17 +446,20 @@ function DraftPanel({
     return () => window.clearInterval(poll);
   }, [conversationId, watchForAgentChanges]);
 
-  const save = (local: Draft, changeId: number) => {
+  const save = (local: Draft, changeId: number, newVersion = false) => {
     setSaveState("saving");
     void api<{ draft: Draft }>(`/studio/api/drafts/${local.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
-      body: JSON.stringify({ expected_revision: local.revision, body: local.body, working_title: local.working_title }),
+      body: JSON.stringify({ expected_revision: local.revision, body: local.body, working_title: local.working_title, save_as_new_version: newVersion }),
     })
       .then((payload) => {
         if (loadedConversation.current !== local.conversation_id) return;
         const latest = localChange.current === changeId;
-        setVersions((items) => items.some((item) => item.version === payload.draft.current_version) ? items : [...items, { id: Date.now(), draft_id: payload.draft.id, version: payload.draft.current_version, body: payload.draft.body, origin: "user_edit", instruction: "", character_count: payload.draft.character_count, created_at: payload.draft.updated_at }]);
+        // Versions are server truth: a plain Save rewrites the current one, a
+        // Save as new version appends one. Refetch rather than guess.
+        void api<{ versions: DraftVersion[] }>(`/studio/api/drafts/${payload.draft.id}/versions`).then((history) => setVersions(history.versions)).catch(() => undefined);
+        setSelectedVersion(payload.draft.current_version);
         setDraft((current) => {
           if (!current || localChange.current === changeId) {
             if (localChange.current === changeId) localChange.current = 0;
@@ -475,13 +478,19 @@ function DraftPanel({
       });
   };
 
+  // Edits stay local until the owner presses Save or Save as new version;
+  // nothing is written, and no version is created, on its own.
   useEffect(() => {
-    if (!draft || !hydrated.current || localChange.current === 0) return;
-    if (saveTimer.current !== undefined) window.clearTimeout(saveTimer.current);
-    const changeId = localChange.current;
-    saveTimer.current = window.setTimeout(() => save(draft, changeId), 650);
-    return () => { if (saveTimer.current !== undefined) window.clearTimeout(saveTimer.current); };
-  }, [draft?.body, draft?.working_title, draft?.id]);
+    if (saveState !== "unsaved") return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [saveState]);
+
+  const saveNow = (newVersion: boolean) => {
+    if (!draft) return;
+    save(draft, localChange.current, newVersion);
+  };
 
   const edit = (field: "body" | "working_title", value: string) => {
     localChange.current += 1;
@@ -505,7 +514,7 @@ function DraftPanel({
         copied_at: null,
       };
     });
-    setSaveState("saving");
+    setSaveState("unsaved");
     setCopied(false);
   };
 
@@ -550,25 +559,21 @@ function DraftPanel({
     }
   };
 
-  const restore = (version: DraftVersion) => {
+  const choose = (version: DraftVersion) => {
     if (!draft) return;
+    if (saveState === "unsaved" && !window.confirm(`Discard unsaved changes and make v${version.version} the current version?`)) return;
     setSaveState("saving");
     void api<{ draft: Draft }>(`/studio/api/drafts/${draft.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
-      body: JSON.stringify({ expected_revision: draft.revision, restore_version: version.version }),
+      body: JSON.stringify({ expected_revision: draft.revision, choose_version: version.version }),
     }).then((payload) => {
+      // Choosing moves the current pointer; no version is created.
       localChange.current = 0;
       setDraft(payload.draft);
+      setSelectedVersion(payload.draft.current_version);
       setSaveState("saved");
       setConflict(null);
-      // Restoring creates a new version on the server. Refresh the list so the
-      // selector can show it; an unknown value would make the <select> fall
-      // back to its first option while the state pointed elsewhere.
-      return api<{ versions: DraftVersion[] }>(`/studio/api/drafts/${payload.draft.id}/versions`)
-        .then((history) => setVersions(history.versions))
-        .catch(() => setVersions((items) => items.some((item) => item.version === payload.draft.current_version) ? items : [...items, { id: Date.now(), draft_id: payload.draft.id, version: payload.draft.current_version, body: payload.draft.body, origin: "user_edit", instruction: `Restored version ${version.version}`, character_count: payload.draft.character_count, created_at: payload.draft.updated_at }]))
-        .finally(() => setSelectedVersion(payload.draft.current_version));
     }).catch((error: unknown) => {
       if (error instanceof StudioApiError && error.status === 409 && error.payload.server_draft) {
         setConflict({ server: error.payload.server_draft, localBody: draft.body, localTitle: draft.working_title });
@@ -582,9 +587,10 @@ function DraftPanel({
   const keepLocal = () => {
     if (!conflict) return;
     localChange.current += 1;
+    // Adopt the server revision so the next Save is accepted, keep the text.
     setDraft({ ...conflict.server, body: conflict.localBody, working_title: conflict.localTitle });
     setConflict(null);
-    setSaveState("saving");
+    setSaveState("unsaved");
   };
 
   const useServer = () => {
@@ -632,7 +638,7 @@ function DraftPanel({
           <h2>Draft workspace</h2>
         </div>
         <div className="studio-panel-actions">
-          <span className={`studio-save-state is-${saveState}`} role="status">{saveState === "saving" ? "Saving…" : saveState === "conflict" ? "Needs review" : saveState === "error" ? "Retry needed" : "Saved"}</span>
+          <span className={`studio-save-state is-${saveState}`} role="status">{saveState === "saving" ? "Saving…" : saveState === "unsaved" ? "Unsaved changes" : saveState === "conflict" ? "Needs review" : saveState === "error" ? "Retry needed" : "Saved"}</span>
           <button type="button" className="studio-draft-close" onClick={onClose} aria-label="Close draft">×</button>
         </div>
       </div>
@@ -645,7 +651,7 @@ function DraftPanel({
       ) : (
         <div className="studio-draft-content">
           <label className="studio-draft-title">Artifact title<input aria-label="Artifact title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /><span className="studio-draft-title-hint">Kept for search and cross-checking. Not copied to the post.</span></label>
-          {viewingOld && <p className="studio-draft-viewing" role="status">Viewing v{selectedVersion} (read-only). Restore makes it the current draft.</p>}
+          {viewingOld && <p className="studio-draft-viewing" role="status">Viewing v{selectedVersion} (read-only). Choose makes it the current version.</p>}
           {previewOpen
             ? <div className="studio-draft-preview" role="region" aria-label="Post preview"><div className="studio-markdown"><DraftMarkdownPreview text={shownBody} /></div></div>
             : <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={shownBody} readOnly={viewingOld} onChange={(event) => edit("body", event.target.value)} />}
@@ -655,7 +661,7 @@ function DraftPanel({
           </div>
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}
           {clickableSources.length > 0 && <div className="studio-draft-notes"><strong>Sources</strong><div className="studio-source-chips">{clickableSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}</div></div>}
-          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button>{copyNote && <span className="studio-copy-note" role="status">{copyNote}</span>}<label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) restore(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version}>Restore</button></label></div>
+          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button>{copyNote && <span className="studio-copy-note" role="status">{copyNote}</span>}<span className="studio-draft-save-group"><button type="button" className="studio-draft-save" onClick={() => saveNow(false)} disabled={!canSave || viewingOld} title="Overwrite the current version with your edits">Save</button><button type="button" className="studio-draft-save" onClick={() => saveNow(true)} disabled={!canSave || viewingOld} title="Keep the current version and add your edits as a new one">Save as new version</button></span><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) choose(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version || saveState === "saving"}>Choose</button></label></div>
         </div>
       )}
     </aside>

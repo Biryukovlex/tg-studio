@@ -1038,9 +1038,9 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         _check_cancel(ctx)
         ctx.deps.completed_tools.add("revise_draft")
         return {
-            "status": "preserved_user_edit" if row.get("preserved_user_edit") else "revised",
+            "status": "revised",
             "draft": row,
-            "version": row.get("candidate_version", row.get("current_version")),
+            "version": row.get("current_version"),
             "decision_summary": _draft_summary(row),
         }
 

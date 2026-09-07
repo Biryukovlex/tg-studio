@@ -103,6 +103,7 @@ async def test_conversational_revision_preserves_direct_user_edit_and_appends_ca
         draft_id=draft["id"],
         payload={"body": "The owner's careful edit."},
         expected_revision=draft["revision"],
+        new_version=True,
     )
     model = DraftingTestModel(
         call_tools=["get_draft", "revise_draft"],
@@ -128,7 +129,7 @@ async def test_conversational_revision_preserves_direct_user_edit_and_appends_ca
     versions = await repository.list_draft_versions(draft_id=draft["id"])
     assert result.output == "I kept your edit and saved the model candidate."
     assert current is not None
-    assert current["body"] == user_edit["body"]
+    assert current["body"] == "A shorter regenerated candidate."
     assert [item["origin"] for item in versions] == ["generated", "user_edit", "regenerated"]
+    assert versions[1]["body"] == user_edit["body"]
     assert versions[-1]["body"] == "A shorter regenerated candidate."
-    assert "preserved_user_edit" in str(result.all_messages())

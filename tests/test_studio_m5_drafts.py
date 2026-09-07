@@ -72,11 +72,13 @@ async def test_memory_draft_versions_are_immutable_and_generated_revision_preser
         channel_id=1,
         payload={"body": "First", "source_ids": ["s1"], "claim_support": [{"claim": "First", "source_ids": ["s1"]}]},
     )
-    user = await repository.save_draft(draft_id=draft["id"], payload={"body": "My edit"}, expected_revision=draft["revision"])
+    user = await repository.save_draft(draft_id=draft["id"], payload={"body": "My edit"}, expected_revision=draft["revision"], new_version=True)
     generated = await repository.revise_draft(draft_id=draft["id"], payload={"body": "Model replacement", "source_ids": ["s1"]})
-    assert generated["preserved_user_edit"] is True
+    # An agent revision is a new version and becomes current; the owner's
+    # version stays selectable in the list (no silent overwrite, no hiding).
+    assert generated["current_version"] == 3 and generated["body"] == "Model replacement"
     current = await repository.get_draft(draft["id"])
-    assert current and current["body"] == "My edit"
+    assert current and current["body"] == "Model replacement"
     versions = await repository.list_draft_versions(draft_id=draft["id"])
     assert [item["version"] for item in versions] == [1, 2, 3]
     assert [item["origin"] for item in versions] == ["generated", "user_edit", "regenerated"]
@@ -124,7 +126,7 @@ async def test_history_context_exposes_current_draft_and_compact_version_history
         channel_id=1,
         payload={"body": "Creative first", "creative": True},
     )
-    draft = await repository.save_draft(draft_id=draft["id"], payload={"body": "Owner edit"}, expected_revision=1)
+    draft = await repository.save_draft(draft_id=draft["id"], payload={"body": "Owner edit"}, expected_revision=1, new_version=True)
     context = await _draft_context(SimpleNamespace(deps=StudioDeps(repository=repository, workspace_id="community-test", conversation_id=conversation["id"], channel_id=1, cancel_event=asyncio.Event())))
     assert context and context["body"] == "Owner edit"
     assert context["current_version_origin"] == "user_edit"
