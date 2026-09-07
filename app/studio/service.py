@@ -27,7 +27,7 @@ from pydantic_ai.ui import SSE_CONTENT_TYPE
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from starlette.responses import JSONResponse, StreamingResponse
 
-from .agent import StudioDeps, build_agent, is_short_continuation_request, workflow_tool_sequence
+from .agent import StudioDeps, build_agent, is_revision_request, is_short_continuation_request, workflow_tool_sequence
 from .analytics import analyze_posts
 from .profile import build_profile
 from .semantic_profile import build_semantic_profile
@@ -518,13 +518,17 @@ class StudioService:
             )
             if bundle is not None and bundle.sources:
                 required_tools = ("get_channel_context", "create_draft")
-        if "create_draft" in required_tools:
-            current_draft = await self.repository.get_current_draft(
-                conversation_id=conversation_id,
-                channel_id=int(conversation["channel_id"]),
-            )
-            if current_draft is not None:
-                required_tools = tuple("revise_draft" if name == "create_draft" else name for name in required_tools)
+        current_draft = await self.repository.get_current_draft(
+            conversation_id=conversation_id,
+            channel_id=int(conversation["channel_id"]),
+        )
+        if "create_draft" in required_tools and current_draft is not None:
+            required_tools = tuple("revise_draft" if name == "create_draft" else name for name in required_tools)
+        # A conversation that already holds a draft treats any request to
+        # change the post ("add bold title and subtitles", "make it shorter")
+        # as a revision: the change must be saved, not described in chat.
+        if current_draft is not None and "revise_draft" not in required_tools and is_revision_request(content):
+            required_tools = tuple(name for name in required_tools if name != "create_draft") + ("get_draft", "revise_draft")
         # Retain completed assistant replies: stripping them makes old user
         # requests look unanswered. History is context, not factual evidence.
         server_history = _model_history(history_rows)

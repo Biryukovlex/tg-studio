@@ -28,7 +28,7 @@ import {
   StudioApiError,
 } from "./api";
 import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
-import { copyRenderedSelection, copyRichText, htmlFromMarkdown, plainFromMarkdown } from "./markdownCopy";
+import { copyRenderedSelection, copyRichText, htmlFromMarkdown, plainFromMarkdown, telegramMarkupFromMarkdown } from "./markdownCopy";
 import ChannelProfileDialog from "./ChannelProfileDialog";
 import "./styles.css";
 
@@ -513,15 +513,18 @@ function DraftPanel({
     if (!draft || draft.over_limit) return;
     // Both flavours come from the Markdown shown in the editor (the current
     // draft, or the version being viewed), saved or not.
-    const plain = plainFromMarkdown(shownBody);
+    // text/plain carries Telegram's own markup (**bold**, __italic__), which
+    // every Telegram app converts on send even when it ignores rich flavours;
+    // text/html carries real tags and links for clients that read them.
+    const plain = telegramMarkupFromMarkdown(shownBody);
     const html = htmlFromMarkdown(shownBody);
     try {
-      // 1. Copy a rendered selection: identical to a manual copy, so it
-      //    carries RTF on Safari, which the macOS Telegram app requires.
-      // 2. Copy-event handler with text/html + text/plain (no RTF).
+      // 1. Copy-event handler: both flavours under our control, synchronous
+      //    inside the click, no permission prompt.
+      // 2. Rendered selection: browser-serialised flavours (adds RTF in Safari).
       // 3. Async Clipboard API; last because Safari rejects it after an await
       //    and plain-HTTP origins do not offer it.
-      let done = copyRenderedSelection(html) || copyRichText(plain, html);
+      let done = copyRichText(plain, html) || copyRenderedSelection(html);
       let rich = done;
       if (!done) {
         const clip = navigator.clipboard as unknown as { write?: (items: unknown[]) => Promise<void>; writeText?: (text: string) => Promise<void> } | undefined;
@@ -537,7 +540,7 @@ function DraftPanel({
       if (!done) throw new Error("Clipboard unavailable");
       setCopied(true);
       // Say which flavour landed so a plain-text paste can be diagnosed at once.
-      setCopyNote(rich ? "Copied with formatting" : "Copied as plain text (this browser blocks rich copy)");
+      setCopyNote(rich ? "Copied. Formatting travels as rich text and as Telegram markup." : "Copied as Telegram markup only (this browser blocks rich copy).");
       setDraft((current) => current ? { ...current, copied_at: new Date().toISOString() } : current);
       window.setTimeout(() => { setCopied(false); setCopyNote(""); }, 3200);
       // Record the copy on the saved revision; failures here must not undo a successful copy.

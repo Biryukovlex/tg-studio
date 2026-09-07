@@ -51,3 +51,16 @@ describe("copyRenderedSelection", () => {
     expect(document.body.querySelectorAll("div[aria-hidden]").length).toBe(0);
   });
 });
+
+describe("telegramMarkupFromMarkdown", () => {
+  it("keeps Telegram-convertible markers and rewrites italic to double underscores", async () => {
+    const { telegramMarkupFromMarkdown } = await import("./markdownCopy");
+    expect(telegramMarkupFromMarkdown("**Title**\nSome *emphasis* and ~~gone~~ and `code`\n> quote")).toBe(
+      "**Title**\nSome __emphasis__ and ~~gone~~ and `code`\nquote",
+    );
+    expect(telegramMarkupFromMarkdown("See [the record](https://zsro.ru/doc) and [https://x.example](https://x.example)")).toBe(
+      "See the record (https://zsro.ru/doc) and https://x.example",
+    );
+    expect(telegramMarkupFromMarkdown("# H <b>x</b> ![i](https://y)")).toBe("H x i");
+  });
+});

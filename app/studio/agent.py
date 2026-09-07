@@ -84,6 +84,29 @@ _PERFORMANCE_INTENT = re.compile(
 )
 
 
+_REVISION_INTENT = re.compile(
+    r"\b(add|remove|delete|drop|change|replace|rewrite|rephrase|reword|shorten|expand|"
+    r"tighten|soften|fix|edit|update|adjust|tweak|make\s+it|bold|italic|title|subtitle|"
+    r"headline|paragraph|emoji|signature|link|tone|shorter|longer|"
+    r"добав|убер|удали|измени|замени|перепиши|перефраз|сократи|расшир|исправ|"
+    r"отредакт|обнови|подправ|сделай|жирн|курсив|заголов|подзаголов|абзац|эмодзи|подпис|"
+    r"ссылк|тон|короче|длиннее)\w*\b",
+    re.IGNORECASE,
+)
+
+
+def is_revision_request(content: str) -> bool:
+    """Return whether a message asks to change the existing post.
+
+    When a draft exists in the conversation, requests like "add bold title and
+    subtitles" or "make it shorter" must produce a saved revision, not a chat
+    reply describing the change.
+    """
+
+    text = " ".join(str(content or "").split())
+    return bool(_REVISION_INTENT.search(text))
+
+
 def is_short_continuation_request(content: str) -> bool:
     """Return whether a message is a terse request to continue prior work.
 

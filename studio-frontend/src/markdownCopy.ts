@@ -27,6 +27,28 @@ export function plainFromMarkdown(text: string): string {
   return t.split("\n").map((line) => line.replace(/^\s*>\s?/, "")).join("\n");
 }
 
+/**
+ * Plain-text flavour written in Telegram's own markup. Telegram apps convert
+ * **bold**, __italic__, ~~strike~~ and `code` when a message is sent, so a
+ * client that ignores rich clipboard flavours (the native macOS app does)
+ * still produces a formatted post. Links cannot be expressed this way and
+ * become "text (url)", which Telegram auto-links.
+ */
+export function telegramMarkupFromMarkdown(text: string): string {
+  let t = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
+  t = t.replace(/^\s*#{1,6}\s+/gm, "");
+  t = t.replace(TAG_PATTERN, "");
+  t = t.replace(/\[([^\]]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/g, (_m, label: string, url: string) => {
+    const safe = isHttpUrl(url);
+    if (!safe) return label;
+    return label.trim() === safe ? label : `${label} (${safe})`;
+  });
+  // Single-asterisk italic becomes Telegram's double underscore; bold, strike
+  // and code already use the same markers as Telegram.
+  t = t.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "__$1__");
+  return t.split("\n").map((line) => line.replace(/^\s*>\s?/, "")).join("\n");
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
