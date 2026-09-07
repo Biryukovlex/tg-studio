@@ -113,15 +113,15 @@ server later.
 
 | Key | Meaning |
 |---|---|
-| `CHANNELS` | comma-separated channels, e.g. `@my_channel` (must be public username, or numeric id) |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | web panel login |
-| `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | backend-only provider settings; the key is never sent to the browser; Studio asks for one-time workspace consent before a real request |
-| `STUDIO_SEARCH_ENABLED` | opt in to the private SearXNG research provider (default `false`) |
-| `STUDIO_SEARCH_BASE_URL` | private SearXNG URL, normally `http://searxng:8080` in the optional Compose profile |
-| `STUDIO_SEARCH_BLOCKED_DOMAINS` | optional deployment domain exclusions; empty by default, otherwise chosen by the agent per request |
-| `POLL_MINUTES` | how often stats refresh (default 15) |
-| `TRACK_DAYS` | post age to keep scanning; `0` means the whole channel history |
-| `BACKFILL_LIMIT` | maximum posts per scan; `0` means unlimited |
+| `WEB_HOST` / `WEB_PORT` | web panel bind address and port |
+| `SESSION_SECRET` | optional cookie secret (auto-generated if empty) |
+| `DATABASE_URL` | PostgreSQL connection for the workspace store |
+| `TELEGRAM_SESSION_ENCRYPTION_KEY` | key for encrypted session and secrets |
+| `DATA_DIR` | filesystem location for secrets and import source |
+| `STUDIO_SEARCH_BASE_URL` | private SearXNG endpoint when using web research |
+
+> Channels, collection windows, provider keys, and research toggles are now configured at **/settings** in the web panel after login. The `.env` values for `CHANNELS`, `POLL_MINUTES`, `TRACK_DAYS`, `BACKFILL_LIMIT`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `STUDIO_SEARCH_ENABLED`, and `STUDIO_SEARCH_BLOCKED_DOMAINS` are optional first-start seeds; edit them in **/settings** afterwards.
 
 > The bot account must be able to **read the channel** — your own account that
 > owns/is subscribed to the channel already can.

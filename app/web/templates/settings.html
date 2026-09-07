@@ -1,0 +1,448 @@
+{% extends "base.html" %}
+{% block title %}Settings · {{ app_name }}{% endblock %}
+{% block pageheading %}
+<p class="eyebrow">Workspace</p>
+<h1>Settings</h1>
+{% endblock %}
+{% block navactions %}
+<a class="action-btn primary-action" href="/">
+  <i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>
+  <span>Back to overview</span>
+</a>
+{% endblock %}
+{% block content %}
+{% if not available %}
+<div class="banner warn" role="status">
+  <i class="mgc mgc-alert-core-regular" aria-hidden="true"></i>
+  <span>Settings are read from .env until PostgreSQL is configured. Set DATABASE_URL and run the migration to edit them here.</span>
+</div>
+{% else %}
+<section class="settings-intro" data-reveal>
+  <p>Values saved here are stored in the workspace database and override <strong>.env</strong>. Tags under each field show where the current value comes from.</p>
+  <nav class="section-tabs" aria-label="Settings sections">
+    <a href="#telegram">Telegram</a>
+    <a href="#collection">Collection</a>
+    <a href="#studio">Studio</a>
+    <a href="#research">Research</a>
+  </nav>
+</section>
+{% endif %}
+
+<div class="settings-stack">
+  <!-- Telegram -->
+  <section class="panel" id="telegram" data-reveal>
+    <div class="panel-heading">
+      <div>
+        <p class="section-kicker">Telegram</p>
+        <h2>Channels</h2>
+        <p class="panel-note">Public @username, t.me link, or numeric id. Deactivated channels keep their archived posts.</p>
+      </div>
+      <span class="row-count">{{ channels|length }} channels</span>
+    </div>
+    {% if available %}
+    <div class="table-scroll">
+      <table class="tbl settings-table">
+        <colgroup><col><col><col><col><col class="col-actions"></colgroup>
+        <thead>
+          <tr><th>Channel</th><th>Title</th><th>Chat id</th><th>Status</th><th class="actions-col">Action</th></tr>
+        </thead>
+        <tbody>
+          {% for c in channels %}
+          <tr>
+            <td class="channel-id">{{ c.identifier }}</td>
+            <td>{% if c.title %}{{ c.title }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
+            <td class="number-cell">{% if c.chat_id %}{{ c.chat_id }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
+            <td>
+              {% if c.chat_id %}
+              <span class="pill ok"><i class="mgc mgc-check-circle-core-regular" aria-hidden="true"></i>Collecting</span>
+              {% else %}
+              <span class="pill pending"><i class="mgc mgc-time-core-regular" aria-hidden="true"></i>Resolves on next sync</span>
+              {% endif %}
+            </td>
+            <td class="actions-col">
+              <form method="post" action="/settings/channels/{{ c.id }}/deactivate" class="inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                <button type="submit" class="btn ghost small danger">Deactivate</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="empty-state">No channels yet. Add the first one below.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <form method="post" action="/settings/channels/add" class="inline-add">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="text" name="identifier" placeholder="@channel, https://t.me/channel or -100…" aria-label="Channel to add" required value="{{ values.identifier if values.identifier is defined else '' }}">
+      {% if errors.identifier %}<p class="field-error">{{ errors.identifier }}</p>{% endif %}
+      <button type="submit" class="btn small">Add channel</button>
+    </form>
+    {% else %}
+    <div class="table-scroll">
+      <table class="tbl settings-table">
+        <colgroup><col><col><col><col><col class="col-actions"></colgroup>
+        <thead>
+          <tr><th>Channel</th><th>Title</th><th>Chat id</th><th>Status</th><th class="actions-col">Action</th></tr>
+        </thead>
+        <tbody>
+          {% for c in channels %}
+          <tr>
+            <td class="channel-id">{{ c.identifier }}</td>
+            <td>{% if c.title %}{{ c.title }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
+            <td class="number-cell">{% if c.chat_id %}{{ c.chat_id }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
+            <td>
+              {% if c.chat_id %}
+              <span class="pill ok"><i class="mgc mgc-check-circle-core-regular" aria-hidden="true"></i>Collecting</span>
+              {% else %}
+              <span class="pill pending"><i class="mgc mgc-time-core-regular" aria-hidden="true"></i>Resolves on next sync</span>
+              {% endif %}
+            </td>
+            <td class="actions-col"><span class="muted-cell">—</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <div class="subsection-heading">
+      <div>
+        <h3>Connection</h3>
+        <p class="panel-note">The user account the collector reads channels with.</p>
+      </div>
+      <p class="status-line">
+        <span>API ID <code>{{ connection_status.api_id if connection_status.api_id else "—" }}</code></span>
+        {% if connection_status.has_session %}
+        <span class="pill ok"><i class="mgc mgc-key-2-core-regular" aria-hidden="true"></i>Session set</span>
+        {% else %}
+        <span class="pill"><i class="mgc mgc-key-2-core-regular" aria-hidden="true"></i>Not set</span>
+        {% endif %}
+        {% if connection_status.updated_at %}
+        <span class="muted">Updated {{ connection_status.updated_at[:16] }} UTC</span>
+        {% endif %}
+      </p>
+    </div>
+    {% if available %}
+    <form method="post" action="/settings/telegram-connection" class="settings-form" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <div class="field {% if errors.api_id %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="api_id">API ID</label>
+          <p class="field-help">From my.telegram.org → API development tools.</p>
+        </div>
+        <div class="field-control">
+          <input type="text" id="api_id" name="api_id" value="{{ values.api_id if values.api_id is defined else (connection_status.api_id if connection_status.api_id else '') }}" inputmode="numeric" autocomplete="off" {% if errors.api_id %}aria-invalid="true" aria-describedby="api_id_msg"{% endif %}>
+          {% if errors.api_id %}<p class="field-error" id="api_id_msg">{{ errors.api_id }}</p>{% endif %}
+        </div>
+      </div>
+      <div class="field {% if errors.api_hash %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="api_hash">API hash</label>
+          <p class="field-help">Stored encrypted. Leave empty to keep the current value.</p>
+        </div>
+        <div class="field-control">
+          <input type="password" id="api_hash" name="api_hash" value="" placeholder="Leave empty to keep the current hash" autocomplete="off" {% if errors.api_hash %}aria-invalid="true"{% endif %}>
+          {% if errors.api_hash %}<p class="field-error">{{ errors.api_hash }}</p>{% endif %}
+        </div>
+      </div>
+      <div class="field {% if errors.session_string %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="session_string">Session string</label>
+          <p class="field-help">Generate with <code>python scripts/generate_session.py</code>. Never shown again after saving.</p>
+        </div>
+        <div class="field-control">
+          <input type="password" id="session_string" name="session_string" value="" placeholder="Paste a new session string to replace the current one" autocomplete="off" {% if errors.session_string %}aria-invalid="true"{% endif %}>
+          {% if errors.session_string %}<p class="field-error">{{ errors.session_string }}</p>{% endif %}
+          <p class="field-note"><i class="mgc mgc-alert-core-regular" aria-hidden="true"></i>The collector must be restarted to use a new session.</p>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn small">Save connection</button>
+      </div>
+    </form>
+    {% else %}
+    <div class="settings-form">
+      <div class="field">
+        <div class="field-label">
+          <label class="field-name">API ID</label>
+          <p class="field-help">From my.telegram.org → API development tools.</p>
+        </div>
+        <div class="field-control">
+          <input type="text" value="{{ connection_status.api_id if connection_status.api_id else '' }}" disabled>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- Collection -->
+  <section class="panel" id="collection" data-reveal>
+    <div class="panel-heading">
+      <div>
+        <p class="section-kicker">Collection</p>
+        <h2>Sync schedule and history</h2>
+        <p class="panel-note">Changes apply on the collector's next cycle, at most one old interval away.</p>
+      </div>
+    </div>
+    {% if available %}
+    <form method="post" action="/settings/collection" class="settings-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <div class="field {% if errors.poll_minutes %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="poll_minutes">Poll interval</label>
+          <p class="field-help">Minutes between syncs. 1 to 1440.</p>
+        </div>
+        <div class="field-control">
+          <input type="number" id="poll_minutes" name="poll_minutes" value="{{ values.poll_minutes if values.poll_minutes is defined else (ws_dict['collection.poll_minutes'].value if ws_dict['collection.poll_minutes'] is defined else '15') }}" min="1" max="1440" step="1" {% if errors.poll_minutes %}aria-invalid="true" aria-describedby="poll_minutes_msg"{% endif %}>
+          {% if errors.poll_minutes %}<p class="field-error" id="poll_minutes_msg">{{ errors.poll_minutes }}</p>{% endif %}
+          <p class="field-source">
+            {% set src = ws_dict['collection.poll_minutes'].source if ws_dict['collection.poll_minutes'] is defined else 'default' %}
+            {% if src == 'db' %}<span class="source-tag saved">Saved {{ ws_dict['collection.poll_minutes'].updated_at[:16] if ws_dict['collection.poll_minutes'].updated_at else '' }} UTC</span><button type="submit" class="link-btn" form="reset-poll_minutes">Use .env value</button>
+            {% elif src == 'env' %}<span class="source-tag">from .env</span>
+            {% else %}<span class="source-tag">default</span>{% endif %}
+          </p>
+        </div>
+      </div>
+      <div class="field {% if errors.track_days %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="track_days">History window</label>
+          <p class="field-help">Days of posts to keep refreshing. 0 = whole channel history.</p>
+        </div>
+        <div class="field-control">
+          <input type="number" id="track_days" name="track_days" value="{{ values.track_days if values.track_days is defined else (ws_dict['collection.track_days'].value if ws_dict['collection.track_days'] is defined else '30') }}" min="0" max="3650" step="1" {% if errors.track_days %}aria-invalid="true"{% endif %}>
+          {% if errors.track_days %}<p class="field-error">{{ errors.track_days }}</p>{% endif %}
+          <p class="field-source">
+            {% set src = ws_dict['collection.track_days'].source if ws_dict['collection.track_days'] is defined else 'default' %}
+            {% if src == 'db' %}<span class="source-tag saved">Saved {{ ws_dict['collection.track_days'].updated_at[:16] if ws_dict['collection.track_days'].updated_at else '' }} UTC</span><button type="submit" class="link-btn" form="reset-track_days">Use .env value</button>
+            {% elif src == 'env' %}<span class="source-tag">from .env</span>
+            {% else %}<span class="source-tag">default</span>{% endif %}
+          </p>
+        </div>
+      </div>
+      <div class="field {% if errors.backfill_limit %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="backfill_limit">Backfill limit</label>
+          <p class="field-help">Maximum posts fetched per channel per sync. 0 = unlimited.</p>
+        </div>
+        <div class="field-control">
+          <input type="number" id="backfill_limit" name="backfill_limit" value="{{ values.backfill_limit if values.backfill_limit is defined else (ws_dict['collection.backfill_limit'].value if ws_dict['collection.backfill_limit'] is defined else '200') }}" min="0" max="100000" step="1" {% if errors.backfill_limit %}aria-invalid="true"{% endif %}>
+          {% if errors.backfill_limit %}<p class="field-error">{{ errors.backfill_limit }}</p>{% endif %}
+          <p class="field-source">
+            {% set src = ws_dict['collection.backfill_limit'].source if ws_dict['collection.backfill_limit'] is defined else 'default' %}
+            {% if src == 'db' %}<span class="source-tag saved">Saved {{ ws_dict['collection.backfill_limit'].updated_at[:16] if ws_dict['collection.backfill_limit'].updated_at else '' }} UTC</span><button type="submit" class="link-btn" form="reset-backfill_limit">Use .env value</button>
+            {% elif src == 'env' %}<span class="source-tag">from .env</span>
+            {% else %}<span class="source-tag">default</span>{% endif %}
+          </p>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn small">Save collection</button>
+      </div>
+    </form>
+    <form id="reset-poll_minutes" method="post" action="/settings/collection/reset" hidden>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="key" value="collection.poll_minutes">
+    </form>
+    <form id="reset-track_days" method="post" action="/settings/collection/reset" hidden>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="key" value="collection.track_days">
+    </form>
+    <form id="reset-backfill_limit" method="post" action="/settings/collection/reset" hidden>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="key" value="collection.backfill_limit">
+    </form>
+    {% else %}
+    <div class="settings-form">
+      <div class="field">
+        <div class="field-label"><label class="field-name">Poll interval</label><p class="field-help">Minutes between syncs. 1 to 1440.</p></div>
+        <div class="field-control"><input type="number" value="{{ ws_dict['collection.poll_minutes'].value if ws_dict['collection.poll_minutes'] is defined else '15' }}" disabled><p class="field-source"><span class="source-tag">from .env</span></p></div>
+      </div>
+      <div class="field">
+        <div class="field-label"><label class="field-name">History window</label><p class="field-help">Days of posts to keep refreshing. 0 = whole channel history.</p></div>
+        <div class="field-control"><input type="number" value="{{ ws_dict['collection.track_days'].value if ws_dict['collection.track_days'] is defined else '30' }}" disabled><p class="field-source"><span class="source-tag">from .env</span></p></div>
+      </div>
+      <div class="field">
+        <div class="field-label"><label class="field-name">Backfill limit</label><p class="field-help">Maximum posts fetched per channel per sync. 0 = unlimited.</p></div>
+        <div class="field-control"><input type="number" value="{{ ws_dict['collection.backfill_limit'].value if ws_dict['collection.backfill_limit'] is defined else '200' }}" disabled><p class="field-source"><span class="source-tag">from .env</span></p></div>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- Studio -->
+  <section class="panel" id="studio" data-reveal>
+    <div class="panel-heading">
+      <div>
+        <p class="section-kicker">Studio</p>
+        <h2>Agent and provider</h2>
+        <p class="panel-note">Studio is always on. Keys are stored encrypted and never shown again; changing the model asks for provider consent again.</p>
+      </div>
+      {% if setup_state.ready %}
+      <span class="pill ok"><i class="mgc mgc-check-circle-core-regular" aria-hidden="true"></i>Ready</span>
+      {% else %}
+      <span class="pill">{{ setup_state.blockers[0].message if setup_state.blockers else 'Not ready' }}</span>
+      {% endif %}
+    </div>
+    {% if available %}
+    <form method="post" action="/settings/studio" class="settings-form" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <div class="field {% if errors.openrouter_api_key %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="openrouter_api_key">OpenRouter API key</label>
+          <p class="field-help">Server-side only; never sent to the browser.</p>
+        </div>
+        <div class="field-control">
+          <p class="status-line">
+            {% if 'studio.openrouter_api_key' in ws_dict and ws_dict['studio.openrouter_api_key'].set %}
+            <span class="pill ok"><i class="mgc mgc-key-2-core-regular" aria-hidden="true"></i>Set</span>
+            {% else %}
+            <span class="pill">Not set</span>
+            {% endif %}
+          </p>
+          <input type="password" id="openrouter_api_key" name="openrouter_api_key" value="" placeholder="Leave empty to keep the current key" autocomplete="off" {% if errors.openrouter_api_key %}aria-invalid="true"{% endif %}>
+          {% if errors.openrouter_api_key %}<p class="field-error">{{ errors.openrouter_api_key }}</p>{% endif %}
+          <label class="check"><input type="checkbox" name="clear_openrouter_api_key" value="1">Clear the stored key</label>
+          <p class="field-source">
+            {% set src = ws_dict['studio.openrouter_api_key'].source if ws_dict['studio.openrouter_api_key'] is defined else 'default' %}
+            {% if src == 'db' %}<span class="source-tag saved">Saved {{ ws_dict['studio.openrouter_api_key'].updated_at[:16] if ws_dict['studio.openrouter_api_key'].updated_at else '' }} UTC</span><button type="submit" class="link-btn" form="reset-openrouter_api_key">Use .env value</button>
+            {% elif src == 'env' %}<span class="source-tag">from .env</span>
+            {% else %}<span class="source-tag">default</span>{% endif %}
+          </p>
+        </div>
+      </div>
+      <div class="field {% if errors.model %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="model">Model</label>
+          <p class="field-help">OpenRouter model id.</p>
+        </div>
+        <div class="field-control">
+          <input type="text" id="model" name="model" value="{{ values.model if values.model is defined else (ws_dict['studio.model'].value if ws_dict['studio.model'] is defined else 'openai/gpt-4o-mini') }}" placeholder="openai/gpt-4o-mini" autocomplete="off" spellcheck="false" {% if errors.model %}aria-invalid="true"{% endif %}>
+          {% if errors.model %}<p class="field-error">{{ errors.model }}</p>{% endif %}
+          <p class="field-source">
+            {% set src = ws_dict['studio.model'].source if ws_dict['studio.model'] is defined else 'default' %}
+            {% if src == 'db' %}<span class="source-tag saved">Saved {{ ws_dict['studio.model'].updated_at[:16] if ws_dict['studio.model'].updated_at else '' }} UTC</span><button type="submit" class="link-btn" form="reset-model">Use .env value</button>
+            {% elif src == 'env' %}<span class="source-tag">from .env</span>
+            {% else %}<span class="source-tag">default</span>{% endif %}
+          </p>
+        </div>
+      </div>
+      <div class="field {% if errors.system_prompt %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="system_prompt">System prompt</label>
+          <p class="field-help">How the Studio agent should work with you. Also editable inside Studio.</p>
+        </div>
+        <div class="field-control">
+          <textarea id="system_prompt" name="system_prompt" maxlength="12000" rows="5" placeholder="How should the Studio agent work with you?">{{ values.system_prompt if values.system_prompt is defined else '' }}</textarea>
+          {% if errors.system_prompt %}<p class="field-error">{{ errors.system_prompt }}</p>{% endif %}
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn small">Save Studio</button>
+      </div>
+    </form>
+    <form id="reset-openrouter_api_key" method="post" action="/settings/studio/reset" hidden>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="key" value="studio.openrouter_api_key">
+    </form>
+    <form id="reset-model" method="post" action="/settings/studio/reset" hidden>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="key" value="studio.model">
+    </form>
+    {% else %}
+    <div class="settings-form">
+      <div class="field">
+        <div class="field-label"><label class="field-name">OpenRouter API key</label><p class="field-help">Server-side only; never sent to the browser.</p></div>
+        <div class="field-control"><p class="status-line"><span class="pill">Not set</span></p><input type="password" value="" disabled></div>
+      </div>
+      <div class="field">
+        <div class="field-label"><label class="field-name">Model</label><p class="field-help">OpenRouter model id.</p></div>
+        <div class="field-control"><input type="text" value="{{ ws_dict['studio.model'].value if ws_dict['studio.model'] is defined else 'openai/gpt-4o-mini' }}" disabled></div>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- Research -->
+  <section class="panel" id="research" data-reveal>
+    <div class="panel-heading">
+      <div>
+        <p class="section-kicker">Research</p>
+        <h2>Web search</h2>
+        <p class="panel-note">Uses the private SearXNG service from the Compose profile. If it is down, Studio keeps working without web results.</p>
+      </div>
+      <p class="status-line">
+        {% if search_state.configured %}
+        <span class="pill ok"><i class="mgc mgc-server-core-regular" aria-hidden="true"></i>SearXNG configured</span>
+        {% else %}
+        <span class="pill">Not configured</span>
+        {% endif %}
+        <code>{{ search_state.endpoint_hash and 'http://searxng:8080' or '' }}</code>
+        <a href="/studio/api/research/health" target="_blank" rel="noopener">Check health <i class="mgc mgc-external-link-core-regular" aria-hidden="true"></i></a>
+      </p>
+    </div>
+    {% if available %}
+    <form method="post" action="/settings/research" class="settings-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <div class="field">
+        <div class="field-label">
+          <span class="field-name">Web research</span>
+          <p class="field-help">Lets the agent search the web and read sources for current stories.</p>
+        </div>
+        <div class="field-control">
+          <label class="switch">
+            <input type="checkbox" name="research_enabled" value="1" {% if (values.research_enabled if values.research_enabled is defined else (ws_dict['research.enabled'].value if ws_dict['research.enabled'] is defined else False)) %}checked{% endif %}>
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="switch-text">{% if (values.research_enabled if values.research_enabled is defined else (ws_dict['research.enabled'].value if ws_dict['research.enabled'] is defined else False)) %}Enabled{% else %}Disabled{% endif %}</span>
+          </label>
+          <p class="field-source">
+            {% set src = ws_dict['research.enabled'].source if ws_dict['research.enabled'] is defined else 'default' %}
+            {% if src == 'db' %}<span class="source-tag saved">Saved {{ ws_dict['research.enabled'].updated_at[:16] if ws_dict['research.enabled'].updated_at else '' }} UTC</span><button type="submit" class="link-btn" form="reset-research_enabled">Use .env value</button>
+            {% elif src == 'env' %}<span class="source-tag">from .env</span>
+            {% else %}<span class="source-tag">default</span>{% endif %}
+          </p>
+        </div>
+      </div>
+      <div class="field {% if errors.blocked_domains %}has-error{% endif %}">
+        <div class="field-label">
+          <label class="field-name" for="blocked_domains">Blocked domains</label>
+          <p class="field-help">Comma separated hostnames the agent must never cite, e.g. <code>example.com, cdn.example.net</code>.</p>
+        </div>
+        <div class="field-control">
+          <textarea id="blocked_domains" name="blocked_domains" rows="2" placeholder="No domains blocked">{{ values.blocked_domains if values.blocked_domains is defined else (ws_dict['research.blocked_domains'].value if ws_dict['research.blocked_domains'] is defined else '') }}</textarea>
+          {% if errors.blocked_domains %}<p class="field-error">{{ errors.blocked_domains }}</p>{% endif %}
+          <p class="field-source">
+            {% set src = ws_dict['research.blocked_domains'].source if ws_dict['research.blocked_domains'] is defined else 'default' %}
+            {% if src == 'db' %}<span class="source-tag saved">Saved {{ ws_dict['research.blocked_domains'].updated_at[:16] if ws_dict['research.blocked_domains'].updated_at else '' }} UTC</span><button type="submit" class="link-btn" form="reset-blocked_domains">Use .env value</button>
+            {% elif src == 'env' %}<span class="source-tag">from .env</span>
+            {% else %}<span class="source-tag">default</span>{% endif %}
+          </p>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn small">Save research</button>
+      </div>
+    </form>
+    <form id="reset-research_enabled" method="post" action="/settings/research/reset" hidden>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="key" value="research.enabled">
+    </form>
+    <form id="reset-blocked_domains" method="post" action="/settings/research/reset" hidden>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="key" value="research.blocked_domains">
+    </form>
+    {% else %}
+    <div class="settings-form">
+      <div class="field">
+        <div class="field-label"><span class="field-name">Web research</span><p class="field-help">Lets the agent search the web and read sources for current stories.</p></div>
+        <div class="field-control"><label class="switch"><input type="checkbox" disabled><span class="switch-track"></span><span class="switch-text">Disabled</span></label><p class="field-source"><span class="source-tag">from .env</span></p></div>
+      </div>
+      <div class="field">
+        <div class="field-label"><label class="field-name">Blocked domains</label><p class="field-help">Comma separated hostnames the agent must never cite.</p></div>
+        <div class="field-control"><textarea rows="2" disabled></textarea><p class="field-source"><span class="source-tag">default</span></p></div>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

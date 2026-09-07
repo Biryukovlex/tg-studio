@@ -29,6 +29,12 @@
           <i class="mgc mgc-content-ai-core-regular" aria-hidden="true"></i>
           <span>Studio</span>
         </a>
+        {% if can_manage_settings %}
+        <a class="sidebar-link{% if request.url.path.startswith('/settings') %} active{% endif %}" href="/settings">
+          <i class="mgc mgc-settings-3-core-regular" aria-hidden="true"></i>
+          <span>Settings</span>
+        </a>
+        {% endif %}
       </nav>
 
       <div class="sidebar-foot">

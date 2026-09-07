@@ -37,6 +37,7 @@ from ..studio.routes import _public_event_payload as _filter_event_payload
 from ..studio.routes import build_router as build_studio_router
 from ..studio.repository import MemoryStudioRepository, RunNotFound, StudioRepository
 from ..studio.service import StudioService
+from .settings_routes import router as settings_router
 
 log = logging.getLogger("web")
 
@@ -251,8 +252,17 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
     templates.env.globals["asset_version"] = static_asset_version()
     _studio_templates.env.globals["asset_version"] = static_asset_version()
     _studio_templates.env.globals["app_name"] = "TG Studio"
+    # Settings page needs the same globals
+    from .settings_routes import templates as _settings_templates
+
+    _settings_templates.env.filters["num"] = _num
+    _settings_templates.env.filters["dt"] = _dt
+    _settings_templates.env.globals["app_name"] = "TG Studio"
+    _settings_templates.env.globals["asset_version"] = static_asset_version()
 
     def render(request: Request, name: str, ctx: dict, status_code: int = 200):
+        # can_manage_settings is owner-only, used for sidebar link
+        ctx.setdefault("can_manage_settings", getattr(request.app.state.workspace_context, "role", "") == "owner")
         ctx.update({"request": request})
         return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 
@@ -268,6 +278,7 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
     # Keep auth/CSRF and service wiring in one production Studio router.
     app.state.csrf_token = csrf_token
     app.include_router(build_studio_router())
+    app.include_router(settings_router)
 
     # ---------------- auth ----------------
 

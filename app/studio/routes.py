@@ -294,6 +294,9 @@ def build_router() -> APIRouter:
     async def studio_home(request: Request):
         require_auth(request)
         setup = _ensure_ready(request)
+        # can_manage_settings for sidebar link
+        ctx = getattr(request.app.state, "workspace_context", None)
+        can_manage = getattr(ctx, "role", "") == "owner" if ctx else False
         return _TEMPLATES.TemplateResponse(
             request,
             "studio.html",
@@ -301,6 +304,7 @@ def build_router() -> APIRouter:
                 "setup": setup,
                 "csrf_token": request.app.state.csrf_token(request),
                 "studio_assets": setup["ready"],
+                "can_manage_settings": can_manage,
             },
         )
 
