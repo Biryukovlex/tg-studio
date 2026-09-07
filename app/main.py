@@ -30,6 +30,7 @@ from .db import Database
 from .postgres_db import PostgresDatabase
 from .session_crypto import build_cipher
 from .web.routes import create_app
+from .workspace_settings import WorkspaceSettings
 
 
 async def amain() -> None:
@@ -61,6 +62,17 @@ async def amain() -> None:
             sys.exit(1)
         db = PostgresDatabase.from_settings(settings)
         await db.init_db(admin_username=settings.admin_username)
+        # After DB init, re-validate CHANNELS with DB state
+        if not settings.channel_list:
+            try:
+                channels = await db.get_channels()
+                if not channels:
+                    print("\nConfiguration problems found:\n", file=sys.stderr)
+                    print("  - CHANNELS empty - e.g. CHANNELS=@my_channel\n", file=sys.stderr)
+                    print("Fix .env (copy .env.example) and run again.", file=sys.stderr)
+                    sys.exit(1)
+            except Exception:
+                pass
     else:
         db = Database(settings.db_path)
         db.init_db()
@@ -72,12 +84,28 @@ async def amain() -> None:
             kwargs["forwarded_allow_ips"] = settings.trusted_proxy_ips.strip()
         return uvicorn.Config(app, **kwargs)
 
+    # Build workspace settings accessor
+    cipher = build_cipher(settings.telegram_session_encryption_key)
+    if isinstance(db, PostgresDatabase):
+        workspace_settings = WorkspaceSettings(db, settings, cipher)
+        await workspace_settings.load()
+        effective = workspace_settings.effective
+    else:
+        # SQLite mode: no-op accessor
+        workspace_settings = WorkspaceSettings(db, settings, cipher)
+        # Force available=False for SQLite
+        workspace_settings.available = False
+        workspace_settings._rows = {}
+        workspace_settings._loaded = True
+        effective = workspace_settings.effective
+
     # The web role serves read-only dashboard/Studio requests and deliberately
     # does not acquire a Telegram session. Collection/manual refresh is owned
     # by the worker role in split deployments.
     if role == "web":
-        collector = Collector(None, db, settings)
-        app = create_app(collector, settings)
+        collector = Collector(None, db, effective)
+        collector.workspace_settings = workspace_settings  # type: ignore[attr-defined]
+        app = create_app(collector, effective, workspace_settings=workspace_settings)
         server = uvicorn.Server(_uvicorn_config(app))
         log.info("Web-only panel: http://%s:%s", settings.web_host, settings.web_port)
         try:
@@ -87,7 +115,6 @@ async def amain() -> None:
                 await db.close()
         return
 
-    cipher = build_cipher(settings.telegram_session_encryption_key)
     persisted_session = None
     if isinstance(db, PostgresDatabase):
         persisted_session = await db.load_telegram_session(
@@ -151,20 +178,31 @@ async def amain() -> None:
                 log.warning("persist_telegram_session failed")
     log.info("Logged in as %s", (await client.get_me()).first_name)
 
-    collector = Collector(client, db, settings)
+    collector = Collector(client, db, effective)
+    collector.workspace_settings = workspace_settings  # type: ignore[attr-defined]
     failed = await collector.sync_channels()
     if failed:
         log.warning("Could not resolve channel(s): %s - check CHANNELS in .env", ", ".join(failed))
 
-    handlers = CommandHandlers(client, collector, settings)
+    handlers = CommandHandlers(client, collector, effective)
     await handlers.start()
     log.info("Telegram commands enabled for Saved Messages")
 
     scheduler = AsyncIOScheduler(timezone="UTC")
+
+    def _on_poll_interval_change(new_minutes: float) -> None:
+        try:
+            scheduler.reschedule_job("poll_stats", trigger="interval", minutes=new_minutes)
+            log.info("Rescheduled poll_stats to %s minutes", new_minutes)
+        except Exception:
+            log.warning("Failed to reschedule poll_stats")
+
+    collector.on_poll_interval_change = _on_poll_interval_change  # type: ignore[attr-defined]
+
     scheduler.add_job(
         collector.poll_all,
         trigger="interval",
-        minutes=settings.poll_minutes,
+        minutes=effective.poll_minutes,
         kwargs={"reason": "scheduled"},
         id="poll_stats",
         max_instances=1,
@@ -193,7 +231,7 @@ async def amain() -> None:
                 await db.close()
         return
 
-    app = create_app(collector, settings)
+    app = create_app(collector, effective, workspace_settings=workspace_settings)
     server = uvicorn.Server(_uvicorn_config(app))
 
     log.info("Web panel: http://%s:%s", settings.web_host, settings.web_port)

@@ -217,7 +217,7 @@ def _load_or_create_secret(settings: Settings) -> str:
     return key
 
 
-def create_app(collector: Collector, settings: Settings) -> FastAPI:
+def create_app(collector: Collector, settings: Settings, workspace_settings=None) -> FastAPI:
     db = collector.db
     app = FastAPI(title="TG Studio", docs_url=None, redoc_url=None)
     app.add_middleware(
@@ -237,6 +237,7 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     )
     app.state.workspace_context = db_context
     app.state.settings = settings
+    app.state.workspace_settings = workspace_settings
     app.state.db = db
     studio_repository = StudioRepository(db) if getattr(db, "is_postgres", False) else MemoryStudioRepository()
     app.state.studio_repository = studio_repository

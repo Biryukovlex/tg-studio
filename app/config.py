@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     def db_path(self) -> Path:
         return self.data_path / "stats.db"
 
-    def validate_required(self) -> list[str]:
+    def validate_required(self, db_channels: list | None = None) -> list[str]:
         problems: list[str] = []
         role = str(self.process_role or "all").strip().lower()
         if role not in {"all", "web", "worker"}:
@@ -90,7 +90,16 @@ class Settings(BaseSettings):
         if needs_telegram and not self.session_string and not (self.postgres_enabled and self.telegram_session_encryption_key):
             problems.append("SESSION_STRING empty - run `python scripts/generate_session.py` once, then paste it into .env.")
         if needs_telegram and not self.channel_list:
-            problems.append("CHANNELS empty - e.g. CHANNELS=@my_channel")
+            # In PostgreSQL mode, CHANNELS may be empty if the database already has channels
+            if db_channels is not None:
+                if not db_channels:
+                    problems.append("CHANNELS empty - e.g. CHANNELS=@my_channel")
+            elif self.postgres_enabled:
+                # When postgres is enabled but we haven't checked DB yet, don't require CHANNELS here;
+                # main.py will re-validate after DB init with actual channels
+                pass
+            else:
+                problems.append("CHANNELS empty - e.g. CHANNELS=@my_channel")
         if needs_admin and not self.admin_password:
             problems.append("ADMIN_PASSWORD empty - required for the web admin panel.")
         # Guard against shipping default credentials on a public interface.
