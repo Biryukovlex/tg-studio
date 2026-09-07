@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .. import limits
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -68,7 +70,7 @@ class SearchHealth:
 def configured_search_state(settings) -> SearchHealth:
     """Build setup state without making a network request."""
 
-    provider = str(getattr(settings, "studio_search_provider", "searxng") or "searxng").strip().lower()
+    provider = limits.SEARCH_PROVIDER
     enabled = bool(getattr(settings, "studio_search_enabled", False))
     endpoint = _safe_endpoint(str(getattr(settings, "studio_search_base_url", "") or ""))
     configured = bool(endpoint) and provider == "searxng"
@@ -108,7 +110,7 @@ async def check_search_health(settings, *, transport=None) -> SearchHealth:
     state = configured_search_state(settings)
     if not state.enabled or not state.configured:
         return state
-    timeout = max(0.2, min(float(getattr(settings, "studio_search_timeout_seconds", 10.0)), 30.0))
+    timeout = limits.SEARCH_TIMEOUT_SECONDS
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),

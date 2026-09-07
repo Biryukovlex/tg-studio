@@ -64,7 +64,6 @@ async def test_choose_moves_pointer_without_new_version_and_agent_revision_becom
 
 @pytest.mark.asyncio
 async def test_patch_route_choose_and_save_modes(client, app, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password}, follow_redirects=False)
     home = await client.get("/studio")

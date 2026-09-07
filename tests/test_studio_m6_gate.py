@@ -18,6 +18,7 @@ import pytest
 from pydantic_ai.ui.ag_ui import AGUIAdapter as RealAGUIAdapter
 
 from app.collector import Collector
+from app import limits
 from app.config import Settings
 from app.studio.repository import MemoryStudioRepository
 from app.studio.service import StudioService
@@ -90,12 +91,11 @@ async def test_provider_failure_keeps_current_draft(monkeypatch):
     monkeypatch.setattr(service_module, "AGUIAdapter", _FailingAdapter)
     repository = MemoryStudioRepository()
     conversation, draft = await _seed_draft(repository)
-    service = StudioService(repository, Settings(studio_enabled=True, studio_test_mode=True))
+    service = StudioService(repository, Settings(studio_test_mode=True))
 
     response = await service.stream_request(
         None,
-        _payload(conversation["id"], uuid.uuid4(), "Try a provider-backed revision."),
-    )
+        _payload(conversation["id"], uuid.uuid4(), "Try a provider-backed revision."))
     async for _ in response.body_iterator:
         pass
 
@@ -112,10 +112,10 @@ async def test_cancellation_keeps_current_draft(monkeypatch):
     repository = MemoryStudioRepository()
     conversation, draft = await _seed_draft(repository)
     settings = Settings(
-        studio_enabled=True,
         studio_test_mode=True,
-        studio_run_heartbeat_seconds=0.05,
     )
+    monkeypatch.setattr(limits, "RUN_HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(limits, "RUN_LEASE_SECONDS", 60)
     service = StudioService(repository, settings)
     run_id = uuid.uuid4()
     response = await service.stream_request(

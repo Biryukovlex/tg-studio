@@ -22,6 +22,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
+from . import limits
 from .bot import CommandHandlers
 from .collector import Collector
 from .config import load_settings
@@ -90,7 +91,7 @@ async def amain() -> None:
     persisted_session = None
     if isinstance(db, PostgresDatabase):
         persisted_session = await db.load_telegram_session(
-            label=settings.telegram_connection_label, cipher=cipher
+            label=limits.TELEGRAM_CONNECTION_LABEL, cipher=cipher
         )
         try:
             await db.expire_stale_collection_jobs()
@@ -124,7 +125,7 @@ async def amain() -> None:
                 log.info("session source: environment")
                 if isinstance(db, PostgresDatabase) and cipher is not None:
                     await db.persist_telegram_session(
-                        label=settings.telegram_connection_label,
+                        label=limits.TELEGRAM_CONNECTION_LABEL,
                         api_id=settings.api_id,
                         api_hash=settings.api_hash,
                         session_string=session_string,
@@ -140,7 +141,7 @@ async def amain() -> None:
         if isinstance(db, PostgresDatabase) and cipher is not None and session_string != persisted_session:
             try:
                 await db.persist_telegram_session(
-                    label=settings.telegram_connection_label,
+                    label=limits.TELEGRAM_CONNECTION_LABEL,
                     api_id=settings.api_id,
                     api_hash=settings.api_hash,
                     session_string=session_string,
@@ -157,13 +158,7 @@ async def amain() -> None:
 
     handlers = CommandHandlers(client, collector, settings)
     await handlers.start()
-    if settings.admin_ids:
-        log.info("Telegram commands enabled for admins %s", sorted(settings.admin_ids))
-    else:
-        log.warning(
-            "ADMIN_TG_IDS empty - /stats etc. disabled. "
-            "Send /whoami to yourself in Saved Messages, put the id into .env and restart."
-        )
+    log.info("Telegram commands enabled for Saved Messages")
 
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(

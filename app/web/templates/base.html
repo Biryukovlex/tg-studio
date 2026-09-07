@@ -25,12 +25,10 @@
           <i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>
           <span>Overview</span>
         </a>
-        {% if request.app.state.settings.studio_enabled %}
         <a class="sidebar-link{% if request.url.path.startswith('/studio') %} active{% endif %}" href="/studio">
           <i class="mgc mgc-content-ai-core-regular" aria-hidden="true"></i>
           <span>Studio</span>
         </a>
-        {% endif %}
       </nav>
 
       <div class="sidebar-foot">

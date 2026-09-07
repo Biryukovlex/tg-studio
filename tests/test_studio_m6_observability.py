@@ -35,7 +35,7 @@ async def test_testmodel_usage_is_persisted_as_bounded_run_metadata():
     repository = MemoryStudioRepository()
     conversation = await repository.create_conversation(channel_id=1)
     run_id = uuid.uuid4()
-    service = StudioService(repository, Settings(studio_enabled=True, studio_test_mode=True))
+    service = StudioService(repository, Settings(studio_test_mode=True))
 
     response = await service.stream_request(None, _payload(conversation["id"], run_id))
     async for _ in response.body_iterator:
@@ -104,7 +104,6 @@ def test_structured_observation_contains_only_allowlisted_metadata(caplog):
 
 @pytest.mark.asyncio
 async def test_run_details_is_quiet_scoped_and_filters_unknown_event_fields(client, settings, app):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     login = await client.post(
         "/login",

@@ -25,7 +25,7 @@ def _rows(n: int):
 
 
 def _settings(**overrides) -> Settings:
-    base = dict(api_id=1, api_hash="h", session_string="s", channels="@test", studio_enabled=True)
+    base = dict(api_id=1, api_hash="h", session_string="s", channels="@test")
     base.update(overrides)
     return Settings(**base)
 

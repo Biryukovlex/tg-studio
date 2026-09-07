@@ -14,6 +14,8 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from .. import limits
+
 
 class StudioConfigurationError(RuntimeError):
     """A safe, actionable configuration problem."""
@@ -41,8 +43,7 @@ def build_model(settings, *, test_model: bool | None = None) -> Model:
     return OpenAIChatModel(
         model_name,
         provider=OpenAIProvider(
-            base_url=settings.openrouter_base_url.strip()
-            or "https://openrouter.ai/api/v1",
+            base_url=limits.OPENROUTER_BASE_URL,
             api_key=api_key,
         ),
     )

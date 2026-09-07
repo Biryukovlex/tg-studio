@@ -323,24 +323,18 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     async def studio_spike_compat(request: Request):
         """Redirect the M0 URL to the durable M2 Studio surface."""
         require_auth(request)
-        if not settings.studio_enabled:
-            raise HTTPException(status_code=404, detail="Studio is disabled")
         return RedirectResponse("/studio", status_code=307)
 
     @app.post("/studio-spike/api/agent")
     async def studio_spike_agent_compat(request: Request):
         """Accept one release cycle of clients that still use the M0 path."""
         require_auth(request)
-        if not settings.studio_enabled:
-            raise HTTPException(status_code=404, detail="Studio is disabled")
         require_csrf(request)
         return await app.state.studio_service.stream_request(request, await request.body())
 
     @app.post("/studio-spike/api/runs/{run_id}/cancel")
     async def studio_spike_cancel_compat(request: Request, run_id: str):
         require_auth(request)
-        if not settings.studio_enabled:
-            raise HTTPException(status_code=404, detail="Studio is disabled")
         require_csrf(request)
         try:
             parsed = uuid.UUID(run_id)
@@ -356,8 +350,6 @@ def create_app(collector: Collector, settings: Settings) -> FastAPI:
     @app.get("/studio-spike/api/runs/{run_id}/events")
     async def studio_spike_events_compat(request: Request, run_id: str, after: int = 0):
         require_auth(request)
-        if not settings.studio_enabled:
-            raise HTTPException(status_code=404, detail="Studio is disabled")
         try:
             parsed = uuid.UUID(run_id)
         except ValueError:

@@ -3,13 +3,14 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app import limits
 from app.config import Settings
 from app.studio.search_health import check_search_health, configured_search_state
 from app.studio.setup import build_setup_state
 
 
 def test_search_setup_is_optional_and_does_not_add_a_blocker():
-    settings = Settings(studio_enabled=True, studio_search_enabled=True, studio_search_base_url="")
+    settings = Settings(studio_search_enabled=True, studio_search_base_url="")
     state = configured_search_state(settings).as_dict()
     assert state["enabled"] is True
     assert state["configured"] is False
@@ -27,11 +28,7 @@ def test_search_setup_is_optional_and_does_not_add_a_blocker():
 
 @pytest.mark.asyncio
 async def test_health_probe_is_bounded_and_returns_safe_state():
-    settings = Settings(
-        studio_search_enabled=True,
-        studio_search_base_url="http://searxng:8080/private-path",
-        studio_search_timeout_seconds=2,
-    )
+    settings = Settings(studio_search_enabled=True, studio_search_base_url="http://searxng:8080/private-path")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/healthz"

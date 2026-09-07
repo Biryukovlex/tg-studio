@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
+from .. import limits
 from ..web.dependencies import require_auth, require_csrf
 from .consent import PROVIDER_NAME, configuration_fingerprint, consent_state, disclosure
 from .drafts import DraftConflictError, DraftValidationError
@@ -258,19 +259,13 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=503, detail="Studio service is not ready")
         return service
 
-    def _ensure_enabled(request: Request) -> None:
-        if not _settings(request).studio_enabled:
-            raise HTTPException(status_code=404, detail="Studio is disabled")
-
     @router.get("/api/settings")
     async def studio_settings(request: Request):
-        _ensure_enabled(request)
         require_auth(request)
         return {"system_prompt": await _service(request).repository.get_system_prompt()}
 
     @router.patch("/api/settings")
     async def patch_studio_settings(request: Request):
-        _ensure_enabled(request)
         require_auth(request)
         require_csrf(request)
         try:
@@ -297,7 +292,6 @@ def build_router() -> APIRouter:
 
     @router.get("", response_class=HTMLResponse)
     async def studio_home(request: Request):
-        _ensure_enabled(request)
         require_auth(request)
         setup = _ensure_ready(request)
         return _TEMPLATES.TemplateResponse(
@@ -312,7 +306,6 @@ def build_router() -> APIRouter:
 
     @router.get("/api/setup")
     async def studio_setup(request: Request):
-        _ensure_enabled(request)
         require_auth(request)
         return _ensure_ready(request)
 
@@ -320,20 +313,17 @@ def build_router() -> APIRouter:
     async def research_health(request: Request):
         """Return bounded private-search health without blocking setup."""
 
-        _ensure_enabled(request)
         require_auth(request)
         return (await check_search_health(_settings(request))).as_dict()
 
     @router.post("/api/setup/validate")
     async def studio_setup_validate(request: Request):
-        _ensure_enabled(request)
         require_auth(request)
         require_csrf(request)
         return _ensure_ready(request)
 
     @router.get("/api/bootstrap")
     async def studio_bootstrap(request: Request):
-        _ensure_enabled(request)
         context = require_auth(request)
         setup = _ensure_ready(request)
         service = _service(request)
@@ -383,14 +373,12 @@ def build_router() -> APIRouter:
 
     @router.get("/api/consent")
     async def get_consent(request: Request):
-        _ensure_enabled(request)
         context = require_auth(request)
         _ensure_ready(request)
         return {"consent": await _consent(request, context)}
 
     @router.post("/api/consent")
     async def grant_consent(request: Request):
-        _ensure_enabled(request)
         context = require_auth(request)
         require_csrf(request)
         setup = _ensure_ready(request)
@@ -430,7 +418,6 @@ def build_router() -> APIRouter:
 
     @router.post("/api/consent/revoke")
     async def revoke_consent(request: Request):
-        _ensure_enabled(request)
         context = require_auth(request)
         require_csrf(request)
         _ensure_ready(request)
@@ -449,14 +436,13 @@ def build_router() -> APIRouter:
             blockers.append({"code": "provider_consent_required", "message": "Allow OpenRouter in the Studio banner before building."})
         # Check post count
         if available_posts is not None:
-            minimum = int(getattr(request.app.state.settings, "studio_min_profile_posts", 5))
+            minimum = int(limits.MIN_PROFILE_POSTS)
             if available_posts < minimum:
                 blockers.append({"code": "too_few_posts", "message": f"Needs at least {minimum} posts; {available_posts} collected so far.", "available": available_posts, "minimum": minimum})
         return blockers
 
     @router.get("/api/profile")
     async def get_profile(request: Request, channel_id: int | None = None):
-        _ensure_enabled(request)
         context = require_auth(request)
         setup = _ensure_ready(request)
         if not setup["ready"]:
@@ -485,7 +471,6 @@ def build_router() -> APIRouter:
 
     @router.put("/api/profile")
     async def put_profile(request: Request):
-        _ensure_enabled(request)
         require_auth(request)
         require_csrf(request)
         setup = _ensure_ready(request)
@@ -542,7 +527,6 @@ def build_router() -> APIRouter:
 
     @router.post("/api/profile/build")
     async def build_profile(request: Request):
-        _ensure_enabled(request)
         context = require_auth(request)
         require_csrf(request)
         setup = _ensure_ready(request)
@@ -564,7 +548,7 @@ def build_router() -> APIRouter:
         if reader is not None:
             try:
                 rows = await reader(payload.channel_id)
-                minimum = int(getattr(request.app.state.settings, "studio_min_profile_posts", 5))
+                minimum = int(limits.MIN_PROFILE_POSTS)
                 if len(rows) < minimum:
                     return _safe_error("too_few_posts", f"Needs at least {minimum} posts; {len(rows)} collected so far.", status_code=409)
             except ConversationNotFound:
@@ -584,7 +568,6 @@ def build_router() -> APIRouter:
 
     @router.get("/api/conversations")
     async def list_conversations(request: Request):
-        _ensure_enabled(request)
         require_auth(request)
         setup = _ensure_ready(request)
         if not setup["ready"]:
@@ -594,7 +577,6 @@ def build_router() -> APIRouter:
 
     @router.post("/api/conversations")
     async def create_conversation(request: Request):
-        _ensure_enabled(request)
         require_auth(request)
         require_csrf(request)
         setup = _ensure_ready(request)
@@ -617,7 +599,6 @@ def build_router() -> APIRouter:
 
     @router.patch("/api/conversations/{conversation_id}")
     async def rename_conversation(request: Request, conversation_id: str):
-        _ensure_enabled(request)
         require_auth(request)
         require_csrf(request)
         try:
@@ -637,7 +618,6 @@ def build_router() -> APIRouter:
     async def delete_conversation(request: Request, conversation_id: str):
         """Permanently remove one conversation and its Studio-only records."""
 
-        _ensure_enabled(request)
         require_auth(request)
         require_csrf(request)
         try:
@@ -667,7 +647,6 @@ def build_router() -> APIRouter:
 
     @router.get("/api/conversations/{conversation_id}/messages")
     async def conversation_messages(request: Request, conversation_id: str):
-        _ensure_enabled(request)
         require_auth(request)
         try:
             parsed = uuid.UUID(conversation_id)
@@ -683,7 +662,6 @@ def build_router() -> APIRouter:
     async def conversation_active_run(request: Request, conversation_id: str):
         """Discover durable work after a reload or conversation switch."""
 
-        _ensure_enabled(request)
         require_auth(request)
         try:
             parsed = uuid.UUID(conversation_id)
@@ -701,7 +679,6 @@ def build_router() -> APIRouter:
     async def conversation_draft(request: Request, conversation_id: str):
         """Return the conversation's active artifact after a reload."""
 
-        _ensure_enabled(request)
         require_auth(request)
         try:
             parsed = uuid.UUID(conversation_id)
@@ -728,7 +705,6 @@ def build_router() -> APIRouter:
 
     @router.get("/api/drafts/{draft_id}")
     async def get_draft(request: Request, draft_id: str):
-        _ensure_enabled(request)
         require_auth(request)
         try:
             parsed = uuid.UUID(draft_id)
@@ -741,7 +717,6 @@ def build_router() -> APIRouter:
 
     @router.patch("/api/drafts/{draft_id}")
     async def patch_draft(request: Request, draft_id: str):
-        _ensure_enabled(request)
         require_auth(request)
         require_csrf(request)
         try:
@@ -788,7 +763,6 @@ def build_router() -> APIRouter:
 
     @router.post("/api/drafts/{draft_id}/copied")
     async def copied_draft(request: Request, draft_id: str):
-        _ensure_enabled(request)
         require_auth(request)
         require_csrf(request)
         try:
@@ -809,7 +783,6 @@ def build_router() -> APIRouter:
 
     @router.get("/api/drafts/{draft_id}/versions")
     async def draft_versions(request: Request, draft_id: str):
-        _ensure_enabled(request)
         require_auth(request)
         try:
             parsed = uuid.UUID(draft_id)
@@ -823,7 +796,6 @@ def build_router() -> APIRouter:
 
     @router.post("/api/agent")
     async def studio_agent(request: Request):
-        _ensure_enabled(request)
         context = require_auth(request)
         require_csrf(request)
         setup = _ensure_ready(request)
@@ -836,7 +808,6 @@ def build_router() -> APIRouter:
 
     @router.get("/api/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str, after: int = 0):
-        _ensure_enabled(request)
         require_auth(request)
         service = _service(request)
         try:
@@ -862,7 +833,6 @@ def build_router() -> APIRouter:
     async def run_details(request: Request, run_id: str):
         """Return a quiet, privacy-safe operational summary for one run."""
 
-        _ensure_enabled(request)
         require_auth(request)
         service = _service(request)
         try:
@@ -909,7 +879,6 @@ def build_router() -> APIRouter:
 
     @router.post("/api/runs/{run_id}/cancel")
     async def cancel_run(request: Request, run_id: str):
-        _ensure_enabled(request)
         require_auth(request)
         require_csrf(request)
         service = _service(request)

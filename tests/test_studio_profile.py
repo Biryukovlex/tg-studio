@@ -82,7 +82,6 @@ def test_add_and_remove_topic_requests_are_confirmation_gated():
 
 @pytest.mark.asyncio
 async def test_profile_change_api_requires_csrf_and_confirmation(client, settings, app):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     response = await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password}, follow_redirects=False)
     assert response.status_code == 303
@@ -109,7 +108,6 @@ async def test_profile_change_api_requires_csrf_and_confirmation(client, setting
 
 @pytest.mark.asyncio
 async def test_openrouter_consent_is_explicit_and_precedes_agent_use(client, settings, app):
-    settings.studio_enabled = True
     settings.studio_test_mode = False
     settings.openrouter_api_key = "router-test-key"
     settings.telegram_session_encryption_key = "a" * 48

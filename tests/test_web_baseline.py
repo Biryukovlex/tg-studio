@@ -44,7 +44,7 @@ async def test_valid_login_renders_seeded_dashboard(client):
 
     assert dashboard.status_code == 200
     assert "Overview" in dashboard.text
-    assert 'href="/studio"' not in dashboard.text
+    assert 'href="/studio"' in dashboard.text
     assert "Sample channel" in dashboard.text
     assert "A representative collected post" in dashboard.text
     assert "120" in dashboard.text
@@ -114,7 +114,8 @@ async def test_logout_clears_the_authenticated_session(client):
 
 
 async def test_studio_is_not_registered_in_the_baseline_app(client):
-    """M0 keeps the existing app safe while Studio is feature-flagged off."""
+    """Studio is always registered; unauthenticated access redirects to login."""
     response = await client.get("/studio", follow_redirects=False)
 
-    assert response.status_code == 404
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"

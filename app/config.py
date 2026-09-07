@@ -35,78 +35,27 @@ class Settings(BaseSettings):
     # deployments can run the web and Telegram collector independently.
     process_role: str = "all"
 
-    # Content Studio (kept disabled until explicitly enabled)
-    studio_enabled: bool = False
+    # Content Studio
     openrouter_api_key: str = ""
     openrouter_model: str = "openai/gpt-4o-mini"
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    # M2 agent bounds. ``studio_test_mode`` is an explicit deterministic test
-    # seam and must never be enabled in a hosted deployment.
+    # ``studio_test_mode`` is an explicit deterministic test seam and must
+    # never be enabled in a hosted deployment.
     studio_test_mode: bool = False
-    studio_provider_timeout_seconds: float = 45.0
-    studio_run_timeout_seconds: float = 300.0
-    studio_run_concurrency: int = 2
-    studio_run_lease_seconds: int = 120
-    studio_run_heartbeat_seconds: float = 20.0
-    studio_queued_run_grace_seconds: int = 60
-    studio_tool_timeout_seconds: float = 30.0
-    studio_tool_concurrency: int = 6
-    # Research may use channel context, several query batches, source reads,
-    # and comparison. Twelve remains bounded but permits a real search loop.
-    studio_max_tool_calls: int = 12
-    # This is cumulative across the whole agent/tool loop, not only the final
-    # answer. Iterative research needs headroom even when the final is concise.
-    studio_max_output_tokens: int = 8192
-    # M3 evidence/context bounds. These are server-side limits and are never
-    # accepted from browser requests.
-    studio_context_max_chars: int = 18_000
-    studio_max_evidence_posts: int = 20
-    studio_min_profile_posts: int = 5
-    # M4 research is deliberately optional and failure-isolated.  Search is
-    # only enabled when an operator points the app at a private SearXNG
-    # instance; an empty URL always produces a visible degraded state.
     studio_search_enabled: bool = False
-    studio_search_provider: str = "searxng"
     studio_search_base_url: str = ""
-    studio_search_timeout_seconds: float = 10.0
-    studio_search_retries: int = 1
-    # The agent can choose a bounded engine mix per search.  This value is the
-    # fallback when it does not specify one; the allow-list prevents arbitrary
-    # engine names from becoming an unbounded provider surface.
-    studio_search_engines: str = "yandex,github,arxiv,wikipedia"
-    studio_search_allowed_engines: str = "yandex,github,arxiv,wikipedia,bing,bing news,google,google news,brave,brave news,mojeek,qwant"
     studio_search_blocked_domains: str = ""
-    studio_search_max_queries: int = 12
-    studio_search_max_results: int = 10
-    studio_search_cache_ttl_seconds: int = 900
-    studio_source_reader_enabled: bool = True
-    studio_source_timeout_seconds: float = 10.0
-    studio_source_max_bytes: int = 1_000_000
-    studio_source_max_redirects: int = 3
-    studio_source_max_chars: int = 12_000
-
-    # Telegram commands
-    admin_tg_ids: str = ""
 
     # Collection tuning
     poll_minutes: float = 15.0
     track_days: int = 30  # 0 = entire channel history
     backfill_limit: int = 200  # 0 = no message-count limit
-    full_rescan_hours: int = 24
 
     # Storage
     data_dir: str = "data"
     # PostgreSQL is the M1+ runtime store.  Leaving this empty preserves the
     # pre-M1 local SQLite mode until the operator completes the import.
     database_url: str = ""
-    app_mode: str = "community"
-    local_workspace_slug: str = "community"
-    database_pool_size: int = 5
-    database_max_overflow: int = 5
-    database_pool_timeout: float = 30.0
-    database_pool_recycle: int = 1800
     telegram_session_encryption_key: str = ""
-    telegram_connection_label: str = "default"
 
     @field_validator("api_id", mode="before")
     @classmethod
@@ -125,18 +74,6 @@ class Settings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return self.data_path / "stats.db"
-
-    @cached_property
-    def admin_ids(self) -> set[int]:
-        out: set[int] = set()
-        for part in self.admin_tg_ids.replace(";", ",").split(","):
-            part = part.strip()
-            if part:
-                try:
-                    out.add(int(part))
-                except ValueError:
-                    pass
-        return out
 
     def validate_required(self) -> list[str]:
         problems: list[str] = []

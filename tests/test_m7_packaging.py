@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from app import limits
 from app.config import Settings
 from app.studio.search_health import configured_search_state
 
@@ -55,7 +56,7 @@ def test_split_profile_assigns_one_role_per_process():
 
 def test_search_configuration_is_explicitly_degraded_when_endpoint_is_missing():
     state = configured_search_state(
-        Settings(studio_search_enabled=True, studio_search_provider="searxng", studio_search_base_url="")
+        Settings(studio_search_enabled=True, studio_search_base_url="")
     )
 
     assert state.enabled is True

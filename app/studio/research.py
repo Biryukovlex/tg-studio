@@ -17,6 +17,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Sequence
 
+from .. import limits
 from .provenance import (
     _aware,
     _now,
@@ -157,7 +158,7 @@ class ResearchService:
         self.repository = repository
         self.scorer = scorer
         self.max_sources = max(1, min(int(max_sources), 12))
-        self.max_queries = max(1, min(int(max_queries if max_queries is not None else getattr(settings, "studio_search_max_queries", 12)), 12))
+        self.max_queries = max(1, min(int(max_queries if max_queries is not None else limits.SEARCH_MAX_QUERIES), 12))
         self.concurrency = max(1, min(int(concurrency), 6))
         self._search_slots = asyncio.Semaphore(self.concurrency)
         self._states: dict[str, ResearchState] = {}
@@ -552,7 +553,7 @@ class ResearchService:
             async with self._search_slots:
                 return await self.provider.search(
                     query,
-                    limit=getattr(self.settings, "studio_search_max_results", 10),
+                    limit=limits.SEARCH_MAX_RESULTS,
                     categories=tuple(categories),
                     domains=tuple(domains),
                 )

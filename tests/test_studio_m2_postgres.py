@@ -34,7 +34,7 @@ async def test_postgres_studio_run_persists_workspace_scoped_history_and_events(
         await db.init_db(admin_username="m2-studio-admin")
         channel_id = await db.upsert_channel("@m2-studio", "M2 Studio", 2026)
         repository = StudioRepository(db)
-        service = StudioService(repository, Settings(studio_enabled=True, studio_test_mode=True))
+        service = StudioService(repository, Settings(studio_test_mode=True))
         conversation = await repository.create_conversation(channel_id=channel_id)
         run_id = uuid.uuid4()
         response = await service.stream_request(None, _payload(conversation["id"], run_id))
@@ -56,7 +56,7 @@ async def test_postgres_studio_run_persists_workspace_scoped_history_and_events(
         reloaded_repository = StudioRepository(db)
         reloaded_service = StudioService(
             reloaded_repository,
-            Settings(studio_enabled=True, studio_test_mode=True),
+            Settings(studio_test_mode=True),
         )
         reloaded_messages = await reloaded_repository.list_messages(conversation["id"])
         reloaded_events = await reloaded_repository.get_events(run_id)

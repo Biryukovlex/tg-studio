@@ -107,7 +107,6 @@ async def _login(client, settings) -> None:
 
 @pytest.mark.asyncio
 async def test_browser_and_exports_do_not_return_runtime_secrets(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     secrets = {
         "openrouter": "or-secret-m6-never-return",
@@ -232,7 +231,6 @@ async def test_postgres_repository_and_routes_fail_closed_across_workspaces():
             database_url=database_url,
             telegram_session_encryption_key="m6-external-encryption-key" * 2,
             local_workspace_slug=slug_a,
-            studio_enabled=True,
             studio_test_mode=True,
         )
         app = create_app(Collector(db_a), settings)

@@ -19,7 +19,6 @@ async def _login(client, settings) -> str:
 
 @pytest.mark.asyncio
 async def test_reload_discovers_active_run_and_returns_durable_snapshot(client, app, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     token = await _login(client, settings)
     created = await client.post(

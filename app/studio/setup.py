@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .. import limits
 from .search_health import configured_search_state
 
 
@@ -16,9 +17,8 @@ def build_setup_state(settings, db) -> dict:
     if not settings.channel_list:
         blockers.append({"code": "channel_missing", "message": "Configure at least one Telegram channel."})
     return {
-        "enabled": bool(settings.studio_enabled),
-        "ready": bool(settings.studio_enabled and not blockers),
-        "workspace_slug": getattr(db, "workspace_slug", settings.local_workspace_slug),
+        "ready": bool(not blockers),
+        "workspace_slug": getattr(db, "workspace_slug", limits.WORKSPACE_SLUG),
         "provider": "openrouter",
         "research": configured_search_state(settings).as_dict(),
         "blockers": blockers,

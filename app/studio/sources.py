@@ -24,6 +24,7 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 from html.parser import HTMLParser
 
+from .. import limits
 from .search import canonicalize_url
 
 _ALLOWED_MIME = {"text/html", "application/xhtml+xml", "text/plain"}
@@ -254,11 +255,11 @@ class SafeSourceReader:
         allow_private_for_tests: bool = False,
     ) -> None:
         self.settings = settings
-        self.enabled = bool(getattr(settings, "studio_source_reader_enabled", True))
-        self.timeout_seconds = max(0.2, min(float(timeout_seconds if timeout_seconds is not None else getattr(settings, "studio_source_timeout_seconds", 10.0)), 60.0))
-        self.max_bytes = max(1_024, min(int(max_bytes if max_bytes is not None else getattr(settings, "studio_source_max_bytes", 1_000_000)), 10_000_000))
-        self.max_redirects = max(0, min(int(max_redirects if max_redirects is not None else getattr(settings, "studio_source_max_redirects", 3)), 10))
-        self.max_chars = max(200, min(int(max_chars if max_chars is not None else getattr(settings, "studio_source_max_chars", 12_000)), 100_000))
+        self.enabled = limits.SOURCE_READER_ENABLED
+        self.timeout_seconds = max(0.2, min(float(timeout_seconds if timeout_seconds is not None else limits.SOURCE_TIMEOUT_SECONDS), 60.0))
+        self.max_bytes = max(1_024, min(int(max_bytes if max_bytes is not None else limits.SOURCE_MAX_BYTES), 10_000_000))
+        self.max_redirects = max(0, min(int(max_redirects if max_redirects is not None else limits.SOURCE_MAX_REDIRECTS), 10))
+        self.max_chars = max(200, min(int(max_chars if max_chars is not None else limits.SOURCE_MAX_CHARS), 100_000))
         self.transport = transport
         self.client = client
         self.resolver = resolver

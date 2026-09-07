@@ -47,7 +47,7 @@ async def test_postgres_m3_profile_context_and_consent_are_workspace_scoped():
         assert all("PRIVATE DISCUSSION BODY" not in str(row) for row in rows)
         analysis = analyze_posts(rows, channel_id, now=now, identifier="@m3-integration")
         assert analysis.eligible_post_count == 8
-        service = StudioService(repository, Settings(studio_enabled=True, studio_test_mode=True))
+        service = StudioService(repository, Settings(studio_test_mode=True))
         profile_row = await service.ensure_profile(channel_id)
         assert profile_row and profile_row["current_analysis_id"]
         profile = await repository.get_profile(channel_id)

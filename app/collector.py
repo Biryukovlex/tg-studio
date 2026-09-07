@@ -19,6 +19,7 @@ from typing import Any
 
 from telethon import TelegramClient, errors
 
+from . import limits
 from .config import Settings
 from .db import Database, utcnow
 from .async_compat import maybe_await
@@ -161,8 +162,8 @@ class Collector:
             cutoff = utcnow().replace(tzinfo=None) - timedelta(days=self.settings.track_days)
             limit = self.settings.backfill_limit if self.settings.backfill_limit > 0 else None
         else:
-            # Whole-history mode with pacing: full scan only every full_rescan_hours
-            full_hours = int(getattr(self.settings, "full_rescan_hours", 24))
+            # Whole-history mode with pacing: full scan only every FULL_RESCAN_HOURS
+            full_hours = int(limits.FULL_RESCAN_HOURS)
             now = datetime.now(timezone.utc)
             last = self._last_full_scan.get(ch["id"])
             if last is None or (now - last).total_seconds() >= full_hours * 3600:

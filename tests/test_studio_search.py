@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app import limits
 from app.config import Settings
 from app.studio.search import (
     DegradedSearchProvider,
@@ -56,7 +57,6 @@ async def test_searxng_normalizes_deduplicates_and_caches_metadata_only():
     settings = Settings(
         studio_search_enabled=True,
         studio_search_base_url="http://private-search:8080",
-        studio_search_cache_ttl_seconds=60,
     )
     provider = SearXNGSearchProvider(settings, transport=httpx.MockTransport(handler), cache=SearchCache(ttl_seconds=60))
     query = SearchQuery("fresh story", recency_days=7, domains=("example.com",), limit=5)
@@ -85,7 +85,7 @@ async def test_provider_retries_transient_failure_with_bounded_attempts():
             return httpx.Response(503, text="internal details")
         return httpx.Response(200, json={"results": [{"url": "https://example.test/a", "title": "A", "content": "B"}]})
 
-    settings = Settings(studio_search_enabled=True, studio_search_base_url="http://private-search:8080", studio_search_retries=1)
+    settings = Settings(studio_search_enabled=True, studio_search_base_url="http://private-search:8080")
     provider = SearXNGSearchProvider(settings, transport=httpx.MockTransport(handler))
     response = await provider.search("retry me")
     assert calls == 2
@@ -94,14 +94,15 @@ async def test_provider_retries_transient_failure_with_bounded_attempts():
 
 
 @pytest.mark.asyncio
-async def test_disabled_and_unsupported_providers_are_explicitly_degraded():
+async def test_disabled_and_unsupported_providers_are_explicitly_degraded(monkeypatch):
     disabled = build_search_provider(Settings(studio_search_enabled=False))
     response = await disabled.search("topic")
     assert isinstance(disabled, DegradedSearchProvider)
     assert response.degraded is True
     assert response.results == ()
 
-    unsupported = build_search_provider(Settings(studio_search_enabled=True, studio_search_provider="other"))
+    monkeypatch.setattr(limits, "SEARCH_PROVIDER", "other")
+    unsupported = build_search_provider(Settings(studio_search_enabled=True))
     response = await unsupported.search("topic")
     assert response.degraded is True
     assert "supported" in response.warnings[0]
@@ -111,8 +112,8 @@ def test_search_query_and_result_bounds_are_server_side():
     query = SearchQuery("x" * 5_000, categories=("news", "not-a-category"), domains=tuple("example.com" for _ in range(20)), limit=999)
     # The provider normalizes on execution; no browser-supplied limit can
     # exceed the configured maximum.
-    settings = Settings(studio_search_enabled=True, studio_search_base_url="", studio_search_max_results=3)
-    provider = SearXNGSearchProvider(settings)
+    settings = Settings(studio_search_enabled=True, studio_search_base_url="")
+    provider = SearXNGSearchProvider(settings, max_results=3)
     import asyncio
 
     response = asyncio.run(provider.search(query))

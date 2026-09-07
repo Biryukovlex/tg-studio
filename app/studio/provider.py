@@ -14,6 +14,7 @@ from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from .. import limits
 from ..config import Settings
 
 
@@ -39,8 +40,7 @@ async def run_openrouter_smoke(settings: Settings) -> OpenRouterSmokeResult:
         model = OpenAIChatModel(
             model_name,
             provider=OpenAIProvider(
-                base_url=settings.openrouter_base_url.strip()
-                or "https://openrouter.ai/api/v1",
+                base_url=limits.OPENROUTER_BASE_URL,
                 api_key=api_key,
             ),
         )

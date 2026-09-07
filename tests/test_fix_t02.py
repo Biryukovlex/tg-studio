@@ -164,7 +164,6 @@ async def test_unauthenticated_api_returns_401_json(tmp_path):
         admin_username="admin",
         admin_password="pw",
         session_secret="sec",
-        studio_enabled=True,
         studio_test_mode=True,
     )
     app = _make_app(settings)
@@ -256,7 +255,6 @@ async def test_compat_events_filters_allowlist(tmp_path):
         admin_username="admin",
         admin_password="pw",
         session_secret="sec",
-        studio_enabled=True,
         studio_test_mode=True,
     )
     db = Database(tmp_path / "stats.db")

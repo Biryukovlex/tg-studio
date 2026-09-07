@@ -1,14 +1,12 @@
 """Admin commands over the same user session.
 
-Send these in your **Saved Messages** (chat with yourself), or from any
-Telegram account whose id is listed in ADMIN_TG_IDS as a private message:
+Send these in your **Saved Messages** (chat with yourself):
 
     /help            - list commands
     /stats [channel] - totals for tracked posts (optionally one channel)
     /top [n]         - top n posts by views (default 5)
     /last [n]        - n most recent posts (default 5)
     /refresh         - force a collection cycle right now
-    /whoami          - print your Telegram user id (for ADMIN_TG_IDS)
 """
 
 from __future__ import annotations
@@ -31,7 +29,6 @@ HELP = (
     "/top [n] - top posts by views\n"
     "/last [n] - most recent posts\n"
     "/refresh - collect stats now\n"
-    "/whoami - show your Telegram id"
 )
 
 
@@ -77,8 +74,6 @@ class CommandHandlers:
     def _allowed(self, event) -> bool:
         if not event.is_private:
             return False
-        if event.sender_id in self.settings.admin_ids:
-            return True
         # Saved Messages: the account owner talking to themselves.
         return bool(event.out and event.chat_id == self._me_id)
 
@@ -94,27 +89,13 @@ class CommandHandlers:
         cmd = parts[0].lstrip("/").lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        # Bootstrap helper: anyone in a private chat (including the owner's
-        # Saved Messages) can ask for their id. Never answer in groups, where an
-        # outgoing command would post the owner's id publicly.
-        if cmd == "whoami":
-            if not event.is_private:
-                return
-            await event.reply(f"Your Telegram id: {event.sender_id or 'unknown'}")
-            return
-
         if not self._allowed(event):
             return
-        # Non-whoami commands only in private chats from admins
         if not event.is_private:
             return
 
         if cmd in ("start", "help"):
             await event.reply(HELP)
-            return
-
-        if cmd == "whoami":
-            await event.reply(f"Your Telegram id: {event.sender_id or 'unknown'}")
             return
 
         if cmd == "refresh":

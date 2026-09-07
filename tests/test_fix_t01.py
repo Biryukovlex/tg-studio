@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic_ai.ui.ag_ui import AGUIAdapter as RealAGUIAdapter
 
+from app import limits
 from app.config import Settings
 from app.studio.analytics import analyze_posts
 from app.studio.semantic_profile import build_semantic_profile
@@ -67,9 +68,7 @@ async def test_semantic_profile_with_120_posts_in_test_mode():
         admin_username="u",
         admin_password="p",
         session_secret="secret",
-        studio_test_mode=True,
-        studio_enabled=True,
-    )
+        studio_test_mode=True)
     profile, analysis = await build_semantic_profile(analytics, rows, settings)
     # Must not raise EvidenceIntegrityError; all evidence IDs must be within trimmed evidence
     # Recompute the trimmed sample as build_semantic_profile does
@@ -152,11 +151,10 @@ async def test_watchdog_failure_does_not_hang_stream(monkeypatch):
         admin_username="u",
         admin_password="p",
         session_secret="secret",
-        studio_enabled=True,
         studio_test_mode=True,
-        studio_run_heartbeat_seconds=0.05,
-        studio_run_lease_seconds=60,
     )
+    monkeypatch.setattr(limits, "RUN_HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(limits, "RUN_LEASE_SECONDS", 60)
     service = StudioService(repo, settings)
     run_id = uuid.uuid4()
     response = await service.stream_request(None, _payload(conversation["id"], run_id))
@@ -202,11 +200,10 @@ async def test_watchdog_three_failures_cancels_run(monkeypatch):
         admin_username="u",
         admin_password="p",
         session_secret="secret",
-        studio_enabled=True,
         studio_test_mode=True,
-        studio_run_heartbeat_seconds=0.05,
-        studio_run_lease_seconds=60,
     )
+    monkeypatch.setattr(limits, "RUN_HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(limits, "RUN_LEASE_SECONDS", 60)
     service = StudioService(repo, settings)
     run_id = uuid.uuid4()
     response = await service.stream_request(None, _payload(conversation["id"], run_id))
@@ -222,7 +219,6 @@ async def test_watchdog_three_failures_cancels_run(monkeypatch):
 @pytest.mark.asyncio
 async def test_search_health_does_not_leak_endpoint(client, settings, app):
     # Configure a distinctive host
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     settings.studio_search_enabled = True
     settings.studio_search_base_url = "http://searxng-private-host-xyz:8080"
@@ -257,7 +253,6 @@ async def test_search_health_does_not_leak_endpoint(client, settings, app):
 
 @pytest.mark.asyncio
 async def test_search_health_hash_empty_when_not_configured(client, settings):
-    settings.studio_enabled = True
     settings.studio_test_mode = True
     settings.studio_search_enabled = True
     settings.studio_search_base_url = ""

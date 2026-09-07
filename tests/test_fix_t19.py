@@ -112,7 +112,7 @@ async def test_change_request_with_existing_draft_requires_revise_draft(monkeypa
     repo = MemoryStudioRepository()
     conversation = await repo.create_conversation(channel_id=1)
     await repo.create_draft(conversation_id=conversation["id"], channel_id=1, payload={"body": "Existing post body", "creative": True})
-    settings = Settings(studio_enabled=True, studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@t", admin_password="p", session_secret="s", data_dir="/tmp")
+    settings = Settings(studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@t", admin_password="p", session_secret="s", data_dir="/tmp")
     service = StudioService(repo, settings)
     import json, uuid
     async def contract_for(message: str):

@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from . import limits
 from .db_session import DatabaseSessionManager, normalize_database_url
 from .telegram_formatting import normalize_entities
 
@@ -63,11 +64,11 @@ class PostgresDatabase:
     def from_settings(cls, settings) -> "PostgresDatabase":
         return cls(
             settings.database_url,
-            workspace_slug=settings.local_workspace_slug,
-            pool_size=settings.database_pool_size,
-            max_overflow=settings.database_max_overflow,
-            pool_timeout=settings.database_pool_timeout,
-            pool_recycle=settings.database_pool_recycle,
+            workspace_slug=limits.WORKSPACE_SLUG,
+            pool_size=limits.DATABASE_POOL_SIZE,
+            max_overflow=limits.DATABASE_MAX_OVERFLOW,
+            pool_timeout=limits.DATABASE_POOL_TIMEOUT,
+            pool_recycle=limits.DATABASE_POOL_RECYCLE,
         )
 
     async def init_db(self, *, admin_username: str = "admin", workspace_name: str = "Community") -> None:

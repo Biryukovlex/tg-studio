@@ -28,6 +28,7 @@ from pydantic_ai.ui.ag_ui import AGUIAdapter
 from starlette.responses import JSONResponse, StreamingResponse
 
 from .agent import StudioDeps, build_agent, is_revision_request, is_short_continuation_request, workflow_tool_sequence
+from .. import limits
 from .analytics import analyze_posts
 from .profile import build_profile
 from .semantic_profile import build_semantic_profile
@@ -279,7 +280,7 @@ class StudioService:
         self.settings = settings
         self.agent_factory = agent_factory
         self.registry = RunRegistry()
-        self.coordinator = RunCoordinator(getattr(settings, "studio_run_concurrency", 2))
+        self.coordinator = RunCoordinator(limits.RUN_CONCURRENCY)
         self.research_service = research_service or ResearchService(settings, repository=repository)
 
     async def create_conversation(self, *, channel_id: int, title: str | None = None) -> dict[str, Any]:
@@ -287,14 +288,14 @@ class StudioService:
 
     async def recover_stale_runs(self) -> int:
         return await self.repository.mark_stale_runs_interrupted(
-            queued_grace_seconds=max(1, int(getattr(self.settings, "studio_queued_run_grace_seconds", 60)))
+            queued_grace_seconds=max(1, int(limits.QUEUED_RUN_GRACE_SECONDS))
         )
 
     async def _watch_run_control(self, run_id: uuid.UUID, worker_id: str, handle: RunHandle) -> None:
         """Renew the durable lease and observe cancellation from any process."""
 
-        lease_seconds = max(30, int(getattr(self.settings, "studio_run_lease_seconds", 120)))
-        configured = float(getattr(self.settings, "studio_run_heartbeat_seconds", 20.0))
+        lease_seconds = max(30, int(limits.RUN_LEASE_SECONDS))
+        configured = float(limits.RUN_HEARTBEAT_SECONDS)
         interval = max(0.05, min(configured, lease_seconds / 3))
         consecutive_failures = 0
         while handle.active:
@@ -386,13 +387,9 @@ class StudioService:
         rows = await reader(channel_id)
         if not rows:
             raise ValueError("too few posts")
-        min_posts = int(getattr(self.settings, "studio_min_profile_posts", 5))
+        min_posts = int(limits.MIN_PROFILE_POSTS)
         if len(rows) < min_posts:
             raise ValueError(f"too few posts: {len(rows)} < {min_posts}")
-        # Bound by studio_analysis_max_posts if configured
-        max_posts = int(getattr(self.settings, "studio_analysis_max_posts", 0) or 0)
-        if max_posts > 0:
-            rows = list(rows)[:max_posts]
         analytics = analyze_posts(rows, channel_id, identifier=channel.get("identifier"))
         from .semantic_profile import build_profile_text_draft
         current = None
@@ -605,7 +602,7 @@ class StudioService:
                     claimed = await self.repository.claim_run(
                         run_id,
                         worker_id=worker_id,
-                        lease_seconds=max(30, int(getattr(self.settings, "studio_run_lease_seconds", 120))),
+                        lease_seconds=max(30, int(limits.RUN_LEASE_SECONDS)),
                     )
                     if claimed is None:
                         return
@@ -613,7 +610,7 @@ class StudioService:
                         self._watch_run_control(run_id, worker_id, handle),
                         name=f"studio-run-watchdog-{run_id}",
                     )
-                    async with asyncio.timeout(max(1.0, float(self.settings.studio_run_timeout_seconds))):
+                    async with asyncio.timeout(max(1.0, float(limits.RUN_TIMEOUT_SECONDS))):
                         async for event in adapter.run_stream(
                             message_history=server_history,
                             instructions=workflow_instructions,
@@ -621,9 +618,9 @@ class StudioService:
                             run_id=str(run_id),
                             deps=deps,
                             usage_limits=UsageLimits(
-                                request_limit=max(2, int(self.settings.studio_max_tool_calls) + 2),
-                                tool_calls_limit=max(1, int(self.settings.studio_max_tool_calls)),
-                                output_tokens_limit=max(64, int(self.settings.studio_max_output_tokens)),
+                                request_limit=max(2, int(limits.MAX_TOOL_CALLS) + 2),
+                                tool_calls_limit=max(1, int(limits.MAX_TOOL_CALLS)),
+                                output_tokens_limit=max(64, int(limits.MAX_OUTPUT_TOKENS)),
                             ),
                             on_complete=capture_completion,
                         ):
