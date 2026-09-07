@@ -47,3 +47,23 @@ def test_links_with_balanced_parentheses_render_whole():
     assert '<a href="https://en.wikipedia.org/wiki/Foo_(bar)">w</a>' in html
     assert "javascript" not in html.lower() and "j end" in html
     assert render_markdown_plain(body) == "See w (https://en.wikipedia.org/wiki/Foo_(bar)) and j end"
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.asyncio
+async def test_restore_identical_version_does_not_mint_a_new_version():
+    from app.studio.repository import MemoryStudioRepository
+
+    repo = MemoryStudioRepository()
+    conversation = await repo.create_conversation(channel_id=1)
+    draft = await repo.create_draft(conversation_id=conversation["id"], channel_id=1, payload={"body": "v1 body", "creative": True})
+    v2 = await repo.update_draft(draft_id=draft["id"], payload={"body": "v2 body"}, expected_revision=draft["revision"], origin="user_edit")
+    assert v2["current_version"] == 2
+    restored = await repo.restore_draft_version(draft_id=draft["id"], version=1, expected_revision=v2["revision"])
+    assert restored["body"] == "v1 body" and restored["current_version"] == 3
+    # Restoring v1 again (identical to the current text) returns the current row unchanged.
+    again = await repo.restore_draft_version(draft_id=draft["id"], version=1, expected_revision=restored["revision"])
+    assert again["current_version"] == 3
+    assert len(await repo.list_draft_versions(draft_id=draft["id"])) == 3

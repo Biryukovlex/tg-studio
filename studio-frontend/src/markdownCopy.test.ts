@@ -37,3 +37,17 @@ describe("markdownCopy", () => {
     }
   });
 });
+
+describe("copyRenderedSelection", () => {
+  it("reports false instead of throwing when execCommand is unavailable and leaves no host element behind", async () => {
+    const { copyRenderedSelection } = await import("./markdownCopy");
+    const original = document.execCommand;
+    (document as unknown as { execCommand?: unknown }).execCommand = undefined;
+    try {
+      expect(copyRenderedSelection("<b>x</b>")).toBe(false);
+    } finally {
+      (document as unknown as { execCommand?: unknown }).execCommand = original;
+    }
+    expect(document.body.querySelectorAll("div[aria-hidden]").length).toBe(0);
+  });
+});

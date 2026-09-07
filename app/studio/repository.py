@@ -1099,6 +1099,10 @@ class StudioRepository:
         selected = next((item for item in versions if int(item["version"]) == int(version)), None)
         if selected is None:
             raise DraftNotFound("draft version not found")
+        if str(selected["body"]) == str(current.get("body") or ""):
+            # Restoring text identical to the current draft must not mint a
+            # new version on every click.
+            return current
         return await self.update_draft(
             draft_id=draft_id,
             payload={"body": selected["body"]},
@@ -2323,6 +2327,9 @@ class MemoryStudioRepository:
         selected = next((item for item in versions if int(item["version"]) == int(version)), None)
         if selected is None:
             raise DraftNotFound("draft version not found")
+        current = await self.get_draft(draft_id)
+        if current is not None and str(selected["body"]) == str(current.get("body") or ""):
+            return current
         return await self.update_draft(draft_id=draft_id, payload={"body": selected["body"]}, expected_revision=expected_revision, origin="user_edit", instruction=instruction or f"Restored version {version}")
 
     async def mark_draft_copied(self, *, draft_id: uuid.UUID) -> dict[str, Any]:

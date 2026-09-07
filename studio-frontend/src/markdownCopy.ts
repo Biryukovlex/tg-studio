@@ -56,10 +56,51 @@ export function htmlFromMarkdown(text: string): string {
 }
 
 /**
- * Write plain and HTML flavours to the clipboard synchronously, inside the
- * user's click. This is the only path that works in Safari (which rejects the
- * async Clipboard API after an await), in Firefox versions without
- * ClipboardItem, and on plain-HTTP origins where the async API is missing.
+ * Copy a rendered selection exactly the way a manual copy does.
+ *
+ * The browser serialises the selected DOM itself, so it writes every flavour
+ * it would for a hand-made selection: text/html and text/plain everywhere,
+ * plus RTF and a web archive in Safari. The native macOS Telegram app reads
+ * RTF and ignores a bare text/html payload, which is why a manual copy of the
+ * preview kept formatting while an HTML-only clipboard write did not.
+ * Returns false when the browser did not perform the copy.
+ */
+export function copyRenderedSelection(html: string): boolean {
+  if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
+  const host = document.createElement("div");
+  // Off-screen but rendered and selectable: display:none or opacity:0 content
+  // is skipped by some engines when serialising a selection.
+  host.style.position = "fixed";
+  host.style.left = "-100000px";
+  host.style.top = "0";
+  host.style.whiteSpace = "pre-wrap";
+  host.setAttribute("aria-hidden", "true");
+  host.innerHTML = html;
+  document.body.appendChild(host);
+  const selection = window.getSelection();
+  const previous: Range[] = [];
+  if (selection) for (let i = 0; i < selection.rangeCount; i += 1) previous.push(selection.getRangeAt(i));
+  let done = false;
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(host);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    done = document.execCommand("copy") === true;
+  } catch {
+    done = false;
+  } finally {
+    selection?.removeAllRanges();
+    previous.forEach((range) => selection?.addRange(range));
+    host.remove();
+  }
+  return done;
+}
+
+/**
+ * Write plain and HTML flavours through a copy-event handler, synchronously
+ * inside the user's click. Fallback for engines where copying a rendered
+ * selection fails; it cannot produce RTF.
  * Returns false when the browser did not run the copy event.
  */
 export function copyRichText(plain: string, html: string): boolean {

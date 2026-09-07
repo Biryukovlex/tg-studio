@@ -28,7 +28,7 @@ import {
   StudioApiError,
 } from "./api";
 import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
-import { copyRichText, htmlFromMarkdown, plainFromMarkdown } from "./markdownCopy";
+import { copyRenderedSelection, copyRichText, htmlFromMarkdown, plainFromMarkdown } from "./markdownCopy";
 import ChannelProfileDialog from "./ChannelProfileDialog";
 import "./styles.css";
 
@@ -367,6 +367,11 @@ function DraftPanel({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [conflict, setConflict] = useState<{ server: Draft; localBody: string; localTitle: string } | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  // Choosing an older version in the selector shows it read-only; only Restore
+  // writes it back as the current draft.
+  const viewedVersion = versions.find((item) => item.version === selectedVersion);
+  const viewingOld = !!(draft && viewedVersion && selectedVersion !== draft.current_version);
+  const shownBody = viewingOld && viewedVersion ? viewedVersion.body : (draft?.body ?? "");
   const hydrated = useRef(false);
   const draftRef = useRef<Draft | null>(seedDraft);
   const saveStateRef = useRef(saveState);
@@ -506,15 +511,17 @@ function DraftPanel({
 
   const copy = async () => {
     if (!draft || draft.over_limit) return;
-    // Both flavours come from the local Markdown source, so what is copied is
-    // exactly what the editor shows, saved or not.
-    const plain = plainFromMarkdown(draft.body);
-    const html = htmlFromMarkdown(draft.body);
+    // Both flavours come from the Markdown shown in the editor (the current
+    // draft, or the version being viewed), saved or not.
+    const plain = plainFromMarkdown(shownBody);
+    const html = htmlFromMarkdown(shownBody);
     try {
-      // Synchronous rich copy inside the click gesture first; the async
-      // Clipboard API is only a fallback because Safari rejects it after an
-      // await and some browsers or plain-HTTP origins do not offer it at all.
-      let done = copyRichText(plain, html);
+      // 1. Copy a rendered selection: identical to a manual copy, so it
+      //    carries RTF on Safari, which the macOS Telegram app requires.
+      // 2. Copy-event handler with text/html + text/plain (no RTF).
+      // 3. Async Clipboard API; last because Safari rejects it after an await
+      //    and plain-HTTP origins do not offer it.
+      let done = copyRenderedSelection(html) || copyRichText(plain, html);
       let rich = done;
       if (!done) {
         const clip = navigator.clipboard as unknown as { write?: (items: unknown[]) => Promise<void>; writeText?: (text: string) => Promise<void> } | undefined;
@@ -635,9 +642,10 @@ function DraftPanel({
       ) : (
         <div className="studio-draft-content">
           <label className="studio-draft-title">Artifact title<input aria-label="Artifact title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /><span className="studio-draft-title-hint">Kept for search and cross-checking. Not copied to the post.</span></label>
+          {viewingOld && <p className="studio-draft-viewing" role="status">Viewing v{selectedVersion} (read-only). Restore makes it the current draft.</p>}
           {previewOpen
-            ? <div className="studio-draft-preview" role="region" aria-label="Post preview"><div className="studio-markdown"><DraftMarkdownPreview text={draft.body} /></div></div>
-            : <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={draft.body} onChange={(event) => edit("body", event.target.value)} />}
+            ? <div className="studio-draft-preview" role="region" aria-label="Post preview"><div className="studio-markdown"><DraftMarkdownPreview text={shownBody} /></div></div>
+            : <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={shownBody} readOnly={viewingOld} onChange={(event) => edit("body", event.target.value)} />}
           <div className={`studio-char-count ${draft.over_limit ? "is-over" : draft.warning_threshold ? "is-warning" : ""}`}>
             <span>{(draft.character_count ?? Array.from(plainFromMarkdown(draft.body)).length).toLocaleString()} / 4,096 plain-text characters</span>
             <span>{draft.over_limit ? "Copy blocked" : draft.warning_threshold ? "Near Telegram limit" : "Telegram ready"}</span>
