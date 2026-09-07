@@ -37,7 +37,7 @@
         <h2>Channels</h2>
         <p class="panel-note">Public @username, t.me link, or numeric id. Deactivated channels keep their archived posts.</p>
       </div>
-      <span class="row-count">{{ channels|length }} channels</span>
+      <span class="row-count">{{ channels|length }} channel{% if channels|length != 1 %}s{% endif %}</span>
     </div>
     {% if available %}
     <div class="table-scroll">
@@ -119,7 +119,7 @@
         <span class="pill"><i class="mgc mgc-key-2-core-regular" aria-hidden="true"></i>Not set</span>
         {% endif %}
         {% if connection_status.updated_at %}
-        <span class="muted">Updated {{ connection_status.updated_at[:16] }} UTC</span>
+        <span class="muted">Updated {{ connection_status.updated_at }} UTC</span>
         {% endif %}
       </p>
     </div>
@@ -194,7 +194,7 @@
           <p class="field-help">Minutes between syncs. 1 to 1440.</p>
         </div>
         <div class="field-control">
-          <input type="number" id="poll_minutes" name="poll_minutes" value="{{ values.poll_minutes if values.poll_minutes is defined else (ws_dict['collection.poll_minutes'].value if ws_dict['collection.poll_minutes'] is defined else '15') }}" min="1" max="1440" step="1" {% if errors.poll_minutes %}aria-invalid="true" aria-describedby="poll_minutes_msg"{% endif %}>
+          <input type="number" id="poll_minutes" name="poll_minutes" {% set pm = ws_dict['collection.poll_minutes'].value if ws_dict['collection.poll_minutes'] is defined else 15 %}value="{{ values.poll_minutes if values.poll_minutes is defined else (pm|int if pm == pm|int else pm) }}" min="1" max="1440" step="1" {% if errors.poll_minutes %}aria-invalid="true" aria-describedby="poll_minutes_msg"{% endif %}>
           {% if errors.poll_minutes %}<p class="field-error" id="poll_minutes_msg">{{ errors.poll_minutes }}</p>{% endif %}
           <p class="field-source">
             {% set src = ws_dict['collection.poll_minutes'].source if ws_dict['collection.poll_minutes'] is defined else 'default' %}
@@ -333,7 +333,7 @@
           <p class="field-help">How the Studio agent should work with you. Also editable inside Studio.</p>
         </div>
         <div class="field-control">
-          <textarea id="system_prompt" name="system_prompt" maxlength="12000" rows="5" placeholder="How should the Studio agent work with you?">{{ values.system_prompt if values.system_prompt is defined else '' }}</textarea>
+          <textarea id="system_prompt" name="system_prompt" maxlength="12000" rows="5" placeholder="How should the Studio agent work with you?">{{ values.system_prompt if values.system_prompt is defined else system_prompt }}</textarea>
           {% if errors.system_prompt %}<p class="field-error">{{ errors.system_prompt }}</p>{% endif %}
         </div>
       </div>
@@ -377,7 +377,7 @@
         {% else %}
         <span class="pill">Not configured</span>
         {% endif %}
-        <code>{{ search_state.endpoint_hash and 'http://searxng:8080' or '' }}</code>
+        {% if search_base_url %}<code>{{ search_base_url }}</code>{% endif %}
         <a href="/studio/api/research/health" target="_blank" rel="noopener">Check health <i class="mgc mgc-external-link-core-regular" aria-hidden="true"></i></a>
       </p>
     </div>

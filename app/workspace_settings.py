@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import logging
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from .session_crypto import build_cipher
 
+log = logging.getLogger("workspace_settings")
+
 # Errors exposed to callers / HTTP mapping
+def format_timestamp(value: Any) -> str | None:
+    """Render a stored timestamp as ``YYYY-MM-DD HH:MM`` (UTC) for templates."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc)
+        return value.strftime("%Y-%m-%d %H:%M")
+    return str(value)[:16]
+
+
 class EncryptionKeyRequired(RuntimeError):
     """Raised when a secret is saved without a cipher."""
 
@@ -249,8 +264,8 @@ class WorkspaceSettings:
                 # Fake DB for tests: expect it to have a dict
                 self._rows = {}
         except Exception:
-            # Fail closed: keep empty
-            self._rows = {}
+            # Fail closed: keep the last known rows rather than silently dropping overrides.
+            log.exception("workspace settings load failed; keeping %d cached rows", len(self._rows))
         self._loaded = True
 
     async def set(self, key: str, value: Any) -> None:
@@ -342,7 +357,7 @@ class WorkspaceSettings:
             raise
         # Update in-memory rows
         # For secret, store decrypted value in memory
-        self._rows[key] = {"value": normalized, "is_secret": is_secret, "updated_at": None, "raw": store_value}
+        self._rows[key] = {"value": normalized, "is_secret": is_secret, "updated_at": datetime.now(timezone.utc), "raw": store_value}
         # For effective proxy, no need to do more; effective will read from _rows
 
     async def reset(self, key: str) -> None:
@@ -375,7 +390,8 @@ class WorkspaceSettings:
                 if hasattr(self._db, "_fake_settings") and key in self._db._fake_settings:
                     del self._db._fake_settings[key]
         except Exception:
-            pass
+            log.exception("workspace setting reset failed for %s", key)
+            raise
         self._rows.pop(key, None)
 
     def as_dict(self) -> dict[str, dict[str, Any]]:
@@ -384,13 +400,15 @@ class WorkspaceSettings:
         for key, (typ, env_attr, _validator) in SETTINGS.items():
             if key in self._rows:
                 row = self._rows[key]
+                stamp = format_timestamp(row.get("updated_at"))
                 if typ == "secret":
-                    result[key] = {"set": bool(row["value"]), "source": "db", "updated_at": row.get("updated_at")}
+                    result[key] = {"set": bool(row["value"]), "source": "db", "updated_at": stamp}
                 else:
-                    result[key] = {"value": row["value"], "source": "db", "updated_at": row.get("updated_at")}
+                    result[key] = {"value": row["value"], "source": "db", "updated_at": stamp}
             else:
                 env_val = getattr(self._base, env_attr, None)
-                field_default = self._base.model_fields[env_attr].default if env_attr in self._base.model_fields else None
+                model_fields = type(self._base).model_fields
+                field_default = model_fields[env_attr].default if env_attr in model_fields else None
                 is_explicit = env_attr in getattr(self._base, "model_fields_set", set())
                 if typ == "secret":
                     is_set = bool(env_val)

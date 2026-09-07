@@ -62,17 +62,10 @@ async def amain() -> None:
             sys.exit(1)
         db = PostgresDatabase.from_settings(settings)
         await db.init_db(admin_username=settings.admin_username)
-        # After DB init, re-validate CHANNELS with DB state
-        if not settings.channel_list:
-            try:
-                channels = await db.get_channels()
-                if not channels:
-                    print("\nConfiguration problems found:\n", file=sys.stderr)
-                    print("  - CHANNELS empty - e.g. CHANNELS=@my_channel\n", file=sys.stderr)
-                    print("Fix .env (copy .env.example) and run again.", file=sys.stderr)
-                    sys.exit(1)
-            except Exception:
-                pass
+        # Channels can be added later on the settings page, so an empty
+        # CHANNELS seed is only a warning once PostgreSQL holds the workspace.
+        if not settings.channel_list and not await db.get_channels():
+            log.warning("No channels configured yet - add one at /settings after signing in.")
     else:
         db = Database(settings.db_path)
         db.init_db()
