@@ -455,6 +455,9 @@ class StudioRepository:
         # Determine version
         new_version = current_version + 1
         values = {
+            # ``id`` has no server default; the INSERT tuple must carry one even
+            # when ON CONFLICT ends up updating the existing row.
+            "id": uuid.uuid4(),
             "workspace_id": self.workspace_id,
             "channel_id": channel_id,
             "topics_text": topics_text,
@@ -463,14 +466,21 @@ class StudioRepository:
             "built_from_posts": built_from,
             "version": new_version,
         }
-        # Use INSERT ... ON CONFLICT to upsert
+        # A manual edit (built_from_posts == 0) keeps the previous build
+        # provenance; only a save that carries build output refreshes it.
         result = await self.db._execute(
             """INSERT INTO studio_profiles(
-                       workspace_id, channel_id, topics_text, editorial_text, style_text, built_from_posts, built_at, version
-                   ) VALUES (:workspace_id, :channel_id, :topics_text, :editorial_text, :style_text, :built_from_posts, now(), :version)
+                       id, workspace_id, channel_id, topics_text, editorial_text, style_text,
+                       built_from_posts, built_at, version
+                   ) VALUES (
+                       :id, :workspace_id, :channel_id, :topics_text, :editorial_text, :style_text,
+                       :built_from_posts, CASE WHEN :built_from_posts > 0 THEN now() ELSE NULL END, :version
+                   )
                ON CONFLICT (workspace_id, channel_id) DO UPDATE SET
                    topics_text=EXCLUDED.topics_text, editorial_text=EXCLUDED.editorial_text, style_text=EXCLUDED.style_text,
-                   built_from_posts=EXCLUDED.built_from_posts, built_at=EXCLUDED.built_at, version=EXCLUDED.version, updated_at=now()
+                   built_from_posts=CASE WHEN EXCLUDED.built_from_posts > 0 THEN EXCLUDED.built_from_posts ELSE studio_profiles.built_from_posts END,
+                   built_at=CASE WHEN EXCLUDED.built_from_posts > 0 THEN now() ELSE studio_profiles.built_at END,
+                   version=EXCLUDED.version, updated_at=now()
                RETURNING *""",
             values,
         )
