@@ -111,7 +111,7 @@ def reset_login_rate_limiter() -> None:
 def static_asset_version() -> str:
     """Short content hash of the first-party static assets referenced by templates."""
     digest = hashlib.sha256()
-    for name in ("app.js", "style.css"):
+    for name in ("app.js", "style.css", "studio-dist/assets/studio.js", "studio-dist/assets/index.css"):
         path = WEB_DIR / "static" / name
         try:
             digest.update(path.read_bytes())

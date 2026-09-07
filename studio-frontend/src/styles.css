@@ -281,6 +281,7 @@ button { color: inherit; }
 .studio-rail-foot .studio-rail-foot-buttons { display: flex; gap: 8px; margin-left: auto; }
 .studio-draft-preview { min-height: 300px; max-height: 58vh; overflow-y: auto; overflow-x: hidden; margin: 0; padding: 13px; border: 1px solid rgba(149,190,203,.24); border-radius: 12px; background: rgba(7,19,29,.7); color: #efffff; font-size: 12px; line-height: 1.58; }
 .studio-draft-mode { border: 1px solid var(--studio-line); border-radius: 9px; padding: 8px 10px; color: var(--studio-soft); background: rgba(110,231,221,.06); font-size: 10px; font-weight: 800; cursor: pointer; }
+.studio-copy-note { color: var(--studio-muted); font-size: 10px; }
 .studio-draft-mode[aria-pressed="true"] { border-color: rgba(110,231,221,.4); color: var(--studio-accent); background: rgba(110,231,221,.08); }
 .studio-draft-preview .studio-markdown p { margin: 0; }
 .studio-draft-preview .studio-markdown a { color: var(--studio-accent); }

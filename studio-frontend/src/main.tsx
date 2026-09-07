@@ -363,6 +363,7 @@ function DraftPanel({
   const [versions, setVersions] = useState<DraftVersion[]>([]);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "conflict" | "error">("saved");
   const [copied, setCopied] = useState(false);
+  const [copyNote, setCopyNote] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [conflict, setConflict] = useState<{ server: Draft; localBody: string; localTitle: string } | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
@@ -514,12 +515,13 @@ function DraftPanel({
       // Clipboard API is only a fallback because Safari rejects it after an
       // await and some browsers or plain-HTTP origins do not offer it at all.
       let done = copyRichText(plain, html);
+      let rich = done;
       if (!done) {
         const clip = navigator.clipboard as unknown as { write?: (items: unknown[]) => Promise<void>; writeText?: (text: string) => Promise<void> } | undefined;
         const ClipboardItemCtor = (window as unknown as { ClipboardItem?: new (items: Record<string, Blob>) => unknown }).ClipboardItem;
         if (clip?.write && ClipboardItemCtor) {
           await clip.write([new ClipboardItemCtor({ "text/plain": new Blob([plain], { type: "text/plain" }), "text/html": new Blob([html], { type: "text/html" }) })]);
-          done = true;
+          done = rich = true;
         } else if (clip?.writeText) {
           await clip.writeText(plain);
           done = true;
@@ -527,8 +529,10 @@ function DraftPanel({
       }
       if (!done) throw new Error("Clipboard unavailable");
       setCopied(true);
+      // Say which flavour landed so a plain-text paste can be diagnosed at once.
+      setCopyNote(rich ? "Copied with formatting" : "Copied as plain text (this browser blocks rich copy)");
       setDraft((current) => current ? { ...current, copied_at: new Date().toISOString() } : current);
-      window.setTimeout(() => setCopied(false), 2200);
+      window.setTimeout(() => { setCopied(false); setCopyNote(""); }, 3200);
       // Record the copy on the saved revision; failures here must not undo a successful copy.
       if (saveState === "saved") void api(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } }).catch(() => undefined);
     } catch {
@@ -546,9 +550,15 @@ function DraftPanel({
     }).then((payload) => {
       localChange.current = 0;
       setDraft(payload.draft);
-      setSelectedVersion(payload.draft.current_version);
       setSaveState("saved");
       setConflict(null);
+      // Restoring creates a new version on the server. Refresh the list so the
+      // selector can show it; an unknown value would make the <select> fall
+      // back to its first option while the state pointed elsewhere.
+      return api<{ versions: DraftVersion[] }>(`/studio/api/drafts/${payload.draft.id}/versions`)
+        .then((history) => setVersions(history.versions))
+        .catch(() => setVersions((items) => items.some((item) => item.version === payload.draft.current_version) ? items : [...items, { id: Date.now(), draft_id: payload.draft.id, version: payload.draft.current_version, body: payload.draft.body, origin: "user_edit", instruction: `Restored version ${version.version}`, character_count: payload.draft.character_count, created_at: payload.draft.updated_at }]))
+        .finally(() => setSelectedVersion(payload.draft.current_version));
     }).catch((error: unknown) => {
       if (error instanceof StudioApiError && error.status === 409 && error.payload.server_draft) {
         setConflict({ server: error.payload.server_draft, localBody: draft.body, localTitle: draft.working_title });
@@ -634,7 +644,7 @@ function DraftPanel({
           </div>
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}
           {clickableSources.length > 0 && <div className="studio-draft-notes"><strong>Sources</strong><div className="studio-source-chips">{clickableSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}</div></div>}
-          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) restore(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version}>Restore</button></label></div>
+          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button>{copyNote && <span className="studio-copy-note" role="status">{copyNote}</span>}<label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) restore(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version}>Restore</button></label></div>
         </div>
       )}
     </aside>
