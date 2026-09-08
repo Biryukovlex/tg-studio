@@ -224,19 +224,29 @@ class PostgresDatabase:
             await session.commit()
             return row
 
-    async def load_telegram_session(self, *, label: str, cipher) -> str | None:
+    async def load_telegram_connection(self, *, label: str, cipher) -> dict[str, Any] | None:
+        """Load the complete active connection for collector startup."""
         if cipher is None:
             return None
         row = (
             await self._execute(
-                """SELECT encrypted_session FROM telegram_connections
+                """SELECT api_id, api_hash, encrypted_session FROM telegram_connections
                    WHERE workspace_id=:workspace_id AND label=:label AND status='active'""",
                 {"label": label},
             )
-        ).first()
-        if not row or row[0] is None:
+        ).mappings().first()
+        if not row or row["encrypted_session"] is None:
             return None
-        return cipher.decrypt(bytes(row[0]))
+        return {
+            "api_id": int(row["api_id"]),
+            "api_hash": str(row["api_hash"]),
+            "session_string": cipher.decrypt(bytes(row["encrypted_session"])),
+        }
+
+    async def load_telegram_session(self, *, label: str, cipher) -> str | None:
+        """Backward-compatible session-only accessor."""
+        connection = await self.load_telegram_connection(label=label, cipher=cipher)
+        return str(connection["session_string"]) if connection else None
 
     async def _execute(self, statement: str, params: dict[str, Any] | None = None):
         async with self.sessions.session() as session:
@@ -321,22 +331,10 @@ class PostgresDatabase:
 
         Never expose the result to a template or an API response.
         """
-        row = (
-            await self._execute(
-                """SELECT api_id, api_hash, encrypted_session FROM telegram_connections
-                   WHERE workspace_id=:workspace_id AND label=:label""",
-                {"label": label},
-            )
-        ).mappings().first()
-        if not row:
+        try:
+            return await self.load_telegram_connection(label=label, cipher=cipher)
+        except ValueError:  # rotated encryption key: do not expose partial credentials
             return None
-        session_string = None
-        if row["encrypted_session"] is not None and cipher is not None:
-            try:
-                session_string = cipher.decrypt(bytes(row["encrypted_session"]))
-            except Exception:  # noqa: BLE001 - a rotated key means the session is unusable
-                session_string = None
-        return {"api_id": row["api_id"], "api_hash": row["api_hash"], "session_string": session_string}
 
     async def telegram_connection_status(self, label: str) -> dict[str, Any]:
         row = (

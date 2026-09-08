@@ -139,7 +139,7 @@
       <div class="field {% if errors.api_hash %}has-error{% endif %}">
         <div class="field-label">
           <label class="field-name" for="api_hash">API hash</label>
-          <p class="field-help">Stored encrypted. Leave empty to keep the current value.</p>
+          <p class="field-help">Stored server-side and never shown. Leave empty to keep the current value.</p>
         </div>
         <div class="field-control">
           <input type="password" id="api_hash" name="api_hash" value="" placeholder="Leave empty to keep the current hash" autocomplete="off" {% if errors.api_hash %}aria-invalid="true"{% endif %}>
@@ -154,7 +154,7 @@
         <div class="field-control">
           <input type="password" id="session_string" name="session_string" value="" placeholder="Paste a new session string to replace the current one" autocomplete="off" {% if errors.session_string %}aria-invalid="true"{% endif %}>
           {% if errors.session_string %}<p class="field-error">{{ errors.session_string }}</p>{% endif %}
-          <p class="field-note"><i class="mgc mgc-alert-core-regular" aria-hidden="true"></i>The collector must be restarted to use a new session.</p>
+          <p class="field-note"><i class="mgc mgc-alert-core-regular" aria-hidden="true"></i>The collector must be restarted after any connection change.</p>
         </div>
       </div>
       <div class="form-actions">

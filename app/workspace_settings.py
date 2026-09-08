@@ -7,8 +7,6 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from .session_crypto import build_cipher
-
 log = logging.getLogger("workspace_settings")
 
 # Errors exposed to callers / HTTP mapping
@@ -268,131 +266,120 @@ class WorkspaceSettings:
             log.exception("workspace settings load failed; keeping %d cached rows", len(self._rows))
         self._loaded = True
 
-    async def set(self, key: str, value: Any) -> None:
+    def validate(self, key: str, value: Any) -> Any:
+        """Validate one value without changing memory or persistent state."""
         if not self.available:
             raise StoreUnavailable("Settings store is not available in SQLite mode")
         if key not in SETTINGS:
             raise ValueError(f"unknown settings key: {key}")
-        typ, env_attr, validator = SETTINGS[key]
-        # Validate and normalize
+        typ, _env_attr, validator = SETTINGS[key]
         try:
             normalized = validator(value)
         except ValueError as e:
-            # Ensure error message names the key
             msg = str(e)
             if key not in msg:
-                msg = f"{key}: {msg}"
-                raise ValueError(msg) from None
+                raise ValueError(f"{key}: {msg}") from None
             raise
-        is_secret = (typ == "secret")
-        # Handle secret encryption
-        store_value: str
-        if is_secret:
+        if typ == "secret":
             if normalized == "":
-                # Empty string means? For openrouter key, empty is allowed? Validator allows empty? It checks ≤512, so "" is okay.
-                # But storing empty secret should perhaps be treated as reset? We'll store empty as not set? However spec says clearing is via reset.
-                # We'll allow storing empty string as encrypted empty?
-                # For now, if normalized is empty, we could treat as delete? But we will encrypt empty string if cipher exists.
-                # However typical flow: setting empty key field leaves it untouched (T23). So set with "" may be used to mean "no change" – but for T22, set with "" should store empty?
-                # We'll encrypt if cipher exists.
-                normalized_str = str(normalized)
-                if self._cipher is None:
-                    raise EncryptionKeyRequired("Set TELEGRAM_SESSION_ENCRYPTION_KEY to store secrets.")
-                store_value = self._cipher.encrypt(normalized_str).decode("utf-8")
-            else:
-                if self._cipher is None:
-                    raise EncryptionKeyRequired("Set TELEGRAM_SESSION_ENCRYPTION_KEY to store secrets.")
-                store_value = self._cipher.encrypt(str(normalized)).decode("utf-8")
-        else:
-            # For non-secrets, store as string representation
-            if typ == "bool":
-                store_value = "true" if bool(normalized) else "false"
-            else:
-                store_value = str(normalized)
-        # Persist to DB
-        ws_id = getattr(self._db, "workspace_id", None)
-        if ws_id is None:
-            ws_id = getattr(self._db, "_workspace", lambda: None)()
-            if callable(ws_id):
-                try:
-                    ws_id = ws_id()
-                except Exception:
-                    ws_id = None
-        # Use _execute to upsert
-        try:
-            # Check if db has _execute
-            if hasattr(self._db, "_execute"):
-                # For postgres, use upsert
-                # Need to use sessions directly
-                from sqlalchemy import text as sql_text
-                # Use the db's session manager
-                if hasattr(self._db, "sessions"):
-                    async with self._db.sessions.session() as session:
-                        await session.execute(
-                            sql_text(
-                                """INSERT INTO workspace_settings(workspace_id, key, value, is_secret, updated_at)
-                                   VALUES (:workspace_id, :key, :value, :is_secret, now())
-                                   ON CONFLICT (workspace_id, key) DO UPDATE SET value=EXCLUDED.value, is_secret=EXCLUDED.is_secret, updated_at=now()"""
-                            ),
-                            {"workspace_id": ws_id, "key": key, "value": store_value, "is_secret": is_secret},
-                        )
-                        await session.commit()
-                else:
-                    await self._db._execute(
-                        """INSERT INTO workspace_settings(workspace_id, key, value, is_secret, updated_at)
-                           VALUES (:workspace_id, :key, :value, :is_secret, now())
-                           ON CONFLICT (workspace_id, key) DO UPDATE SET value=EXCLUDED.value, is_secret=EXCLUDED.is_secret, updated_at=now()""",
-                        {"key": key, "value": store_value, "is_secret": is_secret},
-                    )
-            else:
-                # Fake DB for tests: store in memory dict
-                if not hasattr(self._db, "_fake_settings"):
-                    self._db._fake_settings = {}
-                self._db._fake_settings[key] = {"value": store_value, "is_secret": is_secret}
-                # Also update self._rows for immediate effect
-        except Exception as e:
-            # If it's EncryptionKeyRequired, re-raise
-            if isinstance(e, (EncryptionKeyRequired, StoreUnavailable)):
-                raise
-            raise
-        # Update in-memory rows
-        # For secret, store decrypted value in memory
-        self._rows[key] = {"value": normalized, "is_secret": is_secret, "updated_at": datetime.now(timezone.utc), "raw": store_value}
-        # For effective proxy, no need to do more; effective will read from _rows
+                raise ValueError(f"{key} must be reset instead of saved empty")
+            if self._cipher is None:
+                raise EncryptionKeyRequired("Set TELEGRAM_SESSION_ENCRYPTION_KEY to store secrets.")
+        return normalized
 
-    async def reset(self, key: str) -> None:
+    def _serialized(self, key: str, normalized: Any) -> tuple[str, bool]:
+        typ = SETTINGS[key][0]
+        if typ == "secret":
+            assert self._cipher is not None
+            return self._cipher.encrypt(str(normalized)).decode("utf-8"), True
+        if typ == "bool":
+            return ("true" if bool(normalized) else "false"), False
+        return str(normalized), False
+
+    async def set_many(self, changes: dict[str, Any], *, reset_keys: tuple[str, ...] = ()) -> None:
+        """Validate and apply one form submission as a single PostgreSQL transaction."""
         if not self.available:
             raise StoreUnavailable("Settings store is not available in SQLite mode")
-        if key not in SETTINGS:
-            raise ValueError(f"unknown settings key: {key}")
+
+        resets = tuple(dict.fromkeys(reset_keys))
+        for key in resets:
+            if key not in SETTINGS:
+                raise ValueError(f"unknown settings key: {key}")
+            if key in changes:
+                raise ValueError(f"setting cannot be saved and reset together: {key}")
+
+        prepared: dict[str, tuple[Any, str, bool]] = {}
+        for key, value in changes.items():
+            normalized = self.validate(key, value)
+            stored, is_secret = self._serialized(key, normalized)
+            prepared[key] = (normalized, stored, is_secret)
+
         ws_id = getattr(self._db, "workspace_id", None)
         if ws_id is None:
-            try:
-                ws_id = self._db._workspace()
-            except Exception:
-                ws_id = None
-        try:
-            if hasattr(self._db, "sessions"):
-                from sqlalchemy import text as sql_text
+            ws_id = self._db._workspace()
 
-                async with self._db.sessions.session() as session:
+        if hasattr(self._db, "sessions"):
+            from sqlalchemy import text as sql_text
+
+            async with self._db.sessions.session() as session:
+                for key in resets:
                     await session.execute(
                         sql_text("DELETE FROM workspace_settings WHERE workspace_id=:workspace_id AND key=:key"),
                         {"workspace_id": ws_id, "key": key},
                     )
-                    await session.commit()
-            elif hasattr(self._db, "_execute"):
+                for key, (_normalized, stored, is_secret) in prepared.items():
+                    await session.execute(
+                        sql_text(
+                            """INSERT INTO workspace_settings(workspace_id, key, value, is_secret, updated_at)
+                               VALUES (:workspace_id, :key, :value, :is_secret, now())
+                               ON CONFLICT (workspace_id, key) DO UPDATE SET
+                                   value=EXCLUDED.value,
+                                   is_secret=EXCLUDED.is_secret,
+                                   updated_at=now()"""
+                        ),
+                        {"workspace_id": ws_id, "key": key, "value": stored, "is_secret": is_secret},
+                    )
+                await session.commit()
+        elif hasattr(self._db, "_execute"):
+            for key in resets:
                 await self._db._execute(
                     "DELETE FROM workspace_settings WHERE workspace_id=:workspace_id AND key=:key",
                     {"key": key},
                 )
-            else:
-                if hasattr(self._db, "_fake_settings") and key in self._db._fake_settings:
-                    del self._db._fake_settings[key]
-        except Exception:
-            log.exception("workspace setting reset failed for %s", key)
-            raise
-        self._rows.pop(key, None)
+            for key, (_normalized, stored, is_secret) in prepared.items():
+                await self._db._execute(
+                    """INSERT INTO workspace_settings(workspace_id, key, value, is_secret, updated_at)
+                       VALUES (:workspace_id, :key, :value, :is_secret, now())
+                       ON CONFLICT (workspace_id, key) DO UPDATE SET
+                           value=EXCLUDED.value,
+                           is_secret=EXCLUDED.is_secret,
+                           updated_at=now()""",
+                    {"key": key, "value": stored, "is_secret": is_secret},
+                )
+        else:
+            fake = getattr(self._db, "_fake_settings", {})
+            for key in resets:
+                fake.pop(key, None)
+            for key, (_normalized, stored, is_secret) in prepared.items():
+                fake[key] = {"value": stored, "is_secret": is_secret}
+            self._db._fake_settings = fake
+
+        stamp = datetime.now(timezone.utc)
+        for key in resets:
+            self._rows.pop(key, None)
+        for key, (normalized, stored, is_secret) in prepared.items():
+            self._rows[key] = {
+                "value": normalized,
+                "is_secret": is_secret,
+                "updated_at": stamp,
+                "raw": stored,
+            }
+
+    async def set(self, key: str, value: Any) -> None:
+        await self.set_many({key: value})
+
+    async def reset(self, key: str) -> None:
+        await self.set_many({}, reset_keys=(key,))
 
     def as_dict(self) -> dict[str, dict[str, Any]]:
         """Return dict of key -> {value, source, set} etc."""

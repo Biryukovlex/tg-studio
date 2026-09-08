@@ -75,19 +75,24 @@ class Settings(BaseSettings):
     def db_path(self) -> Path:
         return self.data_path / "stats.db"
 
-    def validate_required(self, db_channels: list | None = None) -> list[str]:
+    def validate_required(
+        self,
+        db_channels: list | None = None,
+        *,
+        defer_telegram: bool = False,
+    ) -> list[str]:
         problems: list[str] = []
         role = str(self.process_role or "all").strip().lower()
         if role not in {"all", "web", "worker"}:
             problems.append("PROCESS_ROLE must be one of: all, web, worker.")
         needs_telegram = role in {"all", "worker"}
         needs_admin = role in {"all", "web"}
-        if needs_telegram and (not self.api_id or not self.api_hash):
+        if needs_telegram and not defer_telegram and (not self.api_id or not self.api_hash):
             problems.append("API_ID / API_HASH missing - get them at https://my.telegram.org (API development tools).")
         # In PostgreSQL mode the encrypted connection row may be the source of
         # truth after the first login.  The main process still fails clearly if
         # neither that row nor an environment session is available.
-        if needs_telegram and not self.session_string and not (self.postgres_enabled and self.telegram_session_encryption_key):
+        if needs_telegram and not defer_telegram and not self.session_string:
             problems.append("SESSION_STRING empty - run `python scripts/generate_session.py` once, then paste it into .env.")
         if needs_telegram and not self.channel_list:
             # In PostgreSQL mode, CHANNELS may be empty if the database already has channels

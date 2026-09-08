@@ -459,6 +459,11 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
             # In split deployments only the worker owns a Telegram session.
             # Keep the button harmless and explain where refresh work lives.
             return RedirectResponse("/?msg=Refresh+is+handled+by+the+collector+worker", status_code=303)
+        if hasattr(collector, "client") and collector.client is None:
+            # PROCESS_ROLE=all intentionally serves the UI before Telegram is
+            # configured.  Do not enqueue a background task that cannot run.
+            request.session["flash_msg"] = "Configure Telegram before starting a refresh."
+            return RedirectResponse("/settings#telegram", status_code=303)
         asyncio.create_task(collector.poll_all(reason="web"))
         url = "/?msg=Refresh+started+-+numbers+will+update+shortly"
         channel_id = _optional_positive_int(channel)

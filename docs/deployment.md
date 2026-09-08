@@ -24,8 +24,10 @@ cd "tg-studio"
 cp .env.example .env
 ```
 
-Fill `API_ID`, `API_HASH`, `CHANNELS`, `ADMIN_PASSWORD`, and the Telegram
-session. The QR flow is the most reliable:
+Set the PostgreSQL password, `ADMIN_PASSWORD`, `DATABASE_URL`, and
+`TELEGRAM_SESSION_ENCRYPTION_KEY`. Collect the Telegram API ID/hash and create
+the session string, but keep them ready for the authenticated Settings page
+instead of placing them in `.env`. The QR flow is the most reliable:
 
 ```bash
 python3 -m venv .venv
@@ -35,10 +37,11 @@ python scripts/generate_session.py
 python scripts/generate_session_key.py
 ```
 
-Keep the printed session string and Fernet key private. Put them in `.env` as
-`SESSION_STRING` and `TELEGRAM_SESSION_ENCRYPTION_KEY`. For a fresh install,
-replace the development `POSTGRES_PASSWORD` with a strong value and keep the
-same value in the internal `DATABASE_URL` if you set it explicitly:
+Keep the printed session string and Fernet key private. Put only the Fernet key
+in `.env` as `TELEGRAM_SESSION_ENCRYPTION_KEY`; the session string is entered
+after login at `/settings`. For a fresh install, replace the development
+`POSTGRES_PASSWORD` with a strong value and keep the same value in the internal
+`DATABASE_URL` if you set it explicitly:
 
 ```dotenv
 POSTGRES_PASSWORD=<strong-local-or-server-password>
@@ -65,7 +68,12 @@ curl -fsS http://127.0.0.1:8080/healthz
 
 The `all` role owns the Telegram session, scheduled collection, Telegram
 commands, and the web panel. Open <http://127.0.0.1:8080>, sign in, and use
-<http://127.0.0.1:8080/studio>.
+<http://127.0.0.1:8080/settings> to add the channel, Telegram API ID/hash and
+session string, OpenRouter key/model, collection window, and research policy.
+Restart `tg-studio` after saving the Telegram connection; subsequent starts
+load the complete connection from PostgreSQL. Until it is configured, the
+`all` role stays online as a web setup panel instead of exiting. Environment
+Telegram values remain supported as first-start fallbacks.
 
 ## Studio and web research
 

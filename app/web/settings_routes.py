@@ -22,7 +22,7 @@ from ..async_compat import maybe_await
 from ..session_crypto import build_cipher
 from ..studio.search_health import configured_search_state
 from ..studio.setup import build_setup_state
-from ..workspace_settings import EncryptionKeyRequired, StoreUnavailable, WorkspaceSettings, format_timestamp
+from ..workspace_settings import SETTINGS, EncryptionKeyRequired, StoreUnavailable, WorkspaceSettings, format_timestamp
 from .dependencies import require_auth
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -323,20 +323,37 @@ async def save_telegram_connection(
         cipher=cipher,
     )
     store = _store(request)
-    if session_string.strip():
-        if store is not None:
-            store.telegram_restart_required = True
-        _flash(request, "Connection saved. Restart the collector to use the new session.")
-    else:
-        _flash(request, "Connection saved.")
+    if store is not None:
+        store.telegram_restart_required = True
+    _flash(request, "Connection saved. Restart the collector to use the updated credentials.")
     return _redirect("telegram")
 
 
-async def _set_field(store: WorkspaceSettings, key: str, field: str, value: Any, errors: dict[str, str]) -> None:
+def _validate_field(store: WorkspaceSettings, key: str, field: str, value: Any, errors: dict[str, str]) -> None:
     try:
-        await store.set(key, value)
+        validator = getattr(store, "validate", None)
+        if validator is not None:
+            validator(key, value)
+        else:
+            SETTINGS[key][2](value)
     except ValueError:
         errors[field] = _FRIENDLY_ERRORS.get(field, "Invalid value.")
+
+
+async def _apply_fields(
+    store: WorkspaceSettings,
+    changes: dict[str, Any],
+    *,
+    reset_keys: tuple[str, ...] = (),
+) -> None:
+    apply_many = getattr(store, "set_many", None)
+    if apply_many is not None:
+        await apply_many(changes, reset_keys=reset_keys)
+        return
+    for key in reset_keys:
+        await store.reset(key)
+    for key, value in changes.items():
+        await store.set(key, value)
 
 
 @router.post("/collection")
@@ -351,6 +368,7 @@ async def save_collection(
     store = _store(request)
     errors: dict[str, str] = {}
     values = {"poll_minutes": poll_minutes, "track_days": track_days, "backfill_limit": backfill_limit}
+    changes: dict[str, Any] = {}
     try:
         for field, key, raw, cast in (
             ("poll_minutes", "collection.poll_minutes", poll_minutes, float),
@@ -362,11 +380,13 @@ async def save_collection(
             except ValueError:
                 errors[field] = _FRIENDLY_ERRORS[field]
                 continue
-            await _set_field(store, key, field, typed, errors)
+            _validate_field(store, key, field, typed, errors)
+            changes[key] = typed
     except StoreUnavailable:
         return await _render(request)
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
+    await _apply_fields(store, changes)
     _flash(request, "Collection settings saved.")
     return _redirect("collection")
 
@@ -384,13 +404,19 @@ async def save_studio(
     store = _store(request)
     errors: dict[str, str] = {}
     values: dict[str, Any] = {"model": model, "system_prompt": system_prompt}
+    changes: dict[str, Any] = {}
+    reset_keys: tuple[str, ...] = ()
     try:
         if clear_openrouter_api_key == "1":
-            await store.reset("studio.openrouter_api_key")
+            reset_keys = ("studio.openrouter_api_key",)
         elif openrouter_api_key.strip():
-            await _set_field(store, "studio.openrouter_api_key", "openrouter_api_key", openrouter_api_key.strip(), errors)
+            key_value = openrouter_api_key.strip()
+            _validate_field(store, "studio.openrouter_api_key", "openrouter_api_key", key_value, errors)
+            changes["studio.openrouter_api_key"] = key_value
         if model.strip():
-            await _set_field(store, "studio.model", "model", model.strip(), errors)
+            model_value = model.strip()
+            _validate_field(store, "studio.model", "model", model_value, errors)
+            changes["studio.model"] = model_value
         else:
             errors["model"] = "Model is required."
     except EncryptionKeyRequired:
@@ -399,16 +425,39 @@ async def save_studio(
         return await _render(request)
     if len(system_prompt) > SYSTEM_PROMPT_MAX_CHARS:
         errors["system_prompt"] = f"System prompt must be at most {SYSTEM_PROMPT_MAX_CHARS} characters."
-    elif "system_prompt" not in errors:
-        repository = getattr(request.app.state, "studio_repository", None)
-        setter = getattr(repository, "set_system_prompt", None)
-        if setter is not None:
-            try:
-                await maybe_await(setter(system_prompt))
-            except Exception:  # noqa: BLE001 - surface as a field error, never a 500
-                errors["system_prompt"] = "Could not save the system prompt."
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
+    repository = getattr(request.app.state, "studio_repository", None)
+    setter = getattr(repository, "set_system_prompt", None)
+    previous_prompt = await _system_prompt(request)
+    if setter is not None:
+        try:
+            await maybe_await(setter(system_prompt))
+        except Exception:  # noqa: BLE001 - surface as a field error, never a 500
+            return await _render(
+                request,
+                errors={"system_prompt": "Could not save the system prompt."},
+                values=values,
+                status_code=422,
+            )
+    try:
+        await _apply_fields(store, changes, reset_keys=reset_keys)
+    except (EncryptionKeyRequired, StoreUnavailable):
+        if setter is not None:
+            try:
+                await maybe_await(setter(previous_prompt))
+            except Exception:  # noqa: BLE001 - preserve the original storage error
+                pass
+        if not store.available:
+            return await _render(request)
+        return await _render(request, values=values, status_code=409, msg=ENCRYPTION_KEY_MESSAGE)
+    except Exception:
+        if setter is not None:
+            try:
+                await maybe_await(setter(previous_prompt))
+            except Exception:  # noqa: BLE001 - preserve the original storage error
+                pass
+        raise
     _flash(request, "Studio settings saved.")
     return _redirect("studio")
 
@@ -424,13 +473,18 @@ async def save_research(
     store = _store(request)
     errors: dict[str, str] = {}
     values = {"research_enabled": research_enabled, "blocked_domains": blocked_domains}
+    changes = {
+        "research.enabled": research_enabled == "1",
+        "research.blocked_domains": blocked_domains,
+    }
     try:
-        await _set_field(store, "research.enabled", "research_enabled", research_enabled == "1", errors)
-        await _set_field(store, "research.blocked_domains", "blocked_domains", blocked_domains, errors)
+        _validate_field(store, "research.enabled", "research_enabled", changes["research.enabled"], errors)
+        _validate_field(store, "research.blocked_domains", "blocked_domains", changes["research.blocked_domains"], errors)
     except StoreUnavailable:
         return await _render(request)
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
+    await _apply_fields(store, changes)
     _flash(request, "Research settings saved.")
     return _redirect("research")
 

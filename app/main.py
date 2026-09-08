@@ -33,11 +33,32 @@ from .web.routes import create_app
 from .workspace_settings import WorkspaceSettings
 
 
+def resolve_telegram_connection(settings, persisted: dict | None = None) -> dict[str, object]:
+    """Prefer the saved workspace connection and fill missing values from .env."""
+    saved = persisted or {}
+    return {
+        "api_id": int(saved.get("api_id") or settings.api_id or 0),
+        "api_hash": str(saved.get("api_hash") or settings.api_hash or ""),
+        "session_string": str(saved.get("session_string") or settings.session_string or ""),
+    }
+
+
+def telegram_connection_problems(connection: dict[str, object]) -> list[str]:
+    problems: list[str] = []
+    if not connection.get("api_id") or not connection.get("api_hash"):
+        problems.append("Telegram API ID and API hash are missing.")
+    if not connection.get("session_string"):
+        problems.append("Telegram session string is missing.")
+    return problems
+
+
 async def amain() -> None:
     settings = load_settings()
     role = str(settings.process_role or "all").strip().lower()
 
-    problems = settings.validate_required()
+    # PostgreSQL deployments may keep the complete Telegram connection in the
+    # workspace store. Validate those fields after the database is available.
+    problems = settings.validate_required(defer_telegram=settings.postgres_enabled)
     if problems:
         print("\nConfiguration problems found:\n", file=sys.stderr)
         for p in problems:
@@ -92,45 +113,67 @@ async def amain() -> None:
         workspace_settings._loaded = True
         effective = workspace_settings.effective
 
-    # The web role serves read-only dashboard/Studio requests and deliberately
-    # does not acquire a Telegram session. Collection/manual refresh is owned
-    # by the worker role in split deployments.
-    if role == "web":
+    async def _serve_web_panel(message: str) -> None:
         collector = Collector(None, db, effective)
         collector.workspace_settings = workspace_settings  # type: ignore[attr-defined]
         app = create_app(collector, effective, workspace_settings=workspace_settings)
         server = uvicorn.Server(_uvicorn_config(app))
-        log.info("Web-only panel: http://%s:%s", settings.web_host, settings.web_port)
+        log.info(message, settings.web_host, settings.web_port)
         try:
             await server.serve()
         finally:
             if isinstance(db, PostgresDatabase):
                 await db.close()
+
+    # The web role serves read-only dashboard/Studio requests and deliberately
+    # does not acquire a Telegram session. Collection/manual refresh is owned
+    # by the worker role in split deployments.
+    if role == "web":
+        await _serve_web_panel("Web-only panel: http://%s:%s")
         return
 
-    persisted_session = None
+    persisted_connection = None
     if isinstance(db, PostgresDatabase):
-        persisted_session = await db.load_telegram_session(
-            label=limits.TELEGRAM_CONNECTION_LABEL, cipher=cipher
-        )
+        try:
+            persisted_connection = await db.load_telegram_connection(
+                label=limits.TELEGRAM_CONNECTION_LABEL, cipher=cipher
+            )
+        except ValueError:
+            log.warning("Saved Telegram connection could not be decrypted; use /settings to replace it.")
         try:
             await db.expire_stale_collection_jobs()
         except Exception:
             log.warning("expire_stale_collection_jobs failed at startup")
-    session_string = persisted_session or settings.session_string
-    if not session_string:
-        raise RuntimeError(
-            "No Telegram session is available. Provide SESSION_STRING for the first login "
-            "or import an encrypted connection row into PostgreSQL."
-        )
+
+    connection = resolve_telegram_connection(settings, persisted_connection)
+    connection_problems = telegram_connection_problems(connection)
+    if connection_problems:
+        if role == "all" and isinstance(db, PostgresDatabase):
+            log.warning(
+                "Telegram is not configured; starting the web setup panel. "
+                "Save the connection at /settings and restart the app."
+            )
+            await _serve_web_panel("Setup panel: http://%s:%s")
+            return
+        raise RuntimeError(" ".join(connection_problems))
+
+    api_id = int(connection["api_id"])
+    api_hash = str(connection["api_hash"])
+    session_string = str(connection["session_string"])
+    persisted_session = str(persisted_connection["session_string"]) if persisted_connection else None
 
     client = TelegramClient(
-        StringSession(session_string), settings.api_id, settings.api_hash
+        StringSession(session_string), api_id, api_hash
     )
     await client.connect()
     if not await client.is_user_authorized():
         # Try environment session if it differs from persisted
-        if settings.session_string and settings.session_string != persisted_session:
+        if (
+            settings.session_string
+            and settings.api_id
+            and settings.api_hash
+            and settings.session_string != persisted_session
+        ):
             log.info("Persisted session not authorized, trying environment session")
             try:
                 await client.disconnect()

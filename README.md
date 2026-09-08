@@ -92,8 +92,9 @@ cp .env.example .env
 
 ### 1.1 Get API keys
 
-Go to https://my.telegram.org → **API development tools** → create an app →
-copy `api_id` and `api_hash` into `.env`.
+Go to https://my.telegram.org → **API development tools** → create an app and
+keep the resulting `api_id` and `api_hash` ready for the Settings page. In
+PostgreSQL mode they do not need to be copied into `.env`.
 
 ### 1.2 Create session string (one-time login)
 
@@ -105,9 +106,9 @@ Choose QR login (recommended), then on your phone open **Telegram -> Settings
 -> Devices -> Link Desktop Device** and scan the large QR opened locally in
 your web browser.
 Phone/code login is also available, but Telegram may deliver the code inside
-an existing Telegram session rather than by SMS. Paste the printed
-`SESSION_STRING` into `.env`. This same string authorizes the app on the
-server later.
+an existing Telegram session rather than by SMS. Keep the printed
+`SESSION_STRING` private; you will paste it into the authenticated Settings
+page together with the API ID and hash.
 
 ### 1.3 Fill the rest of .env
 
@@ -123,6 +124,12 @@ server later.
 
 > Channels, collection windows, provider keys, and research toggles are now configured at **/settings** in the web panel after login. The `.env` values for `CHANNELS`, `POLL_MINUTES`, `TRACK_DAYS`, `BACKFILL_LIMIT`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `STUDIO_SEARCH_ENABLED`, and `STUDIO_SEARCH_BLOCKED_DOMAINS` are optional first-start seeds; edit them in **/settings** afterwards.
 
+> In PostgreSQL mode `API_ID`, `API_HASH`, and `SESSION_STRING` are optional
+> fallbacks too. The application starts the authenticated web panel when no
+> Telegram connection is available. Open **/settings**, save the Telegram
+> connection and at least one channel, configure Studio/Research if needed,
+> then restart the application once to start collection with those values.
+
 > The bot account must be able to **read the channel** — your own account that
 > owns/is subscribed to the channel already can.
 
@@ -133,6 +140,7 @@ python -m app.main
 ```
 
 - Web panel: http://127.0.0.1:8080 (login with ADMIN credentials)
+- First-time PostgreSQL setup: http://127.0.0.1:8080/settings
 - First cycle backfills the configured post history and linked discussion
   comments immediately, then polls every `POLL_MINUTES`.
 - Stats are only written when values change, so the DB stays small.

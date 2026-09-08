@@ -4,8 +4,8 @@ QR login is the default because Telegram does not reliably offer SMS login to
 third-party clients. It can be approved from an already-authorized Telegram
 mobile app. Phone/code login remains available as a fallback.
 
-After login, the script prints a SESSION_STRING to paste into .env. The same
-string works on your Hetzner server - no re-login needed.
+After login, the script prints a SESSION_STRING to paste into the authenticated
+Settings page. The same string works on your server - no re-login needed.
 
 Usage:
     python scripts/generate_session.py
@@ -142,7 +142,7 @@ async def amain() -> None:
         session_string = client.session.save()  # type: ignore[attr-defined]
         print("\n" + "=" * 62)
         print("Success! Logged in as:", me.first_name, f"@{me.username}" if me.username else "")
-        print("\nYour SESSION_STRING (paste into .env):\n")
+        print("\nYour SESSION_STRING (paste into TG Studio -> Settings -> Telegram):\n")
         print(session_string)
         print("=" * 62)
         print("\nTip: keep it secret - it grants full access to this account.")
