@@ -75,6 +75,12 @@ def test_default_agent_output_budget_supports_evidence_backed_answers():
     assert limits.MAX_TOOL_CALLS == 12
 
 
+def test_profile_rebuild_is_not_exposed_as_a_chat_tool():
+    agent = build_agent(Settings(studio_test_mode=True))
+
+    assert "analyze_channel" not in agent._function_toolset.tools
+
+
 def test_explicit_intents_require_the_evidence_tools_before_text_output():
     assert workflow_tool_sequence(
         "Search the web for current stories, cross-check sources, and explain their fit."

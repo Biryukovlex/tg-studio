@@ -14,7 +14,6 @@ from .. import limits
 from .model import build_model
 from .prompts import SYSTEM_INSTRUCTIONS
 from .analytics import analyze_posts
-from .semantic_profile import build_semantic_profile
 from .context import ContextAssembler, ContextPack
 from .profile import (
     ChannelProfile,
@@ -603,57 +602,6 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             profile_version=profile.get("version") if profile else None,
             conversation_summary=str((conversation or {}).get("summary") or "")[:4_000],
         )
-
-    @agent.tool(prepare=workflow_tool_visibility)
-    async def analyze_channel(ctx: RunContext[StudioDeps]) -> dict[str, Any]:
-        """Create or refresh the versioned profile from scoped evidence."""
-
-        _check_cancel(ctx)
-        raw = await ctx.deps.repository.channel_context(ctx.deps.channel_id)
-        reader = getattr(ctx.deps.repository, "performance_rows", None)
-        rows = await reader(ctx.deps.channel_id) if reader is not None else []
-        _check_cancel(ctx)
-        analytics = analyze_posts(rows, ctx.deps.channel_id, identifier=raw.get("identifier"))
-        profile, analysis = await build_semantic_profile(analytics, rows, settings)
-        analysis_row = None
-        create_analysis = getattr(ctx.deps.repository, "create_analysis", None)
-        if create_analysis is not None:
-            analysis_row = await create_analysis(
-                {
-                    "channel_id": ctx.deps.channel_id,
-                    "analysis_start": analytics.analysis_start,
-                    "analysis_end": analytics.analysis_end,
-                    "eligible_post_count": analytics.eligible_post_count,
-                    "style_eligible_post_count": analytics.style_eligible_post_count,
-                    "evidence_post_ids": analysis.evidence_post_ids,
-                    "scoring_version": analytics.analytics_version,
-                    "scoring_weights": analytics.scoring_weights,
-                    "topic_insights": [topic.model_dump(mode="json") for topic in analysis.topic_insights],
-                    "style_insights": analysis.style_insights,
-                    "limitations": analysis.limitations,
-                    "confidence": analysis.confidence,
-                    "confidence_score": analysis.confidence_score,
-                    "input_hash": analysis.input_hash,
-                    "provider": analysis.provider,
-                    "model": analysis.model,
-                    "prompt_version": analysis.prompt_version,
-                }
-            )
-            profile.analysis_id = str(analysis_row["id"])
-        upsert_profile = getattr(ctx.deps.repository, "upsert_profile", None)
-        if upsert_profile is not None:
-            profile_row = await upsert_profile(
-                {
-                    "channel_id": ctx.deps.channel_id,
-                    "topics": [topic.model_dump(mode="json") for topic in profile.topics],
-                    "style_profile": profile.style_profile.model_dump(mode="json"),
-                    "editorial_rules": profile.editorial_rules,
-                    "confidence": profile.confidence,
-                    "current_analysis_id": analysis_row["id"] if analysis_row else None,
-                }
-            )
-            profile.version = int(profile_row.get("version", profile.version))
-        return {"profile": profile.model_dump(mode="json"), "analysis": analysis.model_dump(mode="json"), "analysis_row": {"id": str(analysis_row["id"])} if analysis_row else None}
 
     def _profile_block_from_row(row: dict[str, Any] | None, channel_id: int) -> str:
         if not row:
