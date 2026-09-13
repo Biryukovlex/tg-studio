@@ -254,7 +254,7 @@ function ConversationRail({
         <span>Private workspace</span>
         <div className="studio-rail-foot-buttons">
           <button type="button" onClick={onProfile}>Profile</button>
-          <button type="button" onClick={onSettings}>Settings</button>
+          <button type="button" onClick={onSettings}>System Prompt</button>
         </div>
       </div>
     </aside>
@@ -272,7 +272,7 @@ function StudioSettings({ onClose }: { onClose: () => void }) {
     let alive = true;
     void api<{ system_prompt: string }>("/studio/api/settings").then(value => {
       if (alive) { setPrompt(value.system_prompt); setLoading(false); }
-    }).catch(() => { if (alive) setNotice("Could not load settings. Close and try again."); });
+    }).catch(() => { if (alive) setNotice("Could not load the system prompt. Close and try again."); });
     return () => { alive = false; };
   }, []);
   const save = async () => {
@@ -284,8 +284,8 @@ function StudioSettings({ onClose }: { onClose: () => void }) {
     finally { setSaving(false); }
   };
   return <dialog className="studio-settings" ref={dialog} aria-labelledby="studio-settings-title" onCancel={onClose} onClose={onClose}>
-    <header><h2 id="studio-settings-title">Studio settings</h2><button type="button" aria-label="Close settings" onClick={onClose}>Close</button></header>
-    <label htmlFor="studio-system-prompt">System prompt</label>
+    <header><h2 id="studio-settings-title">System Prompt</h2><button type="button" aria-label="Close System Prompt" onClick={onClose}>Close</button></header>
+    <label htmlFor="studio-system-prompt">System Prompt</label>
     <p>Standing instructions for all conversations in this workspace: voice, editorial preferences, topics and source criteria. These instructions are sent to the configured model. Security rules still apply.</p>
     <textarea id="studio-system-prompt" autoFocus value={prompt} maxLength={12000} disabled={loading} onChange={event => { setPrompt(event.target.value); setNotice(""); }} placeholder="How should the Studio agent work with you?" />
     <footer><span>{prompt.length.toLocaleString()} / 12,000 · Leave empty to use defaults.</span><button type="button" className="studio-copy" disabled={loading || saving} onClick={() => void save()}>{saving ? "Saving…" : "Save instructions"}</button></footer>
@@ -1153,7 +1153,7 @@ function StudioApp() {
           </div>
           <button type="button" className="studio-draft-toggle" onClick={() => setDraftOpen(true)}>Draft</button>
           <button type="button" className="studio-settings-mobile" onClick={() => setProfileOpen(true)}>Profile</button>
-          <button type="button" className="studio-settings-mobile" onClick={() => setSettingsOpen(true)}>Settings</button>
+          <button type="button" className="studio-settings-mobile" onClick={() => setSettingsOpen(true)}>System Prompt</button>
           <div className="studio-topbar-meta"><span className="studio-status-dot" aria-hidden="true" /> Agent context connected</div>
         </header>
         <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
