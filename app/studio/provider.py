@@ -35,7 +35,7 @@ async def run_openrouter_smoke(settings: Settings) -> OpenRouterSmokeResult:
             reason="OPENROUTER_API_KEY is not configured",
         )
 
-    model_name = settings.openrouter_model.strip() or "openai/gpt-4o-mini"
+    model_name = settings.openrouter_model.strip() or "nex-agi/nex-n2.5-pro:free"
     try:
         model = OpenAIChatModel(
             model_name,

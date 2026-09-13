@@ -200,7 +200,8 @@ class StudioRepositoryProtocol(Protocol):
     async def get_run(self, run_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def get_active_run(self, conversation_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def set_run_status(self, run_id: uuid.UUID, *, status: str, stage: str | None = None, error_code: str | None = None, error_message: str | None = None, actual_model: str | None = None, usage: dict[str, Any] | None = None, worker_id: str | None = None) -> dict[str, Any]: ...
-    async def append_event(self, run_id: uuid.UUID, *, event_type: str, safe_payload: dict[str, Any] | None = None) -> dict[str, Any]: ...
+    async def append_event(self, run_id: uuid.UUID, *, event_type: str, safe_payload: dict[str, Any] | None = None, result_content: str | None = None) -> dict[str, Any]: ...
+    async def list_tool_result_logs(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
     async def request_cancel(self, run_id: uuid.UUID) -> dict[str, Any]: ...
     async def mark_stale_runs_interrupted(self, *, queued_grace_seconds: int = 60) -> int: ...
 
@@ -1685,7 +1686,7 @@ class StudioRepository:
             raise RunClaimLost("run is owned by a different worker")
         return dict(row)
 
-    async def append_event(self, run_id: uuid.UUID, *, event_type: str, safe_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def append_event(self, run_id: uuid.UUID, *, event_type: str, safe_payload: dict[str, Any] | None = None, result_content: str | None = None) -> dict[str, Any]:
         workspace_id = self.workspace_id
         async with self.db.sessions.session() as session:
             run = (
@@ -1705,9 +1706,9 @@ class StudioRepository:
             row = (
                 await session.execute(
                     text(
-                        """INSERT INTO studio_run_events(workspace_id, run_id, sequence, event_type, safe_payload)
-                           VALUES (:workspace_id, :run_id, :sequence, :event_type, CAST(:safe_payload AS jsonb))
-                        RETURNING id, sequence, event_type, safe_payload, created_at"""
+                        """INSERT INTO studio_run_events(workspace_id, run_id, sequence, event_type, safe_payload, result_content)
+                           VALUES (:workspace_id, :run_id, :sequence, :event_type, CAST(:safe_payload AS jsonb), :result_content)
+                        RETURNING id, sequence, event_type, safe_payload, result_content, created_at"""
                     ),
                     {
                         "workspace_id": workspace_id,
@@ -1715,6 +1716,7 @@ class StudioRepository:
                         "sequence": sequence,
                         "event_type": event_type,
                         "safe_payload": __import__("json").dumps(safe_payload or {}),
+                        "result_content": result_content,
                     },
                 )
             ).mappings().one()
@@ -1728,6 +1730,39 @@ class StudioRepository:
                 WHERE workspace_id=:workspace_id AND run_id=:run_id AND sequence > :after
                 ORDER BY sequence ASC""",
             {"run_id": run_id, "after": max(0, int(after))},
+        )
+        return [dict(row) for row in result.mappings().all()]
+
+    async def list_tool_result_logs(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        result = await self.db._execute(
+            """SELECT e.id, e.run_id, e.sequence, e.safe_payload, e.result_content, e.created_at,
+                      COALESCE(
+                          e.safe_payload->>'tool_name',
+                          (SELECT matched.safe_payload->>'tool_name'
+                             FROM studio_run_events matched
+                            WHERE matched.workspace_id=e.workspace_id AND matched.run_id=e.run_id
+                              AND matched.event_type='TOOL_CALL_START'
+                              AND matched.safe_payload->>'tool_call_id'=e.safe_payload->>'tool_call_id'
+                            ORDER BY matched.sequence DESC LIMIT 1),
+                          (SELECT prior.safe_payload->>'tool_name'
+                             FROM studio_run_events prior
+                            WHERE prior.workspace_id=e.workspace_id AND prior.run_id=e.run_id
+                              AND prior.sequence < e.sequence AND prior.event_type='TOOL_CALL_START'
+                            ORDER BY prior.sequence DESC LIMIT 1)
+                      ) AS tool_name,
+                      r.requested_model, r.actual_model, r.status AS run_status,
+                      c.id AS conversation_id, c.title AS conversation_title
+                 FROM studio_run_events e
+                 JOIN studio_agent_runs r
+                   ON r.workspace_id=e.workspace_id AND r.id=e.run_id
+                 JOIN studio_conversations c
+                   ON c.workspace_id=r.workspace_id AND c.id=r.conversation_id
+                WHERE e.workspace_id=:workspace_id
+                  AND e.event_type='TOOL_CALL_RESULT'
+                  AND e.result_content IS NOT NULL
+                ORDER BY e.created_at DESC, e.id DESC
+                LIMIT :limit OFFSET :offset""",
+            {"limit": max(1, min(int(limit), 100)), "offset": max(0, int(offset))},
         )
         return [dict(row) for row in result.mappings().all()]
 
@@ -2614,10 +2649,10 @@ class MemoryStudioRepository:
             row["lease_expires_at"] = None
         return dict(row)
 
-    async def append_event(self, run_id: uuid.UUID, *, event_type: str, safe_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def append_event(self, run_id: uuid.UUID, *, event_type: str, safe_payload: dict[str, Any] | None = None, result_content: str | None = None) -> dict[str, Any]:
         if run_id not in self.runs:
             raise RunNotFound("run is not part of the active workspace")
-        row = {"id": len(self.events[run_id]) + 1, "sequence": len(self.events[run_id]) + 1, "event_type": event_type, "safe_payload": safe_payload or {}, "created_at": utcnow()}
+        row = {"id": len(self.events[run_id]) + 1, "sequence": len(self.events[run_id]) + 1, "event_type": event_type, "safe_payload": safe_payload or {}, "result_content": result_content, "created_at": utcnow()}
         self.events[run_id].append(row)
         return dict(row)
 
@@ -2625,6 +2660,45 @@ class MemoryStudioRepository:
         if run_id not in self.runs:
             raise RunNotFound("run is not part of the active workspace")
         return [dict(row) for row in self.events[run_id] if row["sequence"] > after]
+
+    async def list_tool_result_logs(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for run_id, events in self.events.items():
+            run = self.runs.get(run_id)
+            if run is None:
+                continue
+            conversation = self.conversations.get(run["conversation_id"])
+            latest_tool_name: str | None = None
+            tool_names_by_id: dict[str, str] = {}
+            for event in events:
+                if event["event_type"] == "TOOL_CALL_START":
+                    candidate = event.get("safe_payload", {}).get("tool_name")
+                    latest_tool_name = str(candidate) if candidate else None
+                    tool_call_id = event.get("safe_payload", {}).get("tool_call_id")
+                    if tool_call_id and latest_tool_name:
+                        tool_names_by_id[str(tool_call_id)] = latest_tool_name
+                if event["event_type"] != "TOOL_CALL_RESULT" or event.get("result_content") is None:
+                    continue
+                tool_call_id = event.get("safe_payload", {}).get("tool_call_id")
+                rows.append(
+                    {
+                        **event,
+                        "run_id": run_id,
+                        "tool_name": (
+                            event.get("safe_payload", {}).get("tool_name")
+                            or tool_names_by_id.get(str(tool_call_id))
+                            or latest_tool_name
+                        ),
+                        "requested_model": run.get("requested_model"),
+                        "actual_model": run.get("actual_model"),
+                        "run_status": run.get("status"),
+                        "conversation_id": run.get("conversation_id"),
+                        "conversation_title": conversation.get("title") if conversation else None,
+                    }
+                )
+        rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse=True)
+        start = max(0, int(offset))
+        return rows[start : start + max(1, min(int(limit), 100))]
 
     async def get_run(self, run_id: uuid.UUID) -> dict[str, Any] | None:
         row = self.runs.get(run_id)

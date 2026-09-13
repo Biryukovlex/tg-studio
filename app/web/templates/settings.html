@@ -11,6 +11,25 @@
 </a>
 {% endblock %}
 {% block content %}
+<nav class="settings-view-tabs" aria-label="Settings views">
+  <a class="active" href="/settings" aria-current="page">Configuration</a>
+  <a href="/settings/logs">Agent logs</a>
+</nav>
+{% if save_notice %}
+<aside class="save-confirmation" data-save-confirmation data-section="{{ save_notice.section }}" role="status" aria-live="polite">
+  <span class="save-confirmation-icon" aria-hidden="true">
+    <i class="mgc mgc-check-circle-core-regular"></i>
+  </span>
+  <span class="save-confirmation-copy">
+    <strong>Saved</strong>
+    <span>{{ save_notice.message }}</span>
+  </span>
+  <button class="save-confirmation-close" type="button" aria-label="Dismiss confirmation">
+    <i class="mgc mgc-close-core-regular" aria-hidden="true"></i>
+  </button>
+  <span class="save-confirmation-progress" aria-hidden="true"></span>
+</aside>
+{% endif %}
 {% if not available %}
 <div class="banner warn" role="status">
   <i class="mgc mgc-alert-core-regular" aria-hidden="true"></i>
@@ -317,7 +336,7 @@
           <p class="field-help">OpenRouter model id.</p>
         </div>
         <div class="field-control">
-          <input type="text" id="model" name="model" value="{{ values.model if values.model is defined else (ws_dict['studio.model'].value if ws_dict['studio.model'] is defined else 'openai/gpt-4o-mini') }}" placeholder="openai/gpt-4o-mini" autocomplete="off" spellcheck="false" {% if errors.model %}aria-invalid="true"{% endif %}>
+          <input type="text" id="model" name="model" value="{{ values.model if values.model is defined else (ws_dict['studio.model'].value if ws_dict['studio.model'] is defined else 'nex-agi/nex-n2.5-pro:free') }}" placeholder="nex-agi/nex-n2.5-pro:free" autocomplete="off" spellcheck="false" {% if errors.model %}aria-invalid="true"{% endif %}>
           {% if errors.model %}<p class="field-error">{{ errors.model }}</p>{% endif %}
           <p class="field-source">
             {% set src = ws_dict['studio.model'].source if ws_dict['studio.model'] is defined else 'default' %}
@@ -329,7 +348,7 @@
       </div>
       <div class="field {% if errors.system_prompt %}has-error{% endif %}">
         <div class="field-label">
-          <label class="field-name" for="system_prompt">System prompt</label>
+          <label class="field-name" for="system_prompt">System Prompt</label>
           <p class="field-help">How the Studio agent should work with you. Also editable inside Studio.</p>
         </div>
         <div class="field-control">
@@ -357,7 +376,7 @@
       </div>
       <div class="field">
         <div class="field-label"><label class="field-name">Model</label><p class="field-help">OpenRouter model id.</p></div>
-        <div class="field-control"><input type="text" value="{{ ws_dict['studio.model'].value if ws_dict['studio.model'] is defined else 'openai/gpt-4o-mini' }}" disabled></div>
+        <div class="field-control"><input type="text" value="{{ ws_dict['studio.model'].value if ws_dict['studio.model'] is defined else 'nex-agi/nex-n2.5-pro:free' }}" disabled></div>
       </div>
     </div>
     {% endif %}

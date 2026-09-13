@@ -55,6 +55,41 @@
     });
   });
 
+  const saveConfirmation = document.querySelector('[data-save-confirmation]');
+  if (saveConfirmation) {
+    const section = saveConfirmation.dataset.section;
+    const target = section ? document.getElementById(section) : null;
+    const savedButton = target?.querySelector('.form-actions button[type="submit"]');
+    const originalButtonText = savedButton?.textContent;
+    let dismissed = false;
+
+    const dismiss = () => {
+      if (dismissed) return;
+      dismissed = true;
+      saveConfirmation.classList.add('is-leaving');
+      window.setTimeout(() => saveConfirmation.remove(), reducedMotion ? 0 : 360);
+    };
+
+    requestAnimationFrame(() => {
+      saveConfirmation.classList.add('is-visible');
+      target?.classList.add('just-saved');
+      if (savedButton) {
+        savedButton.textContent = 'Saved';
+        savedButton.classList.add('is-saved');
+      }
+    });
+
+    window.setTimeout(() => target?.classList.remove('just-saved'), reducedMotion ? 0 : 1700);
+    window.setTimeout(() => {
+      if (savedButton && originalButtonText) {
+        savedButton.textContent = originalButtonText;
+        savedButton.classList.remove('is-saved');
+      }
+    }, reducedMotion ? 0 : 1900);
+    window.setTimeout(dismiss, reducedMotion ? 4000 : 4200);
+    saveConfirmation.querySelector('.save-confirmation-close')?.addEventListener('click', dismiss);
+  }
+
   // Charts — read data from data-chart attributes to keep CSP script-src 'self'.
   function parseChartData(element) {
     const raw = element.getAttribute('data-chart') || element.dataset.chart;

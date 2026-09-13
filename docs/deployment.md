@@ -81,13 +81,15 @@ To use the real provider, set:
 
 ```dotenv
 OPENROUTER_API_KEY=<server-only-key>
-OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_MODEL=nex-agi/nex-n2.5-pro:free
 ```
 
 On the first real request, the workspace owner must review and accept the
 OpenRouter disclosure. The consent is tied to provider/model/base URL; changing
 any of those values requires consent again. Keys are never returned to the
-browser or ordinary logs.
+browser or ordinary run-event logs. The owner-only **Settings → Agent logs**
+view contains complete tool outputs for local debugging, including any channel
+text, web excerpts, and URLs returned by a tool.
 
 Enable the optional private SearXNG profile for current stories:
 

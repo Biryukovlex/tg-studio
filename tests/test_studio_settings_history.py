@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,23 @@ from app.config import Settings
 from app.studio.agent import _clean_publication_text, _require_publication_text
 from app.studio.repository import MemoryStudioRepository
 from app.studio.service import StudioService
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_system_prompt_control_is_named_explicitly_in_studio_and_settings():
+    source = (ROOT / "studio-frontend/src/main.tsx").read_text(encoding="utf-8")
+    settings_template = (ROOT / "app/web/templates/settings.html").read_text(encoding="utf-8")
+    bundle = (ROOT / "app/web/static/studio-dist/assets/studio.js").read_text(encoding="utf-8")
+
+    assert source.count(">System Prompt</button>") == 2
+    assert '<h2 id="studio-settings-title">System Prompt</h2>' in source
+    assert '<label htmlFor="studio-system-prompt">System Prompt</label>' in source
+    assert ">Settings</button>" not in source
+    assert '<label class="field-name" for="system_prompt">System Prompt</label>' in settings_template
+    assert "System Prompt" in bundle
+    assert "Studio settings" not in bundle
 
 
 @pytest.mark.asyncio

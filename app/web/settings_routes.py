@@ -13,7 +13,7 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -94,8 +94,8 @@ def _available(request: Request) -> bool:
     return bool(store is not None and getattr(store, "available", False))
 
 
-def _flash(request: Request, message: str) -> None:
-    request.session["flash_msg"] = message
+def _flash(request: Request, message: str, section: str) -> None:
+    request.session["settings_notice"] = {"message": message, "section": section}
 
 
 def _redirect(section: str) -> RedirectResponse:
@@ -179,6 +179,7 @@ async def _page_context(
             search_state = {}
 
     flash = msg if msg is not None else request.session.pop("flash_msg", "")
+    save_notice = request.session.pop("settings_notice", None)
     return {
         "request": request,
         "channels": channels,
@@ -188,6 +189,7 @@ async def _page_context(
         "errors": errors or {},
         "values": values or {},
         "msg": flash,
+        "save_notice": save_notice if isinstance(save_notice, dict) else None,
         "can_manage_settings": _is_owner(request),
         "setup_state": setup_state,
         "search_state": search_state,
@@ -219,6 +221,41 @@ async def settings_page(request: Request):
     return await _render(request)
 
 
+@router.get("/logs", response_class=HTMLResponse)
+async def settings_logs_page(request: Request, page: int = Query(1, ge=1)):
+    """Show private full Studio tool outputs to the workspace owner."""
+
+    if (redirect := _guard(request)) is not None:
+        return redirect
+    repository = getattr(request.app.state, "studio_repository", None)
+    getter = getattr(repository, "list_tool_result_logs", None)
+    page_size = 25
+    logs: list[dict[str, Any]] = []
+    if getter is not None:
+        try:
+            logs = list(await getter(limit=page_size + 1, offset=(page - 1) * page_size))
+        except Exception:  # noqa: BLE001 - settings must remain available if Studio storage is unavailable
+            logs = []
+    has_next = len(logs) > page_size
+    logs = logs[:page_size]
+    for row in logs:
+        row["created_at_display"] = format_timestamp(row.get("created_at"))
+        safe_payload = row.get("safe_payload")
+        if not row.get("tool_name"):
+            row["tool_name"] = safe_payload.get("tool_name", "Tool") if isinstance(safe_payload, dict) else "Tool"
+    return templates.TemplateResponse(
+        request,
+        "settings_logs.html",
+        {
+            "request": request,
+            "logs": logs,
+            "page": page,
+            "has_next": has_next,
+            "can_manage_settings": True,
+        },
+    )
+
+
 async def _begin_write(request: Request) -> RedirectResponse | HTMLResponse | None:
     """Shared prelude for every POST: auth, owner, CSRF, store availability."""
     if (redirect := _guard(request)) is not None:
@@ -241,7 +278,7 @@ async def add_channel(request: Request, identifier: str = Form("")):
             error = str(exc)
     if error is not None:
         return await _render(request, errors={"identifier": error}, values={"identifier": identifier}, status_code=422)
-    _flash(request, f"Channel {identifier.strip()} added.")
+    _flash(request, f"Channel {identifier.strip()} added.", "telegram")
     return _redirect("telegram")
 
 
@@ -259,7 +296,7 @@ async def deactivate_channel(request: Request, channel_id: int):
     except Exception:  # noqa: BLE001 - the label is cosmetic
         pass
     await db.deactivate_channel(channel_id)
-    _flash(request, f"Channel {label} deactivated.")
+    _flash(request, f"Channel {label} deactivated.", "telegram")
     return _redirect("telegram")
 
 
@@ -325,7 +362,7 @@ async def save_telegram_connection(
     store = _store(request)
     if store is not None:
         store.telegram_restart_required = True
-    _flash(request, "Connection saved. Restart the collector to use the updated credentials.")
+    _flash(request, "Connection saved. Restart the collector to use the updated credentials.", "telegram")
     return _redirect("telegram")
 
 
@@ -387,7 +424,7 @@ async def save_collection(
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
     await _apply_fields(store, changes)
-    _flash(request, "Collection settings saved.")
+    _flash(request, "Collection settings saved.", "collection")
     return _redirect("collection")
 
 
@@ -458,7 +495,7 @@ async def save_studio(
             except Exception:  # noqa: BLE001 - preserve the original storage error
                 pass
         raise
-    _flash(request, "Studio settings saved.")
+    _flash(request, "Studio settings saved.", "studio")
     return _redirect("studio")
 
 
@@ -485,7 +522,7 @@ async def save_research(
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
     await _apply_fields(store, changes)
-    _flash(request, "Research settings saved.")
+    _flash(request, "Research settings saved.", "research")
     return _redirect("research")
 
 
@@ -501,7 +538,7 @@ def _reset_route(section: str):
             raise HTTPException(status_code=422, detail=str(exc)) from None
         except StoreUnavailable:
             return await _render(request)
-        _flash(request, "Setting reset to the .env value.")
+        _flash(request, "Setting reset to the .env value.", section)
         return _redirect(section)
 
     reset_setting.__name__ = f"reset_{section}"

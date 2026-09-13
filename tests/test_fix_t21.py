@@ -148,7 +148,7 @@ def test_no_getattr_for_removed_keys_and_no_analysis_max_posts():
 
 def test_configuration_fingerprint_is_stable():
     fp = configuration_fingerprint(Settings(_env_file=None))
-    assert fp == "8e89448bc25820b7852df9faca52178fd08cf81a1fb9e6ef15d273f5bcfbd436"
+    assert fp == "52f952fe7ac43d3843ecd3e3b13beb3008812e5aa9b444ab681a3f65aac1ed2c"
 
 
 def test_searxng_client_defaults_and_agent_prompt_use_limits():

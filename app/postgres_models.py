@@ -382,7 +382,7 @@ class StudioAgentRun(Base):
 
 
 class StudioRunEvent(Base):
-    """Append-only, safe event projection; raw provider payloads are excluded."""
+    """Append-only event with a public-safe projection and private tool output."""
 
     __tablename__ = "studio_run_events"
 
@@ -392,6 +392,7 @@ class StudioRunEvent(Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     safe_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=sql_text("'{}'::jsonb"))
+    result_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     __table_args__ = (
         ForeignKeyConstraint(
@@ -402,6 +403,12 @@ class StudioRunEvent(Base):
         ),
         UniqueConstraint("workspace_id", "run_id", "sequence", name="uq_studio_events_run_sequence"),
         Index("ix_studio_events_workspace_run_sequence", "workspace_id", "run_id", "sequence"),
+        Index(
+            "ix_studio_events_workspace_tool_results",
+            "workspace_id",
+            "created_at",
+            postgresql_where=sql_text("event_type = 'TOOL_CALL_RESULT' AND result_content IS NOT NULL"),
+        ),
     )
 
 

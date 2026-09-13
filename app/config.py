@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     # Content Studio
     openrouter_api_key: str = ""
-    openrouter_model: str = "openai/gpt-4o-mini"
+    openrouter_model: str = "nex-agi/nex-n2.5-pro:free"
     # ``studio_test_mode`` is an explicit deterministic test seam and must
     # never be enabled in a hosted deployment.
     studio_test_mode: bool = False

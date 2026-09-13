@@ -19,7 +19,7 @@ def configuration_fingerprint(settings, *, provider: str = PROVIDER_NAME) -> str
     payload = {
         "consent_version": CONSENT_VERSION,
         "provider": provider,
-        "model": str(getattr(settings, "openrouter_model", "") or "").strip() or "openai/gpt-4o-mini",
+        "model": str(getattr(settings, "openrouter_model", "") or "").strip() or "nex-agi/nex-n2.5-pro:free",
         "base_url": limits.OPENROUTER_BASE_URL,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
