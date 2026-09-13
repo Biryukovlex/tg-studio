@@ -50,6 +50,11 @@ async def test_postgres_studio_run_persists_workspace_scoped_history_and_events(
         events = await repository.get_events(run_id)
         assert events and events[-1]["event_type"] == "RUN_FINISHED"
         assert all("content" not in event["safe_payload"] for event in events)
+        tool_logs = await repository.list_tool_result_logs()
+        tool_log = next(row for row in tool_logs if row["run_id"] == run_id)
+        assert tool_log["tool_name"] == "get_channel_context"
+        assert tool_log["result_content"]
+        assert '"identifier":"@m2-studio"' in tool_log["result_content"]
 
         # Recreate the repository/service boundary to prove PostgreSQL, rather
         # than the in-process registry, is authoritative after a reload.

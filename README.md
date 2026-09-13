@@ -266,9 +266,11 @@ Run ownership, reload recovery, cancellation, and operator limits are enforced
 by the PostgreSQL-backed Studio service and its automated test suite.
 
 Studio agent and cancellation POSTs require the session-bound `X-CSRF-Token`
-emitted on the protected page. OpenRouter credentials, Telegram sessions,
-prompts, post/comment bodies, and raw provider payloads are never put in the
-browser or ordinary run-event logs.
+emitted on the protected page. OpenRouter credentials, Telegram sessions, and
+raw provider payloads are never put in the browser or ordinary run-event logs.
+For local diagnostics, the owner-only **Settings → Agent logs** view displays
+complete tool results stored in PostgreSQL; those results can include channel
+text, web excerpts, and URLs.
 
 To make one provider request deliberately, set the backend-only key and run:
 

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Agent logs · {{ app_name }}{% endblock %}
+{% block pageheading %}
+<p class="eyebrow">Workspace</p>
+<h1>Settings</h1>
+{% endblock %}
+{% block navactions %}
+<a class="action-btn primary-action" href="/studio">
+  <i class="mgc mgc-sparkles-2-core-regular" aria-hidden="true"></i>
+  <span>Back to Studio</span>
+</a>
+{% endblock %}
+{% block content %}
+<nav class="settings-view-tabs" aria-label="Settings views">
+  <a href="/settings">Configuration</a>
+  <a class="active" href="/settings/logs" aria-current="page">Agent logs</a>
+</nav>
+
+<section class="settings-intro agent-logs-intro" data-reveal>
+  <div>
+    <p class="section-kicker">Private diagnostics</p>
+    <h2>Tool result logs</h2>
+    <p>Complete tool outputs are stored in PostgreSQL and visible only to the workspace owner. They can contain channel text, web excerpts, URLs, and other private working context.</p>
+  </div>
+</section>
+
+<div class="agent-log-list">
+  {% for log in logs %}
+  <article class="panel agent-log" data-reveal>
+    <header class="agent-log-header">
+      <div>
+        <p class="section-kicker">{{ log.tool_name }}</p>
+        <h2>{{ log.conversation_title or "Untitled conversation" }}</h2>
+      </div>
+      <span class="pill {% if log.run_status == 'succeeded' %}ok{% endif %}">{{ log.run_status or "unknown" }}</span>
+    </header>
+    <dl class="agent-log-meta">
+      <div><dt>Time</dt><dd>{{ log.created_at_display or "—" }} UTC</dd></div>
+      <div><dt>Model</dt><dd>{{ log.actual_model or log.requested_model or "—" }}</dd></div>
+      <div><dt>Run</dt><dd><code>{{ log.run_id }}</code></dd></div>
+      <div><dt>Sequence</dt><dd>{{ log.sequence }}</dd></div>
+    </dl>
+    <details class="agent-log-result">
+      <summary>View complete result</summary>
+      <pre>{{ log.result_content }}</pre>
+    </details>
+  </article>
+  {% else %}
+  <section class="panel agent-log-empty" data-reveal>
+    <i class="mgc mgc-terminal-box-core-regular" aria-hidden="true"></i>
+    <h2>No tool results yet</h2>
+    <p>Run the Studio agent with a task that uses a tool. New full results will appear here.</p>
+  </section>
+  {% endfor %}
+</div>
+
+{% if page > 1 or has_next %}
+<nav class="log-pagination" aria-label="Agent log pages">
+  {% if page > 1 %}<a class="btn ghost small" href="/settings/logs?page={{ page - 1 }}">Newer</a>{% endif %}
+  <span>Page {{ page }}</span>
+  {% if has_next %}<a class="btn ghost small" href="/settings/logs?page={{ page + 1 }}">Older</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

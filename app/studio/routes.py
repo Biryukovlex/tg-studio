@@ -362,7 +362,7 @@ def build_router() -> APIRouter:
             "setup": setup,
             "workspace": {"id": str(context.workspace_id or service.repository.workspace_id), "slug": context.workspace_slug, "role": context.role},
             "user": {"id": str(context.user_id) if context.user_id else None},
-            "provider": {"name": "openrouter", "model": _settings(request).openrouter_model.strip() or "openai/gpt-4o-mini", "configured": bool(_settings(request).openrouter_api_key or getattr(_settings(request), "studio_test_mode", False))},
+            "provider": {"name": "openrouter", "model": _settings(request).openrouter_model.strip() or "nex-agi/nex-n2.5-pro:free", "configured": bool(_settings(request).openrouter_api_key or getattr(_settings(request), "studio_test_mode", False))},
             "research": setup.get("research", {}),
             "channels": [dict(row) for row in channels],
             "selected_channel_id": selected_channel_id,

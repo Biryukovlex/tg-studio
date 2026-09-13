@@ -16,7 +16,7 @@ TEST_URL = os.getenv("TEST_POSTGRES_URL")
 
 
 @pytest.mark.asyncio
-async def test_migration_0010_upgrades_and_downgrades():
+async def test_settings_and_tool_log_migrations_upgrade_and_downgrade():
     # Test migration upgrade/downgrade on disposable DB
     from alembic.config import Config
     from alembic import command
@@ -36,7 +36,7 @@ async def test_migration_0010_upgrades_and_downgrades():
     async with mgr.session() as session:
         result = await session.execute(text("SELECT version_num FROM alembic_version"))
         version = result.scalar_one_or_none()
-        assert version == "0010_workspace_settings" or version is not None
+        assert version == "0011_tool_result_logs" or version is not None
     await mgr.dispose()
     # Downgrade to 0009 and upgrade back
     alembic_cfg = Config("alembic.ini")
@@ -62,9 +62,16 @@ async def test_migration_0010_upgrades_and_downgrades():
     async with mgr3.session() as session:
         result = await session.execute(text("SELECT to_regclass('public.workspace_settings')"))
         assert result.scalar_one_or_none() == "workspace_settings"
+        result = await session.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='studio_run_events' AND column_name='result_content'"
+            )
+        )
+        assert result.scalar_one_or_none() == "result_content"
         # Check head version again
         result2 = await session.execute(text("SELECT version_num FROM alembic_version"))
-        assert result2.scalar_one_or_none() == "0010_workspace_settings"
+        assert result2.scalar_one_or_none() == "0011_tool_result_logs"
     await mgr3.dispose()
 
 

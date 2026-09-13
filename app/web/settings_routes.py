@@ -13,7 +13,7 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -217,6 +217,41 @@ async def settings_page(request: Request):
     if (redirect := _guard(request)) is not None:
         return redirect
     return await _render(request)
+
+
+@router.get("/logs", response_class=HTMLResponse)
+async def settings_logs_page(request: Request, page: int = Query(1, ge=1)):
+    """Show private full Studio tool outputs to the workspace owner."""
+
+    if (redirect := _guard(request)) is not None:
+        return redirect
+    repository = getattr(request.app.state, "studio_repository", None)
+    getter = getattr(repository, "list_tool_result_logs", None)
+    page_size = 25
+    logs: list[dict[str, Any]] = []
+    if getter is not None:
+        try:
+            logs = list(await getter(limit=page_size + 1, offset=(page - 1) * page_size))
+        except Exception:  # noqa: BLE001 - settings must remain available if Studio storage is unavailable
+            logs = []
+    has_next = len(logs) > page_size
+    logs = logs[:page_size]
+    for row in logs:
+        row["created_at_display"] = format_timestamp(row.get("created_at"))
+        safe_payload = row.get("safe_payload")
+        if not row.get("tool_name"):
+            row["tool_name"] = safe_payload.get("tool_name", "Tool") if isinstance(safe_payload, dict) else "Tool"
+    return templates.TemplateResponse(
+        request,
+        "settings_logs.html",
+        {
+            "request": request,
+            "logs": logs,
+            "page": page,
+            "has_next": has_next,
+            "can_manage_settings": True,
+        },
+    )
 
 
 async def _begin_write(request: Request) -> RedirectResponse | HTMLResponse | None:

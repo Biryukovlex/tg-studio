@@ -155,6 +155,9 @@ def _safe_event_payload(event: Any) -> dict[str, Any]:
     tool_name = getattr(event, "tool_call_name", None)
     if tool_name:
         payload["tool_name"] = str(tool_name)
+    tool_call_id = getattr(event, "tool_call_id", None)
+    if tool_call_id:
+        payload["tool_call_id"] = str(tool_call_id)[:160]
     delta = getattr(event, "delta", None)
     if delta:
         payload["delta_length"] = len(str(delta))
@@ -220,6 +223,28 @@ def _safe_event_payload(event: Any) -> dict[str, Any]:
                     mapped = "story_cluster_id" if nested_key == "proposal" and key == "id" else key
                     payload.setdefault(mapped, str(nested[key])[:160])
     return payload
+
+
+def _tool_result_content(event: Any) -> str | None:
+    """Return the complete tool result for the private owner log.
+
+    This value is deliberately kept separate from ``safe_payload`` so it never
+    crosses the ordinary Studio event API or structured process logs.
+    """
+
+    if _event_type(event) != "TOOL_CALL_RESULT":
+        return None
+    content = getattr(event, "content", None)
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, bytes):
+        return content.decode("utf-8", errors="replace")
+    try:
+        return json.dumps(content, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(content)
 
 
 def _text_from_user_message(message: Any) -> str:
@@ -654,6 +679,7 @@ class StudioService:
                                 run_id,
                                 event_type=event_type,
                                 safe_payload=event_payload,
+                                result_content=_tool_result_content(event),
                             )
                             if event_type.startswith("TOOL_CALL_"):
                                 emit_observation(

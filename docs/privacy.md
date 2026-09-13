@@ -7,8 +7,8 @@ access. The defaults bind the web panel and PostgreSQL to localhost.
 ## Local storage
 
 PostgreSQL stores workspace, channel, post, metric snapshot, attributed
-discussion-comment, Studio conversation, run, source, research, profile, and
-draft records. Telegram sessions are encrypted at rest with
+discussion-comment, Studio conversation, run, source, research, profile,
+draft, and complete Studio tool-result records. Telegram sessions are encrypted at rest with
 `TELEGRAM_SESSION_ENCRYPTION_KEY`. The key is supplied outside the database and
 is never returned through the web API. A legacy `data/stats.db` is used only as
 a read-only migration source or rollback archive.
@@ -22,7 +22,10 @@ first request, and consent becomes stale when provider/model/base URL changes.
 
 Telegram API credentials, session strings, provider keys, raw provider payloads,
 and private network topology are not sent to the browser or ordinary run-event
-logs.
+logs. Complete tool results are kept separately from the safe event projection
+and are shown only in the authenticated owner view at **Settings → Agent logs**.
+They can contain channel text, source excerpts, and URLs and are deleted with
+the parent conversation.
 
 Discussion comment bodies are collected for the operator's archive and remain
 available to local analytics/export routes, but are not included in the default

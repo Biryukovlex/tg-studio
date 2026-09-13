@@ -39,7 +39,7 @@ def build_model(settings, *, test_model: bool | None = None) -> Model:
     api_key = settings.openrouter_api_key.strip()
     if not api_key:
         raise StudioConfigurationError("OPENROUTER_API_KEY is required for Studio agent runs")
-    model_name = settings.openrouter_model.strip() or "openai/gpt-4o-mini"
+    model_name = settings.openrouter_model.strip() or "nex-agi/nex-n2.5-pro:free"
     return OpenAIChatModel(
         model_name,
         provider=OpenAIProvider(
@@ -52,5 +52,4 @@ def build_model(settings, *, test_model: bool | None = None) -> Model:
 def model_name(settings) -> str:
     """Return a user-safe requested model label."""
 
-    return settings.openrouter_model.strip() or "openai/gpt-4o-mini"
-
+    return settings.openrouter_model.strip() or "nex-agi/nex-n2.5-pro:free"
