@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 import httpx
 from unittest.mock import AsyncMock, MagicMock
@@ -334,6 +337,43 @@ async def test_post_studio_key_handling(tmp_path):
         )
         assert resp.status_code == 303
         assert app.state.studio_repository.set_system_prompt.called
+
+
+@pytest.mark.asyncio
+async def test_saved_setting_uses_one_time_animated_confirmation(tmp_path):
+    app, ws, _ = _make_app_with_fake(tmp_path, role="owner", available=True)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/login", data={"username": "admin", "password": "pw"})
+        page = await client.get("/settings")
+        match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+        assert match
+        response = await client.post(
+            "/settings/collection",
+            data={"poll_minutes": "30", "track_days": "30", "backfill_limit": "200", "csrf_token": match.group(1)},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        confirmed = await client.get("/settings")
+        assert 'data-save-confirmation' in confirmed.text
+        assert 'data-section="collection"' in confirmed.text
+        assert "Collection settings saved." in confirmed.text
+        assert 'aria-live="polite"' in confirmed.text
+
+        consumed = await client.get("/settings")
+        assert 'data-save-confirmation' not in consumed.text
+
+
+def test_saved_setting_animation_contract():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "app/web/static/app.js").read_text(encoding="utf-8")
+    styles = (root / "app/web/static/style.css").read_text(encoding="utf-8")
+    assert "data-save-confirmation" in script
+    assert "just-saved" in script
+    assert "is-saved" in script
+    assert "prefers-reduced-motion" in styles
+    assert "save-confirmation-progress" in styles
 
 
 @pytest.mark.asyncio

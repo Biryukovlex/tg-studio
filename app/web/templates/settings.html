@@ -15,6 +15,21 @@
   <a class="active" href="/settings" aria-current="page">Configuration</a>
   <a href="/settings/logs">Agent logs</a>
 </nav>
+{% if save_notice %}
+<aside class="save-confirmation" data-save-confirmation data-section="{{ save_notice.section }}" role="status" aria-live="polite">
+  <span class="save-confirmation-icon" aria-hidden="true">
+    <i class="mgc mgc-check-circle-core-regular"></i>
+  </span>
+  <span class="save-confirmation-copy">
+    <strong>Saved</strong>
+    <span>{{ save_notice.message }}</span>
+  </span>
+  <button class="save-confirmation-close" type="button" aria-label="Dismiss confirmation">
+    <i class="mgc mgc-close-core-regular" aria-hidden="true"></i>
+  </button>
+  <span class="save-confirmation-progress" aria-hidden="true"></span>
+</aside>
+{% endif %}
 {% if not available %}
 <div class="banner warn" role="status">
   <i class="mgc mgc-alert-core-regular" aria-hidden="true"></i>

@@ -94,8 +94,8 @@ def _available(request: Request) -> bool:
     return bool(store is not None and getattr(store, "available", False))
 
 
-def _flash(request: Request, message: str) -> None:
-    request.session["flash_msg"] = message
+def _flash(request: Request, message: str, section: str) -> None:
+    request.session["settings_notice"] = {"message": message, "section": section}
 
 
 def _redirect(section: str) -> RedirectResponse:
@@ -179,6 +179,7 @@ async def _page_context(
             search_state = {}
 
     flash = msg if msg is not None else request.session.pop("flash_msg", "")
+    save_notice = request.session.pop("settings_notice", None)
     return {
         "request": request,
         "channels": channels,
@@ -188,6 +189,7 @@ async def _page_context(
         "errors": errors or {},
         "values": values or {},
         "msg": flash,
+        "save_notice": save_notice if isinstance(save_notice, dict) else None,
         "can_manage_settings": _is_owner(request),
         "setup_state": setup_state,
         "search_state": search_state,
@@ -276,7 +278,7 @@ async def add_channel(request: Request, identifier: str = Form("")):
             error = str(exc)
     if error is not None:
         return await _render(request, errors={"identifier": error}, values={"identifier": identifier}, status_code=422)
-    _flash(request, f"Channel {identifier.strip()} added.")
+    _flash(request, f"Channel {identifier.strip()} added.", "telegram")
     return _redirect("telegram")
 
 
@@ -294,7 +296,7 @@ async def deactivate_channel(request: Request, channel_id: int):
     except Exception:  # noqa: BLE001 - the label is cosmetic
         pass
     await db.deactivate_channel(channel_id)
-    _flash(request, f"Channel {label} deactivated.")
+    _flash(request, f"Channel {label} deactivated.", "telegram")
     return _redirect("telegram")
 
 
@@ -360,7 +362,7 @@ async def save_telegram_connection(
     store = _store(request)
     if store is not None:
         store.telegram_restart_required = True
-    _flash(request, "Connection saved. Restart the collector to use the updated credentials.")
+    _flash(request, "Connection saved. Restart the collector to use the updated credentials.", "telegram")
     return _redirect("telegram")
 
 
@@ -422,7 +424,7 @@ async def save_collection(
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
     await _apply_fields(store, changes)
-    _flash(request, "Collection settings saved.")
+    _flash(request, "Collection settings saved.", "collection")
     return _redirect("collection")
 
 
@@ -493,7 +495,7 @@ async def save_studio(
             except Exception:  # noqa: BLE001 - preserve the original storage error
                 pass
         raise
-    _flash(request, "Studio settings saved.")
+    _flash(request, "Studio settings saved.", "studio")
     return _redirect("studio")
 
 
@@ -520,7 +522,7 @@ async def save_research(
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
     await _apply_fields(store, changes)
-    _flash(request, "Research settings saved.")
+    _flash(request, "Research settings saved.", "research")
     return _redirect("research")
 
 
@@ -536,7 +538,7 @@ def _reset_route(section: str):
             raise HTTPException(status_code=422, detail=str(exc)) from None
         except StoreUnavailable:
             return await _render(request)
-        _flash(request, "Setting reset to the .env value.")
+        _flash(request, "Setting reset to the .env value.", section)
         return _redirect(section)
 
     reset_setting.__name__ = f"reset_{section}"
