@@ -124,13 +124,16 @@ async def test_collector_interval_callback():
 
     def on_change2(v):
         calls2.append(v)
+        collector2.applied_poll_minutes = float(v)
 
     collector2.on_poll_interval_change = on_change2
+    collector2.applied_poll_minutes = 15.0
+    # ``poll_all`` is the production path: reload the persisted setting and
+    # compare it with the interval actually applied to the scheduler.
+    ws2.load = AsyncMock(return_value=None)
     ws2._rows["collection.poll_minutes"] = {"value": 30.0, "is_secret": False, "updated_at": None, "raw": "30"}
-    prev2 = 15.0
-    new2 = float(collector2.settings.poll_minutes)
-    if new2 != prev2:
-        collector2.on_poll_interval_change(new2)
+    await collector2.poll_all(reason="test")
+    await collector2.poll_all(reason="test")
     assert calls2 == [30.0]
 
 

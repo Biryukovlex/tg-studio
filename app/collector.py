@@ -70,6 +70,12 @@ class Collector:
         self.settings = settings
         self.workspace_settings = None  # type: ignore[attr-defined]
         self.on_poll_interval_change = None  # type: ignore[attr-defined]
+        # The interval currently applied to the process scheduler.  This is
+        # deliberately separate from ``settings.poll_minutes``: the runtime
+        # settings proxy is refreshed from PostgreSQL in-place, so comparing
+        # the proxy before and after a refresh cannot detect a web save made
+        # by another process.
+        self.applied_poll_minutes: float | None = None
         self._entities: dict[str, Any] = {}
         self._lock = asyncio.Lock()  # one cycle at a time (scheduler + manual refresh)
         self._background: asyncio.Task | None = None
@@ -281,12 +287,12 @@ class Collector:
         # Cross-process refresh: reload workspace settings and reschedule if poll interval changed
         if getattr(self, "workspace_settings", None) is not None:
             try:
-                prev = float(self.settings.poll_minutes)
                 await self.workspace_settings.load()  # type: ignore[attr-defined]
                 new = float(self.settings.poll_minutes)
-                if new != prev and getattr(self, "on_poll_interval_change", None):
+                applied = self.applied_poll_minutes
+                if applied is not None and new != applied and getattr(self, "on_poll_interval_change", None):
                     try:
-                        self.on_poll_interval_change(new)  # type: ignore[attr-defined]
+                        await maybe_await(self.on_poll_interval_change(new))  # type: ignore[attr-defined]
                     except Exception:
                         log.warning("on_poll_interval_change failed")
             except Exception:

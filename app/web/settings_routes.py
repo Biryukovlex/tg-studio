@@ -8,6 +8,7 @@ managed directly in their own tables. Secrets are never rendered back.
 from __future__ import annotations
 
 import inspect
+import logging
 import re
 import secrets
 from pathlib import Path
@@ -27,6 +28,7 @@ from .dependencies import require_auth
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+log = logging.getLogger("settings_routes")
 
 ENCRYPTION_KEY_MESSAGE = "Set TELEGRAM_SESSION_ENCRYPTION_KEY to store secrets."
 SYSTEM_PROMPT_MAX_CHARS = 12_000
@@ -424,6 +426,16 @@ async def save_collection(
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
     await _apply_fields(store, changes)
+    # In the combined process, update the live scheduler immediately after a
+    # successful persistence.  The worker process has no callback here and
+    # will detect the persisted value during its next polling cycle.
+    if "collection.poll_minutes" in changes:
+        callback = getattr(request.app.state, "on_poll_interval_change", None)
+        if callable(callback):
+            try:
+                await maybe_await(callback(float(changes["collection.poll_minutes"])))
+            except Exception as exc:  # noqa: BLE001 - settings save must still succeed
+                log.warning("poll interval callback failed (%s)", type(exc).__name__)
     _flash(request, "Collection settings saved.", "collection")
     return _redirect("collection")
 

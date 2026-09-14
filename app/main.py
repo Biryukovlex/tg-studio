@@ -229,6 +229,7 @@ async def amain() -> None:
     def _on_poll_interval_change(new_minutes: float) -> None:
         try:
             scheduler.reschedule_job("poll_stats", trigger="interval", minutes=new_minutes)
+            collector.applied_poll_minutes = float(new_minutes)
             log.info("Rescheduled poll_stats to %s minutes", new_minutes)
         except Exception:
             log.warning("Failed to reschedule poll_stats")
@@ -244,6 +245,7 @@ async def amain() -> None:
         max_instances=1,
         coalesce=True,
     )
+    collector.applied_poll_minutes = float(effective.poll_minutes)
     scheduler.start()
 
     async def _first_cycle() -> None:
@@ -268,6 +270,10 @@ async def amain() -> None:
         return
 
     app = create_app(collector, effective, workspace_settings=workspace_settings)
+    # Settings writes made through the web panel must reach the scheduler in
+    # the combined process.  ``web`` role deliberately has no scheduler, so
+    # its callback remains the default ``None``.
+    app.state.on_poll_interval_change = _on_poll_interval_change
     server = uvicorn.Server(_uvicorn_config(app))
 
     log.info("Web panel: http://%s:%s", settings.web_host, settings.web_port)

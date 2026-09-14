@@ -240,6 +240,9 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
     app.state.settings = settings
     app.state.workspace_settings = workspace_settings
     app.state.db = db
+    # The combined process replaces this with its APScheduler callback.  A
+    # web-only process leaves it unset because its worker owns scheduling.
+    app.state.on_poll_interval_change = None
     studio_repository = StudioRepository(db) if getattr(db, "is_postgres", False) else MemoryStudioRepository()
     app.state.studio_repository = studio_repository
     app.state.studio_service = StudioService(studio_repository, settings)
