@@ -70,21 +70,21 @@ async def _login(client: httpx.AsyncClient) -> str:
 
 
 @pytest.mark.asyncio
-async def test_settings_page_prefills_the_system_prompt_and_keeps_it_on_save(tmp_path):
+async def test_settings_page_keeps_provider_settings_global_and_prompts_in_studio(tmp_path):
     app, ws, db = _make_app_with_fake(tmp_path, role="owner", available=True)
     app.state.studio_repository.get_system_prompt = AsyncMock(return_value="Keep posts short.")
     app.state.studio_repository.set_system_prompt = AsyncMock(return_value="Keep posts short.")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         token = await _login(client)
         page = await client.get("/settings")
-        assert ">Keep posts short.</textarea>" in page.text
-        # The browser submits the prefilled prompt back; nothing is erased.
+        assert "each channel's System Prompt is edited inside Studio" in page.text
+        assert 'name="system_prompt"' not in page.text
         resp = await client.post(
             "/settings/studio",
             data={"openrouter_api_key": "", "model": "openai/gpt-4o-mini", "system_prompt": "Keep posts short.", "csrf_token": token},
         )
         assert resp.status_code == 303
-        app.state.studio_repository.set_system_prompt.assert_awaited_once_with("Keep posts short.")
+        app.state.studio_repository.set_system_prompt.assert_not_awaited()
 
 
 @pytest.mark.asyncio

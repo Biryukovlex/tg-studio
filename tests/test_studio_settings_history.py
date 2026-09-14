@@ -19,7 +19,7 @@ from app.studio.service import StudioService
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_system_prompt_control_is_named_explicitly_in_studio_and_settings():
+def test_system_prompt_control_is_channel_local_inside_studio():
     source = (ROOT / "studio-frontend/src/main.tsx").read_text(encoding="utf-8")
     settings_template = (ROOT / "app/web/templates/settings.html").read_text(encoding="utf-8")
     bundle = (ROOT / "app/web/static/studio-dist/assets/studio.js").read_text(encoding="utf-8")
@@ -28,34 +28,38 @@ def test_system_prompt_control_is_named_explicitly_in_studio_and_settings():
     assert '<h2 id="studio-settings-title">System Prompt</h2>' in source
     assert '<label htmlFor="studio-system-prompt">System Prompt</label>' in source
     assert ">Settings</button>" not in source
-    assert '<label class="field-name" for="system_prompt">System Prompt</label>' in settings_template
+    assert 'name="system_prompt"' not in settings_template
+    assert "each channel's System Prompt is edited inside Studio" in settings_template
     assert "System Prompt" in bundle
     assert "Studio settings" not in bundle
 
 
 @pytest.mark.asyncio
-async def test_settings_authenticated_csrf_validated_and_workspace_scoped(client, settings, app):
+async def test_settings_authenticated_csrf_validated_and_channel_scoped(client, settings, app):
     settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password})
     home = await client.get("/studio")
     token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
-    assert (await client.get("/studio/api/settings")).json() == {"system_prompt": ""}
-    assert (await client.patch("/studio/api/settings", json={"system_prompt": "x"})).status_code == 403
+    repository = app.state.studio_repository
+    repository.channels.append({"id": 2, "identifier": "@other_channel", "title": "Other", "active": True})
+    assert (await client.get("/studio/api/settings?channel_id=1")).json() == {"channel_id": 1, "system_prompt": ""}
+    assert (await client.patch("/studio/api/settings", json={"channel_id": 1, "system_prompt": "x"})).status_code == 403
     headers = {"x-csrf-token": token}
     for invalid in [None, 42, "x" * 12001]:
-        assert (await client.patch("/studio/api/settings", headers=headers, json={"system_prompt": invalid})).status_code == 422
+        assert (await client.patch("/studio/api/settings", headers=headers, json={"channel_id": 1, "system_prompt": invalid})).status_code == 422
     prompt = "Пиши коротко. Без служебных комментариев в постах."
-    assert (await client.patch("/studio/api/settings", headers=headers, json={"system_prompt": prompt})).status_code == 200
-    assert (await client.get("/studio/api/settings")).json()["system_prompt"] == prompt
+    assert (await client.patch("/studio/api/settings", headers=headers, json={"channel_id": 1, "system_prompt": prompt})).status_code == 200
+    assert (await client.get("/studio/api/settings?channel_id=1")).json()["system_prompt"] == prompt
+    assert (await client.get("/studio/api/settings?channel_id=2")).json()["system_prompt"] == ""
     other = MemoryStudioRepository(workspace_id="other-workspace")
-    assert await other.get_system_prompt() == ""
-    assert (await client.patch("/studio/api/settings", headers=headers, json={"system_prompt": ""})).status_code == 200
+    assert await other.get_system_prompt(1) == ""
+    assert (await client.patch("/studio/api/settings", headers=headers, json={"channel_id": 1, "system_prompt": ""})).status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_final_reply_is_persisted_before_finished_and_history_contains_answers(monkeypatch):
     repository = MemoryStudioRepository()
-    await repository.set_system_prompt("Use a warm editorial voice.")
+    await repository.set_system_prompt(1, "Use a warm editorial voice.")
     seen = []
     class Adapter:
         build_run_input = staticmethod(AGUIAdapter.build_run_input)

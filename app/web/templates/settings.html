@@ -295,7 +295,7 @@
       <div>
         <p class="section-kicker">Studio</p>
         <h2>Agent and provider</h2>
-        <p class="panel-note">Studio is always on. Keys are stored encrypted and never shown again; changing the model asks for provider consent again.</p>
+        <p class="panel-note">Studio is always on. Keys and model selection apply to every channel; each channel's System Prompt is edited inside Studio.</p>
       </div>
       {% if setup_state.ready %}
       <span class="pill ok"><i class="mgc mgc-check-circle-core-regular" aria-hidden="true"></i>Ready</span>
@@ -344,16 +344,6 @@
             {% elif src == 'env' %}<span class="source-tag">from .env</span>
             {% else %}<span class="source-tag">default</span>{% endif %}
           </p>
-        </div>
-      </div>
-      <div class="field {% if errors.system_prompt %}has-error{% endif %}">
-        <div class="field-label">
-          <label class="field-name" for="system_prompt">System Prompt</label>
-          <p class="field-help">How the Studio agent should work with you. Also editable inside Studio.</p>
-        </div>
-        <div class="field-control">
-          <textarea id="system_prompt" name="system_prompt" maxlength="12000" rows="5" placeholder="How should the Studio agent work with you?">{{ values.system_prompt if values.system_prompt is defined else system_prompt }}</textarea>
-          {% if errors.system_prompt %}<p class="field-error">{{ errors.system_prompt }}</p>{% endif %}
         </div>
       </div>
       <div class="form-actions">

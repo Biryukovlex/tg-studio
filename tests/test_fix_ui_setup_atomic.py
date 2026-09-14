@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import os
 import uuid
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -114,11 +114,10 @@ async def test_invalid_studio_form_does_not_clear_key_or_prompt(tmp_path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_studio_prompt_is_restored_when_settings_write_fails(tmp_path) -> None:
+async def test_global_studio_write_failure_does_not_touch_channel_prompt(tmp_path) -> None:
     from app.workspace_settings import EncryptionKeyRequired
 
     app, store, _db = _make_app_with_fake(tmp_path, role="owner", available=True)
-    app.state.studio_repository.get_system_prompt = AsyncMock(return_value="Previous prompt")
     app.state.studio_repository.set_system_prompt = AsyncMock()
     store.set = AsyncMock(side_effect=EncryptionKeyRequired("missing encryption key"))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -133,10 +132,7 @@ async def test_studio_prompt_is_restored_when_settings_write_fails(tmp_path) -> 
             },
         )
     assert response.status_code == 409
-    assert app.state.studio_repository.set_system_prompt.await_args_list == [
-        call("New prompt"),
-        call("Previous prompt"),
-    ]
+    app.state.studio_repository.set_system_prompt.assert_not_awaited()
 
 
 @pytest.mark.asyncio

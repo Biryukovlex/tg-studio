@@ -326,8 +326,8 @@ async def test_post_studio_key_handling(tmp_path):
             )
             assert resp.status_code == 409
             assert "Set TELEGRAM_SESSION_ENCRYPTION_KEY to store secrets." in resp.text
-        # system_prompt reaches set_system_prompt
-        # Check via studio_repository mock
+        # Per-channel prompts are edited inside Studio, never as part of the
+        # global provider-settings transaction.
         from unittest.mock import AsyncMock
 
         app.state.studio_repository.set_system_prompt = AsyncMock(return_value="test")
@@ -336,7 +336,7 @@ async def test_post_studio_key_handling(tmp_path):
             data={"openrouter_api_key": "", "model": "openai/gpt-4o-mini", "system_prompt": "my prompt", "csrf_token": token},
         )
         assert resp.status_code == 303
-        assert app.state.studio_repository.set_system_prompt.called
+        app.state.studio_repository.set_system_prompt.assert_not_awaited()
 
 
 @pytest.mark.asyncio

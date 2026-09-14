@@ -18,6 +18,7 @@ import {
   csrfToken,
   type ApiError,
   type Bootstrap,
+  type Channel,
   type Conversation,
   type Draft,
   type DraftVersion,
@@ -242,6 +243,8 @@ function AgentActivity({ run, events, onStopRun }: { run: RunSummary | null; eve
 }
 
 function ConversationRail({
+  channels,
+  selectedChannelId,
   conversations,
   selected,
   onSelect,
@@ -250,7 +253,10 @@ function ConversationRail({
   deletingId,
   onSettings,
   onProfile,
+  onChannelSelect,
 }: {
+  channels: Channel[];
+  selectedChannelId: number | null;
   conversations: Conversation[];
   selected: Conversation | null;
   onSelect: (conversation: Conversation) => void;
@@ -259,6 +265,7 @@ function ConversationRail({
   deletingId: string | null;
   onSettings: () => void;
   onProfile: () => void;
+  onChannelSelect: (channelId: number) => void;
 }) {
   return (
     <aside className="studio-rail" aria-label="Studio conversations">
@@ -269,6 +276,20 @@ function ConversationRail({
           <p className="studio-rail-title">Channel desk</p>
         </div>
       </div>
+      <label className="studio-channel-picker">
+        <span>Channel</span>
+        <select
+          aria-label="Studio channel"
+          value={selectedChannelId ?? ""}
+          onChange={(event) => onChannelSelect(Number(event.target.value))}
+        >
+          {channels.map((channel) => (
+            <option key={channel.id} value={channel.id}>
+              {channel.title?.trim() || channel.identifier}
+            </option>
+          ))}
+        </select>
+      </label>
       <select
         className="studio-mobile-conversation-select"
         aria-label="Studio conversation"
@@ -331,7 +352,7 @@ function ConversationRail({
   );
 }
 
-function StudioSettings({ onClose }: { onClose: () => void }) {
+function StudioSettings({ channelId, channelLabel, onClose }: { channelId: number; channelLabel: string; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(true);
@@ -340,23 +361,23 @@ function StudioSettings({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     dialog.current?.showModal();
     let alive = true;
-    void api<{ system_prompt: string }>("/studio/api/settings").then(value => {
+    void api<{ channel_id: number; system_prompt: string }>(`/studio/api/settings?channel_id=${encodeURIComponent(channelId)}`).then(value => {
       if (alive) { setPrompt(value.system_prompt); setLoading(false); }
     }).catch(() => { if (alive) setNotice("Could not load the system prompt. Close and try again."); });
     return () => { alive = false; };
-  }, []);
+  }, [channelId]);
   const save = async () => {
     setSaving(true); setNotice("");
     try {
-      await api("/studio/api/settings", { method: "PATCH", headers: { "content-type": "application/json", "x-csrf-token": csrfToken() }, body: JSON.stringify({ system_prompt: prompt }) });
-      setNotice("Saved. Applies to the next message in every conversation.");
+      await api("/studio/api/settings", { method: "PATCH", headers: { "content-type": "application/json", "x-csrf-token": csrfToken() }, body: JSON.stringify({ channel_id: channelId, system_prompt: prompt }) });
+      setNotice(`Saved for ${channelLabel}. It applies to this channel's conversations only.`);
     } catch { setNotice("Could not save. Your text is preserved; try again."); }
     finally { setSaving(false); }
   };
   return <dialog className="studio-settings" ref={dialog} aria-labelledby="studio-settings-title" onCancel={onClose} onClose={onClose}>
     <header><h2 id="studio-settings-title">System Prompt</h2><button type="button" aria-label="Close System Prompt" onClick={onClose}>Close</button></header>
     <label htmlFor="studio-system-prompt">System Prompt</label>
-    <p>Standing instructions for all conversations in this workspace: voice, editorial preferences, topics and source criteria. These instructions are sent to the configured model. Security rules still apply.</p>
+    <p>Standing instructions for <strong>{channelLabel}</strong>: voice, editorial preferences, topics and source criteria. They never apply to another channel. Security rules still apply.</p>
     <textarea id="studio-system-prompt" autoFocus value={prompt} maxLength={12000} disabled={loading} onChange={event => { setPrompt(event.target.value); setNotice(""); }} placeholder="How should the Studio agent work with you?" />
     <footer><span>{prompt.length.toLocaleString()} / 12,000 · Leave empty to use defaults.</span><button type="button" className="studio-copy" disabled={loading || saving} onClick={() => void save()}>{saving ? "Saving…" : "Save instructions"}</button></footer>
     {notice && <p role="status">{notice}</p>}
@@ -797,7 +818,11 @@ function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Boots
     void api<{ consent: Bootstrap["consent"]; profile: Bootstrap["profile"] }>("/studio/api/consent", {
       method: "POST",
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
-      body: JSON.stringify({ confirm: true, configuration_fingerprint: consent.configuration_fingerprint }),
+      body: JSON.stringify({
+        confirm: true,
+        configuration_fingerprint: consent.configuration_fingerprint,
+        channel_id: bootstrap.selected_channel_id,
+      }),
     })
       .then(() =>
         // Consent changes what the primer shows, so reload the bootstrap
@@ -1171,6 +1196,10 @@ function StudioApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
+  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(() => {
+    const value = Number(new URLSearchParams(window.location.search).get("channel"));
+    return Number.isInteger(value) && value > 0 ? value : null;
+  });
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [error, setError] = useState("");
   const [inlineError, setInlineError] = useState("");
@@ -1183,6 +1212,8 @@ function StudioApp() {
   const [titleText, setTitleText] = useState("");
   const [titleError, setTitleError] = useState("");
   const bootstrapRef = useRef<Bootstrap | null>(null);
+  const selectedChannelRef = useRef<number | null>(selectedChannelId);
+  const refreshSequence = useRef(0);
 
   useEffect(() => {
     bootstrapRef.current = bootstrap;
@@ -1198,18 +1229,30 @@ function StudioApp() {
     }
   }, []);
 
-  const refresh = useCallback(() => {
-    void api<Bootstrap>("/studio/api/bootstrap")
+  const refresh = useCallback((channelOverride?: number | null) => {
+    const channelId = channelOverride === undefined ? selectedChannelRef.current : channelOverride;
+    const requestSequence = ++refreshSequence.current;
+    const url = channelId === null
+      ? "/studio/api/bootstrap"
+      : `/studio/api/bootstrap?channel_id=${encodeURIComponent(channelId)}`;
+    void api<Bootstrap>(url)
       .then((payload) => {
+        if (requestSequence !== refreshSequence.current) return;
         setBootstrap(payload);
         bootstrapRef.current = payload;
+        setSelectedChannelId(payload.selected_channel_id);
+        selectedChannelRef.current = payload.selected_channel_id;
         setInlineError("");
         setSelected((current) =>
           payload.conversations.find((conversation) => conversation.id === current?.id) ??
             payload.current_conversation,
         );
       })
-      .catch((reason: unknown) => showRequestError(reason, "Studio could not load."));
+      .catch((reason: unknown) => {
+        if (requestSequence === refreshSequence.current) {
+          showRequestError(reason, "Studio could not load.");
+        }
+      });
   }, [showRequestError]);
 
   const handleRunFinished = useCallback(() => {
@@ -1247,13 +1290,40 @@ function StudioApp() {
       .catch((reason: unknown) => setTitleError(reason instanceof Error ? reason.message : "Could not rename."));
   };
 
+  const selectChannel = useCallback((channelId: number) => {
+    if (!Number.isInteger(channelId) || channelId <= 0 || channelId === selectedChannelRef.current) return;
+    if (draftOpen && !window.confirm("Switch channels and close the current draft workspace? Unsaved draft edits will be discarded.")) return;
+    selectedChannelRef.current = channelId;
+    setSelectedChannelId(channelId);
+    setSelected(null);
+    setDraftOpen(false);
+    setSettingsOpen(false);
+    setProfileOpen(false);
+    setAgentRunActive(false);
+    setInlineError("");
+    setBootstrap((current) => current ? {
+      ...current,
+      selected_channel_id: channelId,
+      conversations: [],
+      current_conversation: null,
+      draft: null,
+      active_run: null,
+      profile: null,
+      profile_status: "not_built",
+    } : current);
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set("channel", String(channelId));
+    window.history.replaceState({}, "", nextUrl);
+    refresh(channelId);
+  }, [draftOpen, refresh]);
+
   const createConversation = () => {
-    if (!bootstrap?.selected_channel_id) return;
+    if (!selectedChannelId) return;
     setInlineError("");
     void api<{ conversation: Conversation }>("/studio/api/conversations", {
       method: "POST",
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
-      body: JSON.stringify({ channel_id: bootstrap.selected_channel_id }),
+      body: JSON.stringify({ channel_id: selectedChannelId }),
     })
       .then((payload) => {
         setSelected(payload.conversation);
@@ -1346,14 +1416,16 @@ function StudioApp() {
   if (error && !bootstrap) return <div className="studio-error" role="alert"><strong>Studio could not load.</strong><span>{error}</span><button type="button" onClick={() => { setError(""); refresh(); }}>Try again</button></div>;
   if (!bootstrap) return <div className="studio-loading studio-page-loading" role="status">Opening your workspace…</div>;
   if (!bootstrap.setup.ready) return null;
+  const selectedChannel = bootstrap.channels.find((channel) => channel.id === selectedChannelId) ?? null;
+  const selectedChannelLabel = selectedChannel?.title?.trim() || selectedChannel?.identifier || "this channel";
 
   return (
     <div className="studio-app">
-      <ConversationRail conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} onDelete={deleteConversation} deletingId={deletingId} onSettings={() => setSettingsOpen(true)} onProfile={() => setProfileOpen(true)} />
-      {settingsOpen && <StudioSettings onClose={() => setSettingsOpen(false)} />}
-      {profileOpen && bootstrap.selected_channel_id && (
+      <ConversationRail channels={bootstrap.channels} selectedChannelId={selectedChannelId} onChannelSelect={selectChannel} conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} onDelete={deleteConversation} deletingId={deletingId} onSettings={() => setSettingsOpen(true)} onProfile={() => setProfileOpen(true)} />
+      {settingsOpen && selectedChannelId && <StudioSettings channelId={selectedChannelId} channelLabel={selectedChannelLabel} onClose={() => setSettingsOpen(false)} />}
+      {profileOpen && selectedChannelId && (
         <ChannelProfileDialog
-          channelId={bootstrap.selected_channel_id}
+          channelId={selectedChannelId}
           onClose={() => setProfileOpen(false)}
           onSaved={(profile) => {
             setBootstrap((current) => current ? { ...current, profile, profile_status: (profile.topics_text?.trim() || profile.editorial_text?.trim() || profile.style_text?.trim()) ? "ready" : "not_built" } : current);
@@ -1363,7 +1435,7 @@ function StudioApp() {
       <main className="studio-main">
         <header className="studio-topbar">
           <div>
-            <p className="studio-overline">{selected?.channel_identifier ?? "Channel"}</p>
+            <p className="studio-overline">{selectedChannel?.identifier ?? "Channel"}</p>
             {editingTitle ? <form className="studio-title-editor" onSubmit={(event) => { event.preventDefault(); rename(); }}><input autoFocus aria-label="Conversation title" maxLength={160} value={titleText} onChange={(event) => setTitleText(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditingTitle(false); }} /><button type="submit" disabled={!titleText.trim()}>Save</button><button type="button" onClick={() => setEditingTitle(false)}>Cancel</button></form> : <div className="studio-title-row"><h1>{selected?.title ?? "Content Studio"}</h1>{selected && <button type="button" aria-label="Rename conversation" onClick={() => { setTitleText(selected.title); setEditingTitle(true); }}>Rename</button>}</div>}
             {titleError && <p role="alert">{titleError}</p>}
           </div>

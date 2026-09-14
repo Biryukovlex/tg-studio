@@ -52,7 +52,7 @@ async def test_memory_delete_is_scoped_cascades_studio_records_and_blocks_active
     await repository.set_run_status(run["id"], status="succeeded")
     assert await repository.delete_conversation(conversation["id"]) is True
     assert await repository.get_conversation(conversation["id"]) is None
-    assert await repository.list_conversations() == []
+    assert await repository.list_conversations(channel_id=1) == []
     assert await repository.get_draft(draft["id"]) is None
     with pytest.raises(RunNotFound):
         await repository.get_events(run["id"])

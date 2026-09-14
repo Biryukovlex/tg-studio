@@ -178,7 +178,7 @@ class StudioRepositoryProtocol(Protocol):
     async def get_profile_change(self, change_id: uuid.UUID, *, channel_id: int | None = None) -> dict[str, Any] | None: ...
     async def confirm_profile_change(self, change_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def apply_profile_change(self, change_id: uuid.UUID) -> dict[str, Any]: ...
-    async def list_conversations(self) -> list[dict[str, Any]]: ...
+    async def list_conversations(self, *, channel_id: int, include_archived: bool = False) -> list[dict[str, Any]]: ...
     async def get_conversation(self, conversation_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def delete_conversation(self, conversation_id: uuid.UUID) -> bool: ...
     async def create_draft(self, *, conversation_id: uuid.UUID, channel_id: int, payload: dict[str, Any], origin: str = "generated", instruction: str = "") -> dict[str, Any]: ...
@@ -226,14 +226,25 @@ class StudioRepository:
     async def list_channels(self) -> list[dict[str, Any]]:
         return await self.db.get_channels()
 
-    async def get_system_prompt(self) -> str:
-        result = await self.db._execute("SELECT studio_system_prompt FROM workspaces WHERE id=:workspace_id")
+    async def get_system_prompt(self, channel_id: int) -> str:
+        result = await self.db._execute(
+            """SELECT studio_system_prompt FROM channels
+                WHERE workspace_id=:workspace_id AND id=:channel_id AND active=true""",
+            {"channel_id": int(channel_id)},
+        )
         return str(result.scalar_one_or_none() or "")
 
-    async def set_system_prompt(self, value: str) -> str:
+    async def set_system_prompt(self, channel_id: int, value: str) -> str:
         if len(value) > 12000:
             raise ValueError("Studio instructions exceed 12000 characters")
-        await self.db._execute("UPDATE workspaces SET studio_system_prompt=:prompt WHERE id=:workspace_id", {"prompt": value})
+        result = await self.db._execute(
+            """UPDATE channels SET studio_system_prompt=:prompt
+                WHERE workspace_id=:workspace_id AND id=:channel_id AND active=true
+                RETURNING id""",
+            {"channel_id": int(channel_id), "prompt": value},
+        )
+        if result.scalar_one_or_none() is None:
+            raise ConversationNotFound("channel is not part of the active workspace")
         return value
 
     async def channel_context(self, channel_id: int) -> dict[str, Any]:
@@ -676,15 +687,15 @@ class StudioRepository:
                 raise
         return dict(row)
 
-    async def list_conversations(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
+    async def list_conversations(self, *, channel_id: int, include_archived: bool = False) -> list[dict[str, Any]]:
         result = await self.db._execute(
             """SELECT c.*, ch.identifier AS channel_identifier, ch.title AS channel_title
                  FROM studio_conversations c JOIN channels ch
                    ON ch.workspace_id=c.workspace_id AND ch.id=c.channel_id
-                WHERE c.workspace_id=:workspace_id
+                WHERE c.workspace_id=:workspace_id AND c.channel_id=:channel_id
                   AND (:include_archived OR c.archived_at IS NULL)
                 ORDER BY c.updated_at DESC, c.created_at DESC""",
-            {"include_archived": bool(include_archived)},
+            {"channel_id": int(channel_id), "include_archived": bool(include_archived)},
         )
         return [dict(row) for row in result.mappings().all()]
 
@@ -1869,7 +1880,7 @@ class MemoryStudioRepository:
 
     def __init__(self, *, workspace_id: str = "community-test") -> None:
         self.workspace_id = workspace_id
-        self.system_prompt = ""
+        self.system_prompts: dict[int, str] = {}
         now = utcnow()
         self.channels = [{"id": 1, "identifier": "@sample_channel", "title": "Sample channel", "active": True}]
         self.conversations: dict[uuid.UUID, dict[str, Any]] = {}
@@ -1891,13 +1902,17 @@ class MemoryStudioRepository:
     async def list_channels(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self.channels]
 
-    async def get_system_prompt(self) -> str:
-        return self.system_prompt
+    async def get_system_prompt(self, channel_id: int) -> str:
+        if not any(row["id"] == int(channel_id) and row["active"] for row in self.channels):
+            return ""
+        return self.system_prompts.get(int(channel_id), "")
 
-    async def set_system_prompt(self, value: str) -> str:
+    async def set_system_prompt(self, channel_id: int, value: str) -> str:
         if len(value) > 12000:
             raise ValueError("Studio instructions exceed 12000 characters")
-        self.system_prompt = value
+        if not any(row["id"] == int(channel_id) and row["active"] for row in self.channels):
+            raise ConversationNotFound("channel is not part of the active workspace")
+        self.system_prompts[int(channel_id)] = value
         return value
 
     async def channel_context(self, channel_id: int) -> dict[str, Any]:
@@ -2136,7 +2151,11 @@ class MemoryStudioRepository:
         return dict(found) if found else None
 
     async def create_conversation(self, *, channel_id: int, title: str | None = None) -> dict[str, Any]:
-        if not any(row["id"] == channel_id and row["active"] for row in self.channels):
+        channel = next(
+            (row for row in self.channels if row["id"] == channel_id and row["active"]),
+            None,
+        )
+        if channel is None:
             raise ConversationNotFound("channel is not part of the active workspace")
         now = utcnow()
         conversation_id = uuid.uuid4()
@@ -2144,8 +2163,8 @@ class MemoryStudioRepository:
             "id": conversation_id,
             "workspace_id": self.workspace_id,
             "channel_id": channel_id,
-            "channel_identifier": "@sample_channel",
-            "channel_title": "Sample channel",
+            "channel_identifier": channel["identifier"],
+            "channel_title": channel["title"],
             "title": (title or "New conversation").strip()[:160] or "New conversation",
             "summary": "",
             "active_draft_id": None,
@@ -2158,8 +2177,11 @@ class MemoryStudioRepository:
             self.messages[conversation_id] = []
         return dict(row)
 
-    async def list_conversations(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
-        rows = [row for row in self.conversations.values() if include_archived or row["archived_at"] is None]
+    async def list_conversations(self, *, channel_id: int, include_archived: bool = False) -> list[dict[str, Any]]:
+        rows = [
+            row for row in self.conversations.values()
+            if int(row["channel_id"]) == int(channel_id) and (include_archived or row["archived_at"] is None)
+        ]
         return [dict(row) for row in sorted(rows, key=lambda row: row["updated_at"], reverse=True)]
 
     async def get_conversation(self, conversation_id: uuid.UUID) -> dict[str, Any] | None:

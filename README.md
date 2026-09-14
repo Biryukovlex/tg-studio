@@ -79,6 +79,11 @@ on the server; it is never sent to the browser. Agent and research bounds are
 fixed in `app/limits.py`. Studio routes require authentication and
 PostgreSQL readiness.
 
+Use the channel selector in Studio to change desks. Each channel has its own
+profile, System Prompt, conversation history, message memory, research state,
+and drafts. Switching channels never mixes those records. Provider, search,
+collection, and Telegram connection settings remain shared by the workspace.
+
 ---
 
 ## 1. Local setup (macOS/Linux)

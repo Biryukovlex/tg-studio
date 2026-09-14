@@ -7,7 +7,6 @@ managed directly in their own tables. Secrets are never rendered back.
 
 from __future__ import annotations
 
-import inspect
 import logging
 import re
 import secrets
@@ -32,7 +31,6 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 log = logging.getLogger("settings_routes")
 
 ENCRYPTION_KEY_MESSAGE = "Set TELEGRAM_SESSION_ENCRYPTION_KEY to store secrets."
-SYSTEM_PROMPT_MAX_CHARS = 12_000
 
 _FRIENDLY_ERRORS = {
     "poll_minutes": "Poll interval must be between 1 and 1440 minutes.",
@@ -122,20 +120,6 @@ def validate_channel_identifier(value: str) -> str | None:
     return _CHANNEL_MESSAGE
 
 
-async def _system_prompt(request: Request) -> str:
-    repository = getattr(request.app.state, "studio_repository", None)
-    getter = getattr(repository, "get_system_prompt", None)
-    if getter is None:
-        return ""
-    try:
-        value = getter()
-        if inspect.isawaitable(value):
-            value = await value
-    except Exception:  # noqa: BLE001 - the page must render even if Studio storage is unavailable
-        return ""
-    return value if isinstance(value, str) else ""
-
-
 async def _page_context(
     request: Request,
     *,
@@ -197,7 +181,6 @@ async def _page_context(
         "setup_state": setup_state,
         "search_state": search_state,
         "search_base_url": str(getattr(settings, "studio_search_base_url", "") or "").strip(),
-        "system_prompt": await _system_prompt(request),
         "restart_required": bool(getattr(store, "telegram_restart_required", False)),
     }
 
@@ -447,13 +430,12 @@ async def save_studio(
     openrouter_api_key: str = Form(""),
     clear_openrouter_api_key: str = Form(""),
     model: str = Form(""),
-    system_prompt: str = Form(""),
 ):
     if (early := await _begin_write(request)) is not None:
         return early
     store = _store(request)
     errors: dict[str, str] = {}
-    values: dict[str, Any] = {"model": model, "system_prompt": system_prompt}
+    values: dict[str, Any] = {"model": model}
     changes: dict[str, Any] = {}
     reset_keys: tuple[str, ...] = ()
     try:
@@ -473,41 +455,14 @@ async def save_studio(
         return await _render(request, values=values, status_code=409, msg=ENCRYPTION_KEY_MESSAGE)
     except StoreUnavailable:
         return await _render(request)
-    if len(system_prompt) > SYSTEM_PROMPT_MAX_CHARS:
-        errors["system_prompt"] = f"System prompt must be at most {SYSTEM_PROMPT_MAX_CHARS} characters."
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
-    repository = getattr(request.app.state, "studio_repository", None)
-    setter = getattr(repository, "set_system_prompt", None)
-    previous_prompt = await _system_prompt(request)
-    if setter is not None:
-        try:
-            await maybe_await(setter(system_prompt))
-        except Exception:  # noqa: BLE001 - surface as a field error, never a 500
-            return await _render(
-                request,
-                errors={"system_prompt": "Could not save the system prompt."},
-                values=values,
-                status_code=422,
-            )
     try:
         await _apply_fields(store, changes, reset_keys=reset_keys)
     except (EncryptionKeyRequired, StoreUnavailable):
-        if setter is not None:
-            try:
-                await maybe_await(setter(previous_prompt))
-            except Exception:  # noqa: BLE001 - preserve the original storage error
-                pass
         if not store.available:
             return await _render(request)
         return await _render(request, values=values, status_code=409, msg=ENCRYPTION_KEY_MESSAGE)
-    except Exception:
-        if setter is not None:
-            try:
-                await maybe_await(setter(previous_prompt))
-            except Exception:  # noqa: BLE001 - preserve the original storage error
-                pass
-        raise
     _flash(request, "Studio settings saved.", "studio")
     return _redirect("studio")
 

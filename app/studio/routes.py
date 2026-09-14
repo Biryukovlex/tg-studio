@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -259,10 +259,28 @@ def build_router() -> APIRouter:
             raise HTTPException(status_code=503, detail="Studio service is not ready")
         return service
 
+    async def _selected_channel(
+        request: Request, channel_id: int | None
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        channels = [
+            dict(row)
+            for row in await _service(request).repository.list_channels()
+            if bool(row.get("active", True))
+        ]
+        if channel_id is None:
+            return channels, (int(channels[0]["id"]) if channels else None)
+        if channel_id not in {int(row["id"]) for row in channels}:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        return channels, int(channel_id)
+
     @router.get("/api/settings")
-    async def studio_settings(request: Request):
+    async def studio_settings(request: Request, channel_id: int = Query(..., gt=0)):
         require_auth(request)
-        return {"system_prompt": await _service(request).repository.get_system_prompt()}
+        _, selected_channel_id = await _selected_channel(request, channel_id)
+        return {
+            "channel_id": selected_channel_id,
+            "system_prompt": await _service(request).repository.get_system_prompt(selected_channel_id),
+        }
 
     @router.patch("/api/settings")
     async def patch_studio_settings(request: Request):
@@ -272,8 +290,11 @@ def build_router() -> APIRouter:
             payload = StudioSettingsPatch.model_validate(await request.json())
         except (ValidationError, ValueError):
             return _safe_error("invalid_settings", "System prompt must be text, up to 12,000 characters.", status_code=422)
-        value = await _service(request).repository.set_system_prompt(payload.system_prompt)
-        return {"system_prompt": value}
+        _, selected_channel_id = await _selected_channel(request, payload.channel_id)
+        value = await _service(request).repository.set_system_prompt(
+            selected_channel_id, payload.system_prompt
+        )
+        return {"channel_id": selected_channel_id, "system_prompt": value}
 
     def _ensure_ready(request: Request) -> dict[str, Any]:
         return build_setup_state(_settings(request), request.app.state.db)
@@ -327,18 +348,24 @@ def build_router() -> APIRouter:
         return _ensure_ready(request)
 
     @router.get("/api/bootstrap")
-    async def studio_bootstrap(request: Request):
+    async def studio_bootstrap(
+        request: Request, channel_id: int | None = Query(default=None, gt=0)
+    ):
         context = require_auth(request)
         setup = _ensure_ready(request)
         service = _service(request)
-        channels = await service.repository.list_channels()
+        channels, selected_channel_id = await _selected_channel(request, channel_id)
         conversations: list[dict[str, Any]] = []
-        if setup["ready"]:
+        if setup["ready"] and selected_channel_id is not None:
             await service.recover_stale_runs()
-            conversations = [_conversation(row) for row in await service.repository.list_conversations()]
+            conversations = [
+                _conversation(row)
+                for row in await service.repository.list_conversations(
+                    channel_id=selected_channel_id
+                )
+            ]
         selected = conversations[0] if conversations else None
         consent = await _consent(request, context)
-        selected_channel_id = selected["channel_id"] if selected else (channels[0]["id"] if channels else None)
         profile = None
         profile_status = "no_channel" if selected_channel_id is None else "needs_consent"
         if selected_channel_id is not None and setup["ready"]:
@@ -364,7 +391,7 @@ def build_router() -> APIRouter:
             "user": {"id": str(context.user_id) if context.user_id else None},
             "provider": {"name": "openrouter", "model": _settings(request).openrouter_model.strip() or "nex-agi/nex-n2.5-pro:free", "configured": bool(_settings(request).openrouter_api_key or getattr(_settings(request), "studio_test_mode", False))},
             "research": setup.get("research", {}),
-            "channels": [dict(row) for row in channels],
+            "channels": channels,
             "selected_channel_id": selected_channel_id,
             "conversations": conversations,
             "current_conversation": selected,
@@ -401,16 +428,17 @@ def build_router() -> APIRouter:
         if granter is None or context.user_id is None:
             return _safe_error("consent_unavailable", "Provider consent persistence is unavailable.", status_code=503)
         row = await granter(user_id=context.user_id, provider=PROVIDER_NAME, configuration_fingerprint=expected)
-        # Keep profile in response for existing tests; bootstrap now controls profile_status.
+        # Consent is workspace-wide because the provider configuration is
+        # shared, but the profile returned alongside it must stay channel-local.
         profile = None
         try:
-            channels = await _service(request).repository.list_channels()
-            if channels:
-                profile = await _service(request).repository.get_profile(int(channels[0]["id"]))
+            _, selected_channel_id = await _selected_channel(request, payload.channel_id)
+            if selected_channel_id is not None:
+                profile = await _service(request).repository.get_profile(selected_channel_id)
                 if profile is None:
                     # Best-effort: create low-confidence profile without blocking consent.
                     try:
-                        profile = await _service(request).ensure_profile(int(channels[0]["id"]))
+                        profile = await _service(request).ensure_profile(selected_channel_id)
                     except Exception:
                         profile = None
         except Exception:
@@ -571,13 +599,23 @@ def build_router() -> APIRouter:
         return {"draft": result}
 
     @router.get("/api/conversations")
-    async def list_conversations(request: Request):
+    async def list_conversations(
+        request: Request, channel_id: int | None = Query(default=None, gt=0)
+    ):
         require_auth(request)
         setup = _ensure_ready(request)
         if not setup["ready"]:
             return _safe_error("studio_not_ready", "Finish Studio setup before creating a conversation.", status_code=409)
-        rows = await _service(request).repository.list_conversations()
-        return {"conversations": [_conversation(row) for row in rows]}
+        _, selected_channel_id = await _selected_channel(request, channel_id)
+        if selected_channel_id is None:
+            return {"channel_id": None, "conversations": []}
+        rows = await _service(request).repository.list_conversations(
+            channel_id=selected_channel_id
+        )
+        return {
+            "channel_id": selected_channel_id,
+            "conversations": [_conversation(row) for row in rows],
+        }
 
     @router.post("/api/conversations")
     async def create_conversation(request: Request):
@@ -591,11 +629,8 @@ def build_router() -> APIRouter:
         except (ValidationError, ValueError, TypeError):
             return _safe_error("invalid_conversation", "Conversation details are invalid.", status_code=422)
         service = _service(request)
-        channels = await service.repository.list_channels()
-        channel_id = payload.channel_id or (int(channels[0]["id"]) if channels else None)
-        if channel_id is None:
-            return _safe_error("channel_required", "Configure a Telegram channel before opening Studio.", status_code=409)
         try:
+            _, channel_id = await _selected_channel(request, payload.channel_id)
             row = await service.create_conversation(channel_id=channel_id, title=payload.title)
         except ConversationNotFound:
             return _safe_error("channel_not_found", "Selected channel is not part of this workspace.", status_code=404)

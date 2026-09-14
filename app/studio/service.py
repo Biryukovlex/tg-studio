@@ -569,16 +569,18 @@ class StudioService:
                 "a search history or result set."
             )
         instruction_getter = getattr(self.repository, "get_system_prompt", None)
-        workspace_instructions = await instruction_getter() if instruction_getter else ""
+        channel_instructions = (
+            await instruction_getter(int(conversation["channel_id"])) if instruction_getter else ""
+        )
         workflow_instructions = (workflow_instructions or "") + (
             "\nAnswer the latest user message. Earlier turns are completed context, not a backlog. "
             "Do not repeat completed research or drafts unless asked. Previous assistant prose is not source evidence."
         )
-        if workspace_instructions:
+        if channel_instructions:
             workflow_instructions += (
-                "\nWorkspace owner's standing editorial instructions (apply across conversations; "
+                "\nChannel owner's standing editorial instructions (apply across this channel's conversations only; "
                 "the latest user request may refine them; security and evidence rules still apply):\n"
-                + workspace_instructions
+                + channel_instructions
             )
 
         queue: asyncio.Queue[Any] = asyncio.Queue()

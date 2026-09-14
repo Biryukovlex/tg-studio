@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class StudioSettingsPatch(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    channel_id: int = Field(gt=0)
     system_prompt: str = Field(max_length=12000)
 
 
@@ -81,7 +82,7 @@ class StudioError(BaseModel):
 class ConversationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    channel_id: int | None = None
+    channel_id: int
     title: str | None = Field(default=None, max_length=160)
 
 
@@ -138,6 +139,7 @@ class ProviderConsentRequest(BaseModel):
 
     confirm: bool = False
     configuration_fingerprint: str | None = None
+    channel_id: int | None = None
 
 
 class MessageResponse(BaseModel):
