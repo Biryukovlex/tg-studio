@@ -35,7 +35,7 @@ from .semantic_profile import build_semantic_profile
 from .research import ResearchService
 from .prompts import PROMPT_VERSION
 from .model import model_name
-from .observability import emit_observation, normalize_usage, safe_error
+from .observability import emit_observation, normalize_usage, safe_error, safe_status_code
 from .run_ids import resolve_run_id
 from .repository import (
     ActiveRunExists,
@@ -523,6 +523,9 @@ class StudioService:
                 requested_model=model_name(self.settings),
                 prompt_version=PROMPT_VERSION,
                 error_code=code,
+                exception_class=exc.__class__.__name__,
+                status_code=safe_status_code(exc),
+                _level=logging.WARNING,
             )
             self.registry.finish(run_id)
             return JSONResponse({"error": {"code": code, "message": message, "retryable": retryable}}, status_code=409)
@@ -597,6 +600,50 @@ class StudioService:
             strict_workflow=is_short_continuation_request(content),
         )
 
+        async def emit_terminal_notice(current: dict[str, Any] | None) -> bool:
+            """Finish a run that was terminalized by another worker or sweep."""
+
+            if not current or current.get("status") not in {"cancelled", "interrupted"}:
+                return False
+            user_cancelled = current.get("status") == "cancelled"
+            code = "run_cancelled" if user_cancelled else "run_interrupted"
+            message = "Run cancelled by the user." if user_cancelled else "The worker stopped before completion."
+            usage = normalize_usage(
+                usage_holder,
+                latency_ms=int(max(0, (time.monotonic() - run_started_monotonic) * 1000)),
+            )
+            usage["tool_calls"] = max(int(usage.get("tool_calls", 0)), observed_tool_calls)
+            events = await self.repository.get_events(run_id)
+            if not any(event.get("event_type") in {"RUN_CANCELLED", "RUN_INTERRUPTED", "RUN_ERROR"} for event in events):
+                await self.repository.append_event(run_id, event_type="RUN_CANCELLED" if user_cancelled else "RUN_INTERRUPTED", safe_payload={"usage": usage})
+            await self.repository.append_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=message,
+                metadata={"run_id": str(run_id), "prompt_version": PROMPT_VERSION, "run_failed": not user_cancelled},
+            )
+            terminal_message_id = f"studio-terminal-{run_id}"
+            await queue.put(TextMessageStartEvent(message_id=terminal_message_id, role="assistant"))
+            await queue.put(TextMessageContentEvent(message_id=terminal_message_id, delta=message))
+            await queue.put(TextMessageEndEvent(message_id=terminal_message_id))
+            await queue.put(RunErrorEvent(message=message, code=code))
+            emit_observation(
+                log,
+                "run",
+                conversation_id=conversation_id,
+                run_id=run_id,
+                status=current.get("status"),
+                stage=current.get("stage") or current.get("status"),
+                duration_ms=usage.get("latency_ms"),
+                provider="openrouter",
+                requested_model=model_name(self.settings),
+                actual_model=actual_model_holder.get("value"),
+                prompt_version=PROMPT_VERSION,
+                usage=usage,
+                error_code=code,
+            )
+            return True
+
         async def capture_completion(result: Any) -> None:
             """Capture the final reply and bounded usage, excluding retry prose."""
 
@@ -630,6 +677,7 @@ class StudioService:
                         lease_seconds=max(30, int(limits.RUN_LEASE_SECONDS)),
                     )
                     if claimed is None:
+                        await emit_terminal_notice(await self.repository.get_run(run_id))
                         return
                     watchdog = asyncio.create_task(
                         self._watch_run_control(run_id, worker_id, handle),
@@ -674,7 +722,10 @@ class StudioService:
                                 # block decide whether this is a failed run or
                                 # a successfully saved artifact with only its
                                 # optional chat acknowledgement missing.
-                                raise _UpstreamRunError("The provider ended the AG-UI run with an error.")
+                                raise _UpstreamRunError(
+                                    getattr(event, "message", "")
+                                    or "The provider ended the AG-UI run with an error."
+                                )
                             await self.repository.append_event(
                                 run_id,
                                 event_type=event_type,
@@ -757,6 +808,8 @@ class StudioService:
                 )
             except asyncio.CancelledError:
                 current = await self.repository.get_run(run_id)
+                if await emit_terminal_notice(current):
+                    return
                 user_cancelled = bool(current and current.get("cancel_requested")) or handle.cancel_reason == "user"
                 event_type = "RUN_CANCELLED" if user_cancelled else "RUN_INTERRUPTED"
                 status = "cancelled" if user_cancelled else "interrupted"
@@ -796,6 +849,8 @@ class StudioService:
             except Exception as exc:  # noqa: BLE001 - persist only a safe classification
                 code, message, _ = _safe_error(exc)
                 current = await self.repository.get_run(run_id)
+                if await emit_terminal_notice(current):
+                    return
                 if current and current.get("status") in {"queued", "running"}:
                     usage = normalize_usage(
                         usage_holder,
@@ -900,6 +955,9 @@ class StudioService:
                         prompt_version=PROMPT_VERSION,
                         usage=usage,
                         error_code=code,
+                        exception_class=exc.__class__.__name__,
+                        status_code=safe_status_code(exc),
+                        _level=logging.WARNING,
                     )
             finally:
                 if watchdog is not None:

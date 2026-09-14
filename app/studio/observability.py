@@ -9,6 +9,7 @@ never the original provider response or exception string.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import re
 from collections.abc import Mapping
@@ -16,6 +17,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import ValidationError
+from pydantic_ai.exceptions import ModelHTTPError
 
 from .model import StudioConfigurationError
 
@@ -32,6 +34,10 @@ _ERRORS: dict[str, tuple[str, bool]] = {
     "provider_timeout": ("The agent took too long to respond. Try again.", True),
     "provider_rate_limited": ("The model provider is busy. Try again shortly.", True),
     "provider_unavailable": ("The model provider is unavailable. Try again shortly.", True),
+    "provider_auth_failed": ("OpenRouter rejected the API key. Check it in Settings → Studio.", False),
+    "provider_payment_required": ("OpenRouter reports no credits for this key.", False),
+    "provider_model_not_found": ("The configured model is not available on OpenRouter. Choose another model in Settings → Studio.", False),
+    "provider_bad_request": ("OpenRouter rejected the request. Check the model and Studio settings.", True),
     "provider_invalid_response": ("The model provider returned an invalid response. Try again.", True),
     "invalid_agent_output": ("The agent returned an invalid response. Try again.", True),
     "run_cancelled": ("Run cancelled by the user.", False),
@@ -160,7 +166,16 @@ def safe_error(exc: BaseException) -> tuple[str, str, bool]:
         return "provider_timeout", _ERRORS["provider_timeout"][0], True
     name = exc.__class__.__name__.lower()
     text = name + " " + str(exc).lower()
-    if any(token in text for token in ("rate", "quota", "429")):
+    status_code = _status_code(exc, text)
+    if status_code in {401, 403} or any(token in text for token in ("invalid api key", "unauthorized", "authentication failed")):
+        code = "provider_auth_failed"
+    elif status_code == 402 or any(token in text for token in ("insufficient credits", "payment required", "payment")):
+        code = "provider_payment_required"
+    elif status_code == 404 or any(token in text for token in ("no endpoints found", "model not found", "is not a valid model")):
+        code = "provider_model_not_found"
+    elif status_code == 400:
+        code = "provider_bad_request"
+    elif any(token in text for token in ("rate", "quota", "429")):
         code = "provider_rate_limited"
     elif any(token in text for token in ("timeout", "timed out")):
         code = "provider_timeout"
@@ -177,7 +192,38 @@ def safe_error(exc: BaseException) -> tuple[str, str, bool]:
     else:
         code = "agent_failed"
     message, retryable = _ERRORS[code]
+    if code == "provider_model_not_found":
+        configured_model = _model_name(exc, text)
+        if configured_model:
+            message = f"The model '{configured_model}' is not available on OpenRouter. Choose another model in Settings → Studio."
     return code, message, retryable
+
+
+def _status_code(exc: BaseException, text: str | None = None) -> int | None:
+    value = exc.status_code if isinstance(exc, ModelHTTPError) else getattr(exc, "status_code", None)
+    if isinstance(value, int) and 100 <= value <= 599:
+        return value
+    match = re.search(r"status[_ ]?code\s*[:=]\s*(\d{3})", text or str(exc), re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def safe_status_code(exc: BaseException) -> int | None:
+    """Return only an exception's numeric provider status code."""
+
+    return _status_code(exc, str(exc))
+
+
+def _model_name(exc: BaseException, text: str | None = None) -> str | None:
+    value = getattr(exc, "model_name", None)
+    if value is None:
+        match = re.search(r"model[_ ]?name\s*[:=]\s*([^,;\s]+)", text or str(exc), re.IGNORECASE)
+        value = match.group(1) if match else None
+    if value is None:
+        return None
+    candidate = str(value).strip()
+    # Model IDs are configuration, but bound the projection to a conservative
+    # identifier alphabet so an exception cannot smuggle provider text through.
+    return candidate[:160] if re.fullmatch(r"[A-Za-z0-9_.:/-]+", candidate[:160]) else None
 
 
 def safe_error_for_code(code: Any, fallback: str | None = None) -> tuple[str, str, bool]:
@@ -189,11 +235,20 @@ def safe_error_for_code(code: Any, fallback: str | None = None) -> tuple[str, st
     if not normalized:
         return "", "", False
     message, retryable = _ERRORS[normalized]
+    if normalized == "provider_model_not_found" and isinstance(fallback, str):
+        if re.fullmatch(
+            r"The model '[A-Za-z0-9_.:/-]{1,160}' is not available on OpenRouter\. "
+            r"Choose another model in Settings → Studio\.",
+            fallback,
+        ):
+            message = fallback
     return normalized, message, retryable
 
 
 def emit_observation(logger: Any, kind: str, **fields: Any) -> None:
     """Emit a structured record containing only pre-projected metadata."""
+
+    level = fields.pop("_level", logging.INFO)
 
     allowed = {
         "conversation_id",
@@ -216,6 +271,8 @@ def emit_observation(logger: Any, kind: str, **fields: Any) -> None:
         "story_cluster_id",
         "draft_id",
         "error_code",
+        "exception_class",
+        "status_code",
         "usage",
     }
     safe: dict[str, Any] = {}
@@ -224,7 +281,11 @@ def emit_observation(logger: Any, kind: str, **fields: Any) -> None:
             continue
         if key == "usage":
             safe[key] = normalize_usage(value)
-        elif key.endswith("_id") or key in {"provider", "requested_model", "actual_model", "prompt_version", "tool_name", "event_type", "stage", "error_code"}:
+        elif key == "exception_class":
+            safe[key] = str(value)[:120]
+        elif key == "status_code":
+            safe[key] = _bounded_int(value)
+        elif key.endswith("_id") or key in {"provider", "requested_model", "actual_model", "prompt_version", "tool_name", "event_type", "stage", "status", "error_code"}:
             safe[key] = str(value)[:160]
         elif key in {"cache_hit", "degraded"}:
             safe[key] = bool(value)
@@ -232,4 +293,4 @@ def emit_observation(logger: Any, kind: str, **fields: Any) -> None:
             safe[key] = _bounded_int(value)
     # ``extra`` is visible to JSON-capable logging handlers without forcing a
     # particular production logging formatter.  The message itself is generic.
-    logger.info("studio.%s", str(kind)[:40], extra={"studio_observation": safe})
+    logger.log(level, "studio.%s", str(kind)[:40], extra={"studio_observation": safe})

@@ -16,6 +16,7 @@ import {
   api,
   asThreadMessages,
   csrfToken,
+  type ApiError,
   type Bootstrap,
   type Conversation,
   type Draft,
@@ -27,6 +28,7 @@ import {
   type RunUsage,
   StudioApiError,
 } from "./api";
+import { describeRunFailure } from "./runFailure";
 import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
 import { copyRenderedSelection, copyRichText, htmlFromMarkdown, plainFromMarkdown, telegramMarkupFromMarkdown } from "./markdownCopy";
 import ChannelProfileDialog from "./ChannelProfileDialog";
@@ -125,6 +127,37 @@ function toolActivityLabel(toolName: unknown): string {
 function completedToolActivityLabel(toolName: unknown): string {
   const normalized = typeof toolName === "string" ? toolName : "";
   return TOOL_ACTIVITY_RESULT_LABELS[normalized] ?? "Tool result received";
+}
+
+function buildRunHint(conversationId: string, id: string, status: RunSummary["status"]): RunSummary {
+  return {
+    id,
+    conversation_id: conversationId,
+    status,
+    stage: status,
+    provider: "openrouter",
+    requested_model: "",
+    actual_model: null,
+    usage: { requests: 0, tool_calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    error_code: null,
+    error_message: null,
+    created_at: new Date().toISOString(),
+    started_at: status === "running" ? new Date().toISOString() : null,
+    finished_at: null,
+    duration_ms: null,
+  };
+}
+
+async function studioAgentFetch(url: string, init: RequestInit): Promise<Response> {
+  const response = await fetch(url, init);
+  if (response.ok) return response;
+  let payload: ApiError = {};
+  try {
+    payload = (await response.clone().json()) as ApiError;
+  } catch {
+    // Preserve the HTTP status when a proxy returns a non-JSON error page.
+  }
+  throw new StudioApiError(response.status, payload);
 }
 
 function describeAgentActivity(run: RunSummary, events: RunEvent[]): { label: string; detail: string; stage: string } {
@@ -836,11 +869,13 @@ function RunDetailsPanel({ run }: { run: RunSummary | null }) {
 function StudioThread({
   conversation,
   seedRun,
+  consent,
   onRunActivityChange,
   onRunFinished,
 }: {
   conversation: Conversation;
   seedRun: RunSummary | null;
+  consent: Bootstrap["consent"];
   onRunActivityChange: (active: boolean) => void;
   onRunFinished: () => void;
 }) {
@@ -852,13 +887,29 @@ function StudioThread({
         headers: {
           "x-csrf-token": csrfToken(),
         },
+        fetch: studioAgentFetch,
       }),
     [conversation.id],
   );
+  const activeRunId = useRef<string | null>(seedRun?.id ?? null);
+  const markRunFailed = useCallback((error: unknown) => {
+    const runId = activeRunId.current;
+    if (!runId) return;
+    const failure = describeRunFailure(error);
+    setRecoveredRun((current) => ({
+      ...(current ?? buildRunHint(conversation.id, runId, "failed")),
+      status: "failed",
+      stage: "failed",
+      error_code: failure.code,
+      error_message: failure.message,
+      finished_at: new Date().toISOString(),
+    }));
+    onRunFinished();
+  }, [conversation.id, onRunFinished]);
   const runtime = useAgUiRuntime({
     agent,
     showThinking: false,
-    onError: (error) => console.error("Studio run failed", error),
+    onError: markRunFailed,
   });
   const [messages, setMessages] = useState<PersistedMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -893,7 +944,10 @@ function StudioThread({
     let alive = true;
     let timer: number | undefined;
     let cursor = 0;
-    setRecoveredRun(seedRun);
+    if (seedRun) {
+      activeRunId.current = seedRun.id;
+      setRecoveredRun(seedRun);
+    }
 
     const restoreMessages = () => api<{ messages: PersistedMessage[] }>(`/studio/api/conversations/${conversation.id}/messages`)
       .then((payload) => {
@@ -940,40 +994,22 @@ function StudioThread({
     };
 
     setRecoveredEvents([]);
-    const runHint = (id: string, status: RunSummary["status"]): RunSummary => ({
-      id,
-      conversation_id: conversation.id,
-      status,
-      stage: status,
-      provider: "openrouter",
-      requested_model: "",
-      actual_model: null,
-      usage: { requests: 0, tool_calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-      error_code: null,
-      error_message: null,
-      created_at: new Date().toISOString(),
-      started_at: status === "running" ? new Date().toISOString() : null,
-      finished_at: null,
-      duration_ms: null,
-    });
-
     const subscription = agent.subscribe({
       onRunInitialized: ({ input }) => {
         if (!input.runId) return;
+        activeRunId.current = input.runId;
         setRecoveredEvents([]);
-        setRecoveredRun(runHint(input.runId, "queued"));
+        setRecoveredRun(buildRunHint(conversation.id, input.runId, "queued"));
       },
       onRunStartedEvent: ({ event, input }) => {
         const canonicalRunId = event.runId || input.runId;
         if (!canonicalRunId) return;
-        const hint = runHint(canonicalRunId, "running");
+        activeRunId.current = canonicalRunId;
+        const hint = buildRunHint(conversation.id, canonicalRunId, "running");
         setRecoveredRun(hint);
         poll(hint);
       },
-      onRunFailed: () => {
-        // Keep the run identity so its durable error remains inspectable.
-        onRunFinished();
-      },
+      onRunFailed: ({ error }) => markRunFailed(error),
     });
     const discover = seedRun
       ? Promise.resolve({ run: seedRun })
@@ -989,13 +1025,19 @@ function StudioThread({
       subscription.unsubscribe();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [agent, conversation.id, onRunFinished, runtime, seedRun?.id]);
+  }, [agent, conversation.id, markRunFailed, onRunFinished, runtime, seedRun?.id]);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <div className="studio-thread-wrap">
         {loading && <div className="studio-loading" role="status">Restoring this conversation…</div>}
         <RunDetailsPanel run={recoveredRun} />
+        {recoveredRun?.status === "failed" && (
+          <div className="studio-run-error" role="alert">
+            <strong>{recoveredRun.error_message ?? "The agent could not complete this run."}</strong>
+            <span>Try again with the same request when you’re ready.</span>
+          </div>
+        )}
         <ThreadPrimitive.Root className="studio-thread">
           <ThreadPrimitive.Viewport className="studio-viewport">
             {!loading && (
@@ -1021,7 +1063,12 @@ function StudioThread({
                 placeholder="Tell the agent what you want to explore…"
                 autoFocus
               />
-              <ComposerPrimitive.Send className="studio-send" aria-label="Send message">
+              <ComposerPrimitive.Send
+                className="studio-send"
+                aria-label="Send message"
+                disabled={consent.required && !consent.granted}
+                title={consent.required && !consent.granted ? "Allow OpenRouter above to start" : undefined}
+              >
                 <span aria-hidden="true">↗</span>
               </ComposerPrimitive.Send>
             </ComposerPrimitive.Root>
@@ -1157,7 +1204,7 @@ function StudioApp() {
           <div className="studio-topbar-meta"><span className="studio-status-dot" aria-hidden="true" /> Agent context connected</div>
         </header>
         <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
-        {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
+        {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} consent={bootstrap.consent} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
       </main>
       <DraftPanel conversationId={selected?.id ?? null} seedDraft={bootstrap.draft} open={draftOpen} onClose={() => setDraftOpen(false)} watchForAgentChanges={agentRunActive} refreshToken={draftRefreshToken} />
     </div>

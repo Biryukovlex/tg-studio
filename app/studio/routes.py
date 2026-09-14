@@ -107,7 +107,7 @@ def _message(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run(row: dict[str, Any]) -> dict[str, Any]:
-    error_code, error_message, _ = safe_error_for_code(row.get("error_code"))
+    error_code, error_message, _ = safe_error_for_code(row.get("error_code"), row.get("error_message"))
     return {
         "id": str(row["id"]),
         "conversation_id": str(row["conversation_id"]),
@@ -853,7 +853,7 @@ def build_router() -> APIRouter:
         public_run = _run(run)
         error = None
         if public_run["error_code"]:
-            code, message, retryable = safe_error_for_code(public_run["error_code"])
+            code, message, retryable = safe_error_for_code(public_run["error_code"], public_run["error_message"])
             error = {"code": code, "message": message, "retryable": retryable}
         return {
             "run": public_run,
