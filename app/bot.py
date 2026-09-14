@@ -20,6 +20,7 @@ from datetime import datetime
 from .collector import Collector
 from .config import Settings
 from .async_compat import maybe_await
+from .web.links import normalize_channel_identifier, telegram_message_link
 
 log = logging.getLogger("commands")
 
@@ -33,13 +34,12 @@ HELP = (
 
 
 def _post_link(row) -> str:
-    identifier = (row["identifier"] or "").lstrip("@")
-    chat_id = row["chat_id"] or 0
-    if identifier and not identifier.isdigit() and not identifier.startswith("http"):
-        return f"https://t.me/{identifier}/{row['message_id']}"
-    if chat_id:
-        return f"https://t.me/c/{chat_id}/{row['message_id']}"
-    return "(no link)"
+    return telegram_message_link(
+        identifier=row["identifier"],
+        chat_id=row["chat_id"],
+        message_id=row["message_id"],
+        fallback="(no link)",
+    )
 
 
 def _fmt_row(row, with_channel: bool = False) -> str:
@@ -78,9 +78,10 @@ class CommandHandlers:
         return bool(event.out and event.chat_id == self._me_id)
 
     async def _find_channel_id(self, arg: str):
-        ident = arg.strip().lstrip("@").lower()
+        ident = normalize_channel_identifier(arg).lstrip("@").lower()
         for ch in await maybe_await(self.db.get_channels()):
-            if ch["identifier"].lstrip("@").lower() == ident:
+            stored = normalize_channel_identifier(ch["identifier"]).lstrip("@").lower()
+            if stored == ident:
                 return ch["id"]
         return None
 

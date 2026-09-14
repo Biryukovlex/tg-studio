@@ -337,7 +337,7 @@ class Database:
     }
 
     def latest_stats(
-        self, channel_id: int | None = None, limit: int = 500, order: str = "date"
+        self, channel_id: int | None = None, limit: int = 500, order: str = "date", offset: int = 0
     ) -> list[sqlite3.Row]:
         sql = _LATEST_CTE + f"""
         SELECT p.id, p.message_id, p.posted_at, p.text, p.channel_id,
@@ -356,10 +356,13 @@ class Database:
         WHERE (? IS NULL OR p.channel_id = ?)
           AND (? IS NOT NULL OR c.active=1)
         ORDER BY {self._ORDER_SQL.get(order, 'p.posted_at DESC')}
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """
         with self.conn() as c:
-            return c.execute(sql, (channel_id, channel_id, channel_id, limit)).fetchall()
+            return c.execute(
+                sql,
+                (channel_id, channel_id, channel_id, limit, max(0, int(offset))),
+            ).fetchall()
 
     def kpis(self, channel_id: int | None = None) -> dict[str, Any]:
         sql = _LATEST_CTE + """

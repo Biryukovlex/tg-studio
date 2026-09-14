@@ -24,6 +24,7 @@ from .config import Settings
 from .db import Database, utcnow
 from .async_compat import maybe_await
 from .telegram_formatting import serialize_entities
+from .web.links import normalize_channel_identifier
 
 log = logging.getLogger("collector")
 
@@ -98,7 +99,9 @@ class Collector:
         """Resolve configured channels into the DB. Returns identifiers that failed."""
         failed: list[str] = []
         # Union of env channel_list and DB rows with chat_id IS NULL (added via page)
-        idents = list(self.settings.channel_list)
+        # Canonicalize environment-seeded entries just like the Settings page:
+        # Telethon receives @usernames while numeric channel IDs stay intact.
+        idents = [normalize_channel_identifier(value) for value in self.settings.channel_list]
         # Also include DB rows with chat_id IS NULL (not yet resolved)
         try:
             # Fetch all channels and filter those with chat_id is None and not already in idents
@@ -113,15 +116,16 @@ class Collector:
                         {},
                     )
                     for row in result.mappings().all():
-                        ident = row["identifier"]
+                        ident = normalize_channel_identifier(row["identifier"])
                         if ident not in idents:
                             idents.append(ident)
                 except Exception:
                     pass
             else:
                 for ch in channels:
-                    if ch.get("chat_id") is None and ch.get("identifier") not in idents:
-                        idents.append(ch["identifier"])
+                    ident = normalize_channel_identifier(ch.get("identifier"))
+                    if ch.get("chat_id") is None and ident not in idents:
+                        idents.append(ident)
         except Exception:
             pass
         for ident in idents:

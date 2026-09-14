@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from . import limits
 from .db_session import DatabaseSessionManager, normalize_database_url
 from .telegram_formatting import normalize_entities
+from .web.links import normalize_channel_identifier
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -296,7 +297,7 @@ class PostgresDatabase:
 
     async def add_channel(self, identifier: str) -> int:
         # Normalize identifier: strip, ensure non-empty, basic validation
-        ident = identifier.strip()
+        ident = normalize_channel_identifier(identifier)
         if not ident:
             raise ValueError("Channel identifier must not be empty")
         # Basic validation matching T23 spec: @name, t.me/name, or -100...
@@ -572,7 +573,13 @@ class PostgresDatabase:
     )
     """
 
-    async def latest_stats(self, channel_id: int | None = None, limit: int = 500, order: str = "date") -> list[dict[str, Any]]:
+    async def latest_stats(
+        self,
+        channel_id: int | None = None,
+        limit: int = 500,
+        order: str = "date",
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         sql = self._LATEST_CTE + f"""
         SELECT p.id, p.message_id, p.posted_at, p.text, p.channel_id,
                c.identifier, c.title AS channel_title, c.chat_id,
@@ -588,8 +595,15 @@ class PostgresDatabase:
          WHERE p.workspace_id=:workspace_id
            AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
            AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
-         ORDER BY {self._ORDER_SQL.get(order, 'p.posted_at DESC')} LIMIT :limit"""
-        result = await self._execute(sql, {"channel_id": channel_id, "limit": max(1, min(int(limit), 100000))})
+         ORDER BY {self._ORDER_SQL.get(order, 'p.posted_at DESC')} LIMIT :limit OFFSET :offset"""
+        result = await self._execute(
+            sql,
+            {
+                "channel_id": channel_id,
+                "limit": max(1, min(int(limit), 100000)),
+                "offset": max(0, int(offset)),
+            },
+        )
         return [dict(row) for row in result.mappings().all()]
 
     async def kpis(self, channel_id: int | None = None) -> dict[str, Any]:

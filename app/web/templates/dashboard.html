@@ -17,9 +17,9 @@
       </span>
     </label>
     <label>
-      <span>Window</span>
+      <span>Chart window</span>
       <span class="select-shell">
-        <select name="days" aria-label="History window">
+        <select name="days" aria-label="Chart window">
           {% for value, label in [('7', 'Last 7 days'), ('14', 'Last 14 days'), ('30', 'Last 30 days'), ('90', 'Last 90 days'), ('all', 'All history')] %}
           <option value="{{ value }}" {% if days == value %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
@@ -27,6 +27,7 @@
       </span>
     </label>
     <input type="hidden" name="order" value="{{ order }}">
+    <input type="hidden" name="page" value="1">
   </form>
   <p class="update-meta">
     Last update: <strong>{{ k.last_poll|dt or 'Never' }} UTC</strong>
@@ -104,10 +105,10 @@
           <th>Date (UTC)</th>
           {% if not current_channel %}<th>Channel</th>{% endif %}
           <th>Post</th>
-          <th><a class="sort-link{% if order == 'views' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=views&days={{ days }}"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>Views / 24h</a></th>
-          <th><a class="sort-link{% if order == 'reactions' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=reactions&days={{ days }}"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i>Reactions</a></th>
-          <th><a class="sort-link{% if order == 'comments' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=comments&days={{ days }}"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i>Comments</a></th>
-          <th><a class="sort-link{% if order == 'shares' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=shares&days={{ days }}"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i>Shares</a></th>
+          <th><a class="sort-link{% if order == 'views' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=views&days={{ days }}&page=1"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>Views / 24h</a></th>
+          <th><a class="sort-link{% if order == 'reactions' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=reactions&days={{ days }}&page=1"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i>Reactions</a></th>
+          <th><a class="sort-link{% if order == 'comments' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=comments&days={{ days }}&page=1"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i>Comments</a></th>
+          <th><a class="sort-link{% if order == 'shares' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=shares&days={{ days }}&page=1"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i>Shares</a></th>
           <th class="actions-col">Details</th>
         </tr>
       </thead>
@@ -132,6 +133,17 @@
       </tbody>
     </table>
   </div>
+  {% set page_query = 'order=' ~ order ~ '&days=' ~ days %}
+  {% if current_channel %}{% set page_query = 'channel=' ~ current_channel ~ '&' ~ page_query %}{% endif %}
+  {% if page > 1 or has_next %}
+  <nav class="log-pagination posts-pagination" aria-label="Post pages">
+    {% if page > 1 %}<a class="btn ghost small" href="?{{ page_query }}&page={{ page - 1 }}">← Newer</a>{% endif %}
+    <span>Showing {{ first_row }}–{{ last_row }} of {{ total_rows }}{% if has_next %} ·{% endif %}</span>
+    {% if has_next %}<a class="btn ghost small" href="?{{ page_query }}&page={{ page + 1 }}">Older →</a>{% endif %}
+  </nav>
+  {% elif total_rows %}
+  <p class="log-pagination posts-pagination" aria-live="polite">Showing {{ first_row }}–{{ last_row }} of {{ total_rows }}</p>
+  {% endif %}
 </section>
 
 {% endblock %}

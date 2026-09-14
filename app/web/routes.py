@@ -6,7 +6,6 @@ so it works both locally and behind a reverse proxy on Hetzner.
 
 from __future__ import annotations
 
-import asyncio
 import csv
 import functools
 import hashlib
@@ -38,6 +37,7 @@ from ..studio.routes import build_router as build_studio_router
 from ..studio.repository import MemoryStudioRepository, RunNotFound, StudioRepository
 from ..studio.service import StudioService
 from .settings_routes import router as settings_router
+from .links import telegram_message_link
 
 log = logging.getLogger("web")
 
@@ -104,6 +104,17 @@ def _sanitize_csv_cell(value: object) -> object:
     return value
 
 
+def _sanitize_channel_csv_cell(value: object) -> object:
+    """Protect a channel cell while keeping normal ``@name`` identifiers readable."""
+
+    text = str(value or "")
+    # A valid username is not a spreadsheet formula; preserve its conventional
+    # leading @ so exports remain easy to paste back into Settings.
+    if text.startswith("@") and text[1:] and all(ch.isalnum() or ch == "_" for ch in text[1:]):
+        return text
+    return _sanitize_csv_cell(value)
+
+
 def reset_login_rate_limiter() -> None:
     _LOGIN_ATTEMPTS.clear()
 
@@ -165,6 +176,15 @@ def _history_window(value: str | int | None) -> tuple[int | None, str]:
     return parsed, str(parsed)
 
 
+def _page_number(value: str | int | None) -> int:
+    """Parse a dashboard page defensively; malformed values return page one."""
+
+    try:
+        return max(1, int(value or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _num(v) -> str:
     try:
         return f"{int(v or 0):,}"
@@ -177,28 +197,23 @@ def _dt(v) -> str:
 
 
 def _post_link(row) -> str:
-    """Public t.me link when we can build one, else '#'."""
-    identifier = (row["identifier"] or "").lstrip("@")
-    chat_id = row["chat_id"] or 0
-    if identifier and not identifier.isdigit() and not identifier.startswith("http"):
-        return f"https://t.me/{identifier}/{row['message_id']}"
-    if chat_id:
-        return f"https://t.me/c/{chat_id}/{row['message_id']}"
-    return "#"
+    """Public Telegram link when we can build one, else ``#``."""
+
+    row = row if hasattr(row, "get") else dict(row)
+    return telegram_message_link(
+        identifier=row.get("identifier"),
+        chat_id=row.get("chat_id"),
+        message_id=row.get("message_id"),
+    )
 
 
 def _comment_link(row) -> str:
-    username = (row["discussion_username"] or "").lstrip("@")
-    message_id = row["telegram_message_id"]
-    if username:
-        return f"https://t.me/{username}/{message_id}"
-    chat_id = int(row["discussion_chat_id"] or 0)
-    if chat_id:
-        internal = str(abs(chat_id))
-        if internal.startswith("100"):
-            internal = internal[3:]
-        return f"https://t.me/c/{internal}/{message_id}"
-    return "#"
+    row = row if hasattr(row, "get") else dict(row)
+    return telegram_message_link(
+        identifier=row.get("discussion_username"),
+        chat_id=row.get("discussion_chat_id"),
+        message_id=row.get("telegram_message_id"),
+    )
 
 
 def _load_or_create_secret(settings: Settings) -> str:
@@ -394,18 +409,39 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
         channel: str = "",
         order: str = "date",
         days: str = "14",
+        page: str = "1",
         msg: str = "",
     ):
         require_auth(request)
         channel_id = _optional_positive_int(channel)
         window_days, window_value = _history_window(days)
+        current_page = _page_number(page)
+        page_size = 100
+        offset = (current_page - 1) * page_size
         channels = await maybe_await(db.get_channels())
         k = await maybe_await(db.kpis(channel_id))
         ts = await maybe_await(db.timeseries_totals(days=window_days, channel_id=channel_id))
-        rows = await maybe_await(db.latest_stats(
-            channel_id=channel_id, order=order if order in _ORDER_KEYS else "date"
-        ))
+        stats_order = order if order in _ORDER_KEYS else "date"
+        reader = getattr(db, "latest_stats")
+        try:
+            rows = await maybe_await(
+                reader(channel_id=channel_id, order=stats_order, limit=page_size, offset=offset)
+            )
+        except TypeError as exc:
+            # A short-lived compatibility facade used by older local plugins
+            # may not expose ``offset`` yet. Fetch a bounded page and slice it
+            # rather than making the dashboard fail during an upgrade.
+            if "offset" not in str(exc).lower():
+                raise
+            legacy_rows = await maybe_await(
+                reader(channel_id=channel_id, order=stats_order, limit=100_000)
+            )
+            rows = legacy_rows[offset : offset + page_size]
         rows = [dict(r) | {"link": _post_link(r)} for r in rows]
+        total_rows = max(0, int(k.get("posts", 0) or 0))
+        first_row = offset + 1 if rows else 0
+        last_row = offset + len(rows)
+        has_next = last_row < total_rows
         chart = {
             "labels": ts["days"],
             "views": ts["views"],
@@ -422,6 +458,12 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
             "msg": msg,
             "k": k,
             "rows": rows,
+            "page": current_page,
+            "page_size": page_size,
+            "total_rows": total_rows,
+            "first_row": first_row,
+            "last_row": last_row,
+            "has_next": has_next,
             "chart": chart,
         })
 
@@ -467,7 +509,15 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
             # configured.  Do not enqueue a background task that cannot run.
             request.session["flash_msg"] = "Configure Telegram before starting a refresh."
             return RedirectResponse("/settings#telegram", status_code=303)
-        asyncio.create_task(collector.poll_all(reason="web"))
+        scheduler = getattr(collector, "schedule_poll", None)
+        if scheduler is not None:
+            scheduler(reason="web")
+        else:
+            # Keep compatibility with a collector supplied by an older plugin;
+            # production Collector.schedule_poll provides supervised logging.
+            import asyncio
+
+            asyncio.create_task(collector.poll_all(reason="web"))
         url = "/?msg=Refresh+started+-+numbers+will+update+shortly"
         channel_id = _optional_positive_int(channel)
         if channel_id:
@@ -486,7 +536,7 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
         ])
         for r in rows:
             writer.writerow([
-                _sanitize_csv_cell(r["id"]), _sanitize_csv_cell(r["message_id"]), r["identifier"], _sanitize_csv_cell(r["posted_at"]),
+                _sanitize_csv_cell(r["id"]), _sanitize_csv_cell(r["message_id"]), _sanitize_channel_csv_cell(r["identifier"]), _sanitize_csv_cell(r["posted_at"]),
                 _sanitize_csv_cell((r["text"] or "").replace("\n", " ")),
                 _sanitize_csv_cell(r["views"]), _sanitize_csv_cell(r["reactions"]), _sanitize_csv_cell(r["comments"]), _sanitize_csv_cell(r["shares"]), _sanitize_csv_cell(r["updated_at"]),
             ])
@@ -511,7 +561,7 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
         for row in rows:
             writer.writerow([
                 _sanitize_csv_cell(row["id"]), _sanitize_csv_cell(row["post_id"]), _sanitize_csv_cell(row["post_message_id"]),
-                row["channel_identifier"], _sanitize_csv_cell(row["telegram_message_id"]),
+                _sanitize_channel_csv_cell(row["channel_identifier"]), _sanitize_csv_cell(row["telegram_message_id"]),
                 _sanitize_csv_cell(row["discussion_chat_id"]), _sanitize_csv_cell(row["posted_at"]), _sanitize_csv_cell(row["edited_at"]),
                 _sanitize_csv_cell(row["sender_id"]), _sanitize_csv_cell(row["sender_name"]), _sanitize_csv_cell(row["sender_username"]),
                 _sanitize_csv_cell((row["text"] or "").replace("\n", " ")), _sanitize_csv_cell(row["media_type"]),

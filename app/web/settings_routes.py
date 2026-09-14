@@ -25,6 +25,7 @@ from ..studio.search_health import configured_search_state
 from ..studio.setup import build_setup_state
 from ..workspace_settings import SETTINGS, EncryptionKeyRequired, StoreUnavailable, WorkspaceSettings, format_timestamp
 from .dependencies import require_auth
+from .links import normalize_channel_identifier
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -275,7 +276,7 @@ async def add_channel(request: Request, identifier: str = Form("")):
     error = validate_channel_identifier(identifier)
     if error is None:
         try:
-            await request.app.state.db.add_channel(identifier.strip())
+            await request.app.state.db.add_channel(normalize_channel_identifier(identifier))
         except ValueError as exc:
             error = str(exc)
     if error is not None:
