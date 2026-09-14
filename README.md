@@ -19,7 +19,8 @@ TG Studio is a self-hosted release candidate with a PostgreSQL runtime. It
 combines:
 
 - whole-history Telegram post and attributed-comment collection;
-- engagement analytics and source-post links;
+- engagement analytics by post publication date, a paginated all-post archive,
+  and source-post links;
 - a channel profile grounded in successful posts;
 - an agent-centered writing Studio with durable conversations;
 - optional private SearXNG research and SSRF-safe source reading;

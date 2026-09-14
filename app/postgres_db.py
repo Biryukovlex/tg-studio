@@ -552,11 +552,11 @@ class PostgresDatabase:
     # ---------- dashboard/command queries ----------
 
     _ORDER_SQL = {
-        "date": "p.posted_at DESC",
-        "views": "l.views DESC",
-        "reactions": "l.reactions DESC",
-        "comments": "l.comments DESC",
-        "shares": "l.shares DESC",
+        "date": "p.posted_at DESC, p.id DESC",
+        "views": "l.views DESC NULLS LAST, p.posted_at DESC, p.id DESC",
+        "reactions": "l.reactions DESC NULLS LAST, p.posted_at DESC, p.id DESC",
+        "comments": "l.comments DESC NULLS LAST, p.posted_at DESC, p.id DESC",
+        "shares": "l.shares DESC NULLS LAST, p.posted_at DESC, p.id DESC",
     }
 
     _LATEST_CTE = """
@@ -652,76 +652,70 @@ class PostgresDatabase:
         return [dict(row) for row in result.mappings().all()]
 
     async def timeseries_totals(self, days: int | None, channel_id: int | None = None) -> dict[str, list]:
+        """Current cumulative metrics attributed to each post's publication date.
+
+        Snapshot timestamps describe collection activity, so they must never
+        drive the Overview x-axis.  The latest snapshot supplies each post's
+        current values and ``posts.posted_at`` decides when those values enter
+        the cumulative series.
+        """
         workspace_id = self._workspace()
         now = datetime.now(timezone.utc)
         async with self.sessions.session() as session:
-            if days is None:
-                start_row = (
-                    await session.execute(
-                        text(
-                            """SELECT MIN(p.posted_at) FROM posts p
-                               JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
-                               WHERE p.workspace_id=:workspace_id
-                                 AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
-                                 AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)"""
-                        ),
-                        {"workspace_id": workspace_id, "channel_id": channel_id},
-                    )
-                ).first()
-                start_value = _aware(start_row[0] if start_row else None)
-                start_date = (start_value or now).replace(hour=0, minute=0, second=0, microsecond=0)
-            else:
-                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=max(1, days) - 1)
             rows = (
                 await session.execute(
                     text(
-                        """SELECT s.taken_at, s.post_id, s.views, s.comments, s.reactions, s.shares
-                           FROM snapshots s JOIN posts p ON p.id=s.post_id AND p.workspace_id=s.workspace_id
-                           JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
-                          WHERE s.workspace_id=:workspace_id
+                        """WITH latest AS (
+                               SELECT DISTINCT ON (workspace_id, post_id)
+                                      workspace_id, post_id, views, comments, reactions, shares
+                                 FROM snapshots
+                                WHERE workspace_id=:workspace_id
+                                ORDER BY workspace_id, post_id, id DESC
+                           )
+                           SELECT p.posted_at::date AS day,
+                                  COUNT(*) AS posts,
+                                  COALESCE(SUM(latest.views), 0) AS views,
+                                  COALESCE(SUM(latest.comments), 0) AS comments,
+                                  COALESCE(SUM(latest.reactions), 0) AS reactions,
+                                  COALESCE(SUM(latest.shares), 0) AS shares
+                             FROM posts p
+                             JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
+                             LEFT JOIN latest ON latest.workspace_id=p.workspace_id AND latest.post_id=p.id
+                            WHERE p.workspace_id=:workspace_id
                             AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
                             AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
-                          ORDER BY s.taken_at ASC, s.id ASC"""
+                            GROUP BY p.posted_at::date
+                            ORDER BY p.posted_at::date"""
                     ),
                     {"workspace_id": workspace_id, "channel_id": channel_id},
                 )
             ).mappings().all()
-            new_rows = (
-                await session.execute(
-                    text(
-                        """SELECT p.posted_at::date AS day, COUNT(*) AS n FROM posts p
-                           JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
-                           WHERE p.workspace_id=:workspace_id
-                             AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
-                             AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
-                             AND p.posted_at >= :since GROUP BY p.posted_at::date"""
-                    ),
-                    {"workspace_id": workspace_id, "channel_id": channel_id, "since": start_date},
-                )
-            ).mappings().all()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        first_day = min((row["day"] for row in rows), default=now.date())
+        if days is None:
+            start_date = datetime.combine(first_day, datetime.min.time(), tzinfo=timezone.utc)
+        else:
+            start_date = today - timedelta(days=max(1, days) - 1)
         span = max(1, (now.date() - start_date.date()).days + 1)
         days_list = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(span)]
-        state: dict[int, tuple[int, int, int, int]] = {}
-        by_day: dict[str, list[dict[str, Any]]] = {}
+        totals = {key: 0 for key in ("views", "comments", "reactions", "shares")}
+        by_day: dict[str, dict[str, Any]] = {}
         for row in rows:
-            taken = _aware(row["taken_at"])
-            day = taken.strftime("%Y-%m-%d") if taken else days_list[0]
-            data = dict(row)
+            day = str(row["day"])
             if day < days_list[0]:
-                state[int(row["post_id"])] = (row["views"], row["comments"], row["reactions"], row["shares"])
+                for key in totals:
+                    totals[key] += int(row[key] or 0)
             else:
-                by_day.setdefault(day, []).append(data)
-        posts_per_day = {str(row["day"]): int(row["n"]) for row in new_rows}
+                by_day[day] = dict(row)
         output = {key: [] for key in ("views", "comments", "reactions", "shares", "posts_per_day")}
         for day in days_list:
-            for row in by_day.get(day, []):
-                state[int(row["post_id"])] = (row["views"], row["comments"], row["reactions"], row["shares"])
-            values = list(state.values()) or [(0, 0, 0, 0)]
-            output["views"].append(sum(v[0] for v in values))
-            output["comments"].append(sum(v[1] for v in values))
-            output["reactions"].append(sum(v[2] for v in values))
-            output["shares"].append(sum(v[3] for v in values))
-            output["posts_per_day"].append(posts_per_day.get(day, 0))
+            row = by_day.get(day)
+            if row:
+                for key in totals:
+                    totals[key] += int(row[key] or 0)
+            for key in totals:
+                output[key].append(totals[key])
+            output["posts_per_day"].append(int(row["posts"] or 0) if row else 0)
         return {"days": days_list, **output}
 
     # ---------- import diagnostics and overlap-safe jobs ----------

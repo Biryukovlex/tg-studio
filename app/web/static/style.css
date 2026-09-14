@@ -879,6 +879,8 @@ input[type="number"]:focus, textarea:focus { border-color: var(--cyan); box-shad
 .agent-log-empty h2 { margin: 0; font-size: 18px; }
 .agent-log-empty p { max-width: 420px; margin: 0; color: var(--muted); font-size: 11px; }
 .log-pagination { display: flex; align-items: center; justify-content: center; gap: 14px; max-width: 1080px; padding: 18px 0; color: var(--muted); font-size: 11px; }
+.posts-pagination { flex-wrap: wrap; max-width: none; padding-inline: 18px; }
+.posts-pagination [aria-current="page"] { cursor: default; }
 
 @media (max-width: 860px) {
   .field { grid-template-columns: 1fr; gap: 8px; }
@@ -903,6 +905,8 @@ input[type="number"]:focus, textarea:focus { border-color: var(--cyan); box-shad
   .agent-log-header { padding-inline: 16px; }
   .agent-log-meta { grid-template-columns: 1fr; padding-inline: 16px; }
   .agent-log-result summary, .agent-log-result pre { padding-inline: 16px; }
+  .posts-pagination { gap: 8px; }
+  .posts-pagination > span:last-child { flex-basis: 100%; text-align: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {

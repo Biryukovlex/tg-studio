@@ -70,7 +70,7 @@
 <section class="panel chart-panel" id="performance" data-reveal>
   <div class="panel-heading">
     <div>
-      <h2>Totals over time <span>(cumulative, UTC)</span></h2>
+      <h2>Performance by post date <span>(current totals, cumulative, UTC)</span></h2>
     </div>
     <div class="chart-periods" role="group" aria-label="Chart aggregation">
       <button class="chart-period active" type="button" data-chart-period="day" aria-pressed="true">Day</button>
@@ -84,7 +84,7 @@
 <section class="panel posts-panel" id="posts" data-reveal>
   <div class="panel-heading posts-heading">
     <div>
-      <h2>Recent posts</h2>
+      <h2>All posts</h2>
     </div>
     <span class="row-count">{{ k.posts|int }} tracked</span>
   </div>
@@ -135,11 +135,24 @@
   </div>
   {% set page_query = 'order=' ~ order ~ '&days=' ~ days %}
   {% if current_channel %}{% set page_query = 'channel=' ~ current_channel ~ '&' ~ page_query %}{% endif %}
-  {% if page > 1 or has_next %}
+  {% if total_pages > 1 %}
   <nav class="log-pagination posts-pagination" aria-label="Post pages">
-    {% if page > 1 %}<a class="btn ghost small" href="?{{ page_query }}&page={{ page - 1 }}">← Newer</a>{% endif %}
-    <span>Showing {{ first_row }}–{{ last_row }} of {{ total_rows }}{% if has_next %} ·{% endif %}</span>
-    {% if has_next %}<a class="btn ghost small" href="?{{ page_query }}&page={{ page + 1 }}">Older →</a>{% endif %}
+    {% if page > 1 %}
+    <a class="btn ghost small" href="?{{ page_query }}&page=1" aria-label="First post page">First</a>
+    <a class="btn ghost small" href="?{{ page_query }}&page={{ page - 1 }}" rel="prev">← Previous</a>
+    {% endif %}
+    {% for page_number in page_numbers %}
+      {% if page_number == page %}
+      <span class="btn small" aria-current="page" aria-label="Post page {{ page_number }}, current page">{{ page_number }}</span>
+      {% else %}
+      <a class="btn ghost small" href="?{{ page_query }}&page={{ page_number }}" aria-label="Post page {{ page_number }}">{{ page_number }}</a>
+      {% endif %}
+    {% endfor %}
+    {% if has_next %}
+    <a class="btn ghost small" href="?{{ page_query }}&page={{ page + 1 }}" rel="next">Next →</a>
+    <a class="btn ghost small" href="?{{ page_query }}&page={{ total_pages }}" aria-label="Last post page">Last</a>
+    {% endif %}
+    <span>Page {{ page }} of {{ total_pages }} · Showing {{ first_row }}–{{ last_row }} of {{ total_rows }}</span>
   </nav>
   {% elif total_rows %}
   <p class="log-pagination posts-pagination" aria-live="polite">Showing {{ first_row }}–{{ last_row }} of {{ total_rows }}</p>

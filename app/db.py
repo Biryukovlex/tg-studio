@@ -329,11 +329,11 @@ class Database:
     # ---------- queries for admin panel / commands ----------
 
     _ORDER_SQL = {
-        "date": "p.posted_at DESC",
-        "views": "l.views DESC",
-        "reactions": "l.reactions DESC",
-        "comments": "l.comments DESC",
-        "shares": "l.shares DESC",
+        "date": "p.posted_at DESC, p.id DESC",
+        "views": "l.views DESC, p.posted_at DESC, p.id DESC",
+        "reactions": "l.reactions DESC, p.posted_at DESC, p.id DESC",
+        "comments": "l.comments DESC, p.posted_at DESC, p.id DESC",
+        "shares": "l.shares DESC, p.posted_at DESC, p.id DESC",
     }
 
     def latest_stats(
@@ -453,65 +453,50 @@ class Database:
     def timeseries_totals(
         self, days: int | None, channel_id: int | None = None
     ) -> dict[str, list]:
-        """Daily buckets over the last `days` days.
+        """Current cumulative metrics attributed to each post's publication date.
 
-        Returns cumulative totals of each metric across all tracked posts as known
-        at the end of each day, plus how many posts were published per day.
+        Snapshot timestamps describe collection activity, so they must never
+        drive the Overview x-axis. The latest snapshot supplies each post's
+        current values and ``posts.posted_at`` decides when those values enter
+        the cumulative series.
         """
         with self.conn() as c:
-            if days is None:
-                first = c.execute(
-                    """SELECT MIN(substr(p.posted_at,1,10)) AS day FROM posts p
-                        JOIN channels c ON c.id=p.channel_id
-                        WHERE (? IS NULL OR p.channel_id=?)
-                          AND (? IS NOT NULL OR c.active=1)""",
-                    (channel_id, channel_id, channel_id),
-                ).fetchone()
-                start_day = (first["day"] if first else None) or utcnow().strftime("%Y-%m-%d")
-                start_date = datetime.strptime(start_day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            else:
-                start_date = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-                start_date -= timedelta(days=max(1, days) - 1)
-            since = fmt_ts(start_date)
-            span = max(1, (utcnow().date() - start_date.date()).days + 1)
-            days_list = [
-                (start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(span)
-            ]
-
             rows = c.execute(
-                """
-                SELECT p.channel_id AS ch, s.taken_at, s.post_id, s.views, s.comments, s.reactions, s.shares
-                FROM snapshots s
-                JOIN posts p ON p.id = s.post_id
-                JOIN channels c ON c.id=p.channel_id
-                WHERE (? IS NULL OR p.channel_id = ?)
-                  AND (? IS NOT NULL OR c.active=1)
-                ORDER BY s.taken_at ASC, s.id ASC
+                _LATEST_CTE + """
+                SELECT substr(p.posted_at,1,10) AS day,
+                       COUNT(*) AS posts,
+                       COALESCE(SUM(l.views), 0) AS views,
+                       COALESCE(SUM(l.comments), 0) AS comments,
+                       COALESCE(SUM(l.reactions), 0) AS reactions,
+                       COALESCE(SUM(l.shares), 0) AS shares
+                  FROM posts p
+                  JOIN channels c ON c.id=p.channel_id
+                  LEFT JOIN latest l ON l.post_id=p.id
+                 WHERE (? IS NULL OR p.channel_id = ?)
+                   AND (? IS NOT NULL OR c.active=1)
+                 GROUP BY day
+                 ORDER BY day
                 """,
                 (channel_id, channel_id, channel_id),
             ).fetchall()
-            new_posts = {
-                r["day"]: r["n"]
-                for r in c.execute(
-                    """SELECT substr(posted_at,1,10) AS day, COUNT(*) AS n FROM posts
-                       JOIN channels c ON c.id=posts.channel_id
-                       WHERE (? IS NULL OR posts.channel_id = ?)
-                         AND (? IS NOT NULL OR c.active=1)
-                         AND posted_at >= ?
-                       GROUP BY day""",
-                    (channel_id, channel_id, channel_id, since),
-                ).fetchall()
-            }
-
-        # replay snapshot history into daily buckets
-        state: dict[int, tuple[int, int, int, int]] = {}
-        by_day: dict[str, list[sqlite3.Row]] = {}
+        now = utcnow()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if days is None:
+            start_day = min((r["day"] for r in rows), default=now.strftime("%Y-%m-%d"))
+            start_date = datetime.strptime(start_day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        else:
+            start_date = today - timedelta(days=max(1, days) - 1)
+        span = max(1, (now.date() - start_date.date()).days + 1)
+        days_list = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(span)]
+        totals = {key: 0 for key in ("views", "comments", "reactions", "shares")}
+        by_day: dict[str, sqlite3.Row] = {}
         for r in rows:
-            day = r["taken_at"][:10]
+            day = r["day"]
             if day < days_list[0]:
-                state[r["post_id"]] = (r["views"], r["comments"], r["reactions"], r["shares"])
+                for key in totals:
+                    totals[key] += int(r[key] or 0)
             else:
-                by_day.setdefault(day, []).append(r)
+                by_day[day] = r
 
         result_views: list[int] = []
         result_comments: list[int] = []
@@ -520,14 +505,15 @@ class Database:
         posts_per_day: list[int] = []
 
         for day in days_list:
-            for r in sorted(by_day.get(day, []), key=lambda x: x["taken_at"]):
-                state[r["post_id"]] = (r["views"], r["comments"], r["reactions"], r["shares"])
-            vals = list(state.values()) or [(0, 0, 0, 0)]
-            result_views.append(sum(v[0] for v in vals))
-            result_comments.append(sum(v[1] for v in vals))
-            result_reactions.append(sum(v[2] for v in vals))
-            result_shares.append(sum(v[3] for v in vals))
-            posts_per_day.append(new_posts.get(day, 0))
+            row = by_day.get(day)
+            if row:
+                for key in totals:
+                    totals[key] += int(row[key] or 0)
+            result_views.append(totals["views"])
+            result_comments.append(totals["comments"])
+            result_reactions.append(totals["reactions"])
+            result_shares.append(totals["shares"])
+            posts_per_day.append(int(row["posts"] or 0) if row else 0)
 
         return {
             "days": days_list,

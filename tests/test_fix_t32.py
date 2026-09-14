@@ -68,7 +68,11 @@ async def test_dashboard_paginates_posts_and_uses_supervised_refresh(tmp_path):
         assert first.status_code == 200
         assert "page post 1" in first.text
         assert "page post 101" not in first.text
+        assert "All posts" in first.text
+        assert "Performance by post date" in first.text
         assert "Showing 1–100 of 250" in first.text
+        assert "Page 1 of 3" in first.text
+        assert 'aria-label="Last post page"' in first.text
         second = await client.get("/?page=2")
         assert second.status_code == 200
         assert "page post 101" in second.text
@@ -79,6 +83,12 @@ async def test_dashboard_paginates_posts_and_uses_supervised_refresh(tmp_path):
         assert "page post 201" in third.text
         assert "page post 101" not in third.text
         assert "Showing 201–250 of 250" in third.text
+        assert "Page 3 of 3" in third.text
+        assert 'aria-label="First post page"' in third.text
+        beyond_last = await client.get("/?page=999")
+        assert beyond_last.status_code == 200
+        assert "Page 3 of 3" in beyond_last.text
+        assert "page post 201" in beyond_last.text
         assert 'aria-label="Chart window"' in first.text
         refresh = await client.post("/refresh", follow_redirects=False)
         assert refresh.status_code == 303
@@ -106,3 +116,28 @@ async def test_csv_channel_cells_are_formula_safe(tmp_path):
         response = await client.get("/export.csv")
     assert response.status_code == 200
     assert "'=HYPERLINK" in response.text
+
+
+def test_overview_chart_uses_post_dates_instead_of_sync_dates(tmp_path):
+    db = Database(tmp_path / "post-dates.sqlite")
+    db.init_db()
+    channel_id = db.upsert_channel("@dated_channel", "Dated channel", 98765)
+    today = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    older_day = today - timedelta(days=3)
+    newer_day = today - timedelta(days=1)
+    older_post = db.upsert_post(channel_id, 1, older_day, "older post")
+    newer_post = db.upsert_post(channel_id, 2, newer_day, "newer post")
+
+    # Both snapshots are collected now. Their sync date must not move either
+    # post's metrics away from its publication date on the chart.
+    db.add_snapshot_if_changed(older_post, views=10, comments=1, reactions=2, shares=3)
+    db.add_snapshot_if_changed(newer_post, views=20, comments=4, reactions=5, shares=6)
+
+    series = db.timeseries_totals(days=None, channel_id=channel_id)
+    older_index = series["days"].index(older_day.strftime("%Y-%m-%d"))
+    newer_index = series["days"].index(newer_day.strftime("%Y-%m-%d"))
+    assert series["views"][older_index] == 10
+    assert series["views"][older_index + 1] == 10
+    assert series["views"][newer_index] == 30
+    assert series["posts_per_day"][older_index] == 1
+    assert series["posts_per_day"][newer_index] == 1

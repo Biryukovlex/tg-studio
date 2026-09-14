@@ -417,9 +417,12 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
         window_days, window_value = _history_window(days)
         current_page = _page_number(page)
         page_size = 100
-        offset = (current_page - 1) * page_size
         channels = await maybe_await(db.get_channels())
         k = await maybe_await(db.kpis(channel_id))
+        total_rows = max(0, int(k.get("posts", 0) or 0))
+        total_pages = max(1, (total_rows + page_size - 1) // page_size)
+        current_page = min(current_page, total_pages)
+        offset = (current_page - 1) * page_size
         ts = await maybe_await(db.timeseries_totals(days=window_days, channel_id=channel_id))
         stats_order = order if order in _ORDER_KEYS else "date"
         reader = getattr(db, "latest_stats")
@@ -438,10 +441,12 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
             )
             rows = legacy_rows[offset : offset + page_size]
         rows = [dict(r) | {"link": _post_link(r)} for r in rows]
-        total_rows = max(0, int(k.get("posts", 0) or 0))
         first_row = offset + 1 if rows else 0
         last_row = offset + len(rows)
         has_next = last_row < total_rows
+        first_page_link = max(1, min(current_page - 2, total_pages - 4))
+        last_page_link = min(total_pages, first_page_link + 4)
+        page_numbers = list(range(first_page_link, last_page_link + 1))
         chart = {
             "labels": ts["days"],
             "views": ts["views"],
@@ -453,7 +458,7 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
         return render(request, "dashboard.html", {
             "channels": channels,
             "current_channel": channel_id,
-            "order": order,
+            "order": stats_order,
             "days": window_value,
             "msg": msg,
             "k": k,
@@ -461,6 +466,8 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
             "page": current_page,
             "page_size": page_size,
             "total_rows": total_rows,
+            "total_pages": total_pages,
+            "page_numbers": page_numbers,
             "first_row": first_row,
             "last_row": last_row,
             "has_next": has_next,
