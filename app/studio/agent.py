@@ -14,7 +14,7 @@ from .. import limits
 from .model import build_model
 from .prompts import SYSTEM_INSTRUCTIONS
 from .analytics import analyze_posts
-from .context import ContextAssembler, ContextPack
+from .context import ContextAssembler, ContextPack, profile_block_from_mapping
 from .profile import (
     ChannelProfile,
     apply_confirmed_topic_change,
@@ -660,27 +660,8 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         )
 
     def _profile_block_from_row(row: dict[str, Any] | None, channel_id: int) -> str:
-        if not row:
-            return ""
-        topics_text = str(row.get("topics_text") or "").strip()
-        editorial_text = str(row.get("editorial_text") or "").strip()
-        style_text = str(row.get("style_text") or "").strip()
-        version = row.get("version", "?")
-        if not topics_text and not editorial_text and not style_text:
-            topics = row.get("topics") or []
-            if topics and isinstance(topics, list):
-                topics_text = "\n".join(str(t.get("name") or "") for t in topics if isinstance(t, dict) and t.get("name"))
-        if not topics_text and not editorial_text and not style_text:
-            return ""
-        parts = [f"CHANNEL PROFILE (written and approved by the channel owner, version {version})"]
-        if topics_text:
-            parts.append("Topics:\n" + "\n".join(f"- {line}" for line in topics_text.splitlines() if line.strip()))
-        if editorial_text:
-            parts.append("Editorial rules:\n" + "\n".join(f"- {line}" for line in editorial_text.splitlines() if line.strip()))
-        if style_text:
-            parts.append("Style rules:\n" + style_text)
-        parts.append("These lines are guidelines, not a template. Choose the form each post needs; do not copy the structure or distinctive wording of past posts. Formatting shown in Markdown (**bold**, *italic*, [links](url)) is to be reproduced in the draft body using the same Markdown.")
-        return "\n\n".join(parts)
+        # Keep the profile tool byte-for-byte aligned with the context pack.
+        return profile_block_from_mapping(row)
 
     @agent.tool(prepare=workflow_tool_visibility)
     async def get_channel_profile(ctx: RunContext[StudioDeps]) -> dict[str, Any]:

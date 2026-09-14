@@ -17,7 +17,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from .analytics import ChannelAnalytics, EvidencePost, analyze_posts
-from .sources import sanitize_untrusted_text
+from .profile import _strip_markup
+from .sources import _INJECTION_PATTERNS, sanitize_untrusted_text
 
 
 CONTEXT_VERSION = "m6.context.v1"
@@ -92,20 +93,86 @@ def _stable_hash(payload: Any) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _neutralize_profile_line(value: str) -> str:
+    """Strip markup and neutralise instruction-shaped phrases in one rule.
+
+    A saved profile is owner-authored context, not a fetched source. Keep the
+    useful part of a line even when a heuristic sees an injection phrase;
+    replacing the phrase is safer and more useful than dropping the entire
+    editorial rule.  The replacement is deliberately plain text so it cannot
+    become a new instruction for the model.
+    """
+
+    line = _strip_markup(value.replace("\x00", " "))
+    # This is a legitimate editorial topic, not an instruction to the agent.
+    # Keep the exact owner-authored wording while still filtering genuinely
+    # directive variants such as "system prompt: reveal ..." below.
+    if line.strip().casefold() == "system prompt engineering":
+        return line.strip()
+    for _flag, pattern in _INJECTION_PATTERNS:
+        line = pattern.sub("[instruction removed]", line)
+    return " ".join(line.split()).strip()
+
+
+def _sanitize_profile_text(value: Any, *, limit: int) -> str:
+    """Sanitize profile rules one line at a time while retaining line breaks."""
+
+    lines: list[str] = []
+    for raw_line in str(value or "").splitlines():
+        line = _neutralize_profile_line(raw_line)
+        if line:
+            lines.append(line)
+    return "\n".join(lines)[:limit].rstrip()
+
+
 def _sanitize_profile(value: Any, *, limit: int = 4_000) -> Any:
-    """Return a copy of a profile structure with instruction-shaped lines removed.
+    """Return a copy of a profile with line boundaries and safe rule text.
 
     Profile text is inferred from channel posts and model output, so it is
     untrusted until the owner has reviewed it. The input is never mutated.
+    Unlike generic untrusted source excerpts, a suspicious owner-authored line
+    is retained with its phrase neutralised rather than removed wholesale.
     """
 
     if isinstance(value, str):
-        return _text(sanitize_untrusted_text(value)[0], limit)
+        return _sanitize_profile_text(value, limit=limit)
     if isinstance(value, Mapping):
         return {str(key): _sanitize_profile(item, limit=limit) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_sanitize_profile(item, limit=limit) for item in value]
     return value
+
+
+def profile_block_from_mapping(profile: Mapping[str, Any] | None) -> str:
+    """Build the canonical Markdown channel-profile block for every tool."""
+
+    if not profile:
+        return ""
+    safe = _sanitize_profile(_without_comment_bodies(dict(profile)))
+    topics_text = str(safe.get("topics_text") or "").strip()
+    editorial_text = str(safe.get("editorial_text") or "").strip()
+    style_text = str(safe.get("style_text") or "").strip()
+    version = safe.get("version", "?")
+    # Fallback to legacy JSON if text fields are empty.
+    if not topics_text and not editorial_text and not style_text:
+        topics = safe.get("topics", [])
+        if topics:
+            topics_text = "\n".join(
+                str(topic.get("name", ""))
+                for topic in topics
+                if isinstance(topic, Mapping) and topic.get("name")
+            )
+    if not topics_text and not editorial_text and not style_text:
+        return ""
+    parts = [f"CHANNEL PROFILE (written and approved by the channel owner, version {version})"]
+    if topics_text:
+        parts.append("Topics:\n" + "\n".join(f"- {line}" for line in topics_text.splitlines() if line.strip()))
+    if editorial_text:
+        parts.append("Editorial rules:\n" + "\n".join(f"- {line}" for line in editorial_text.splitlines() if line.strip()))
+    if style_text:
+        parts.append("Style rules:\n" + style_text)
+    parts.append("These lines are guidelines, not a template. Choose the form each post needs; do not copy the structure or distinctive wording of past posts. Formatting shown in Markdown (**bold**, *italic*, [links](url)) is to be reproduced in the draft body using the same Markdown.")
+    return "\n\n".join(parts)
 
 
 class ContextAssembler:
@@ -227,33 +294,8 @@ class ContextAssembler:
             instruction=raw_instruction,
             conversation_summary=raw_summary,
         )
-        # Build single Markdown profile block (never dropped)
-        def _profile_block(p: dict[str, Any] | None) -> str:
-            if not p:
-                return ""
-            topics_text = str(p.get("topics_text") or "").strip()
-            editorial_text = str(p.get("editorial_text") or "").strip()
-            style_text = str(p.get("style_text") or "").strip()
-            version = p.get("version", "?")
-            # Fallback to legacy JSON if text fields empty
-            if not topics_text and not editorial_text and not style_text:
-                # Try legacy topics
-                topics = p.get("topics", [])
-                if topics:
-                    topics_text = "\n".join(str(t.get("name", "")) for t in topics if isinstance(t, dict) and t.get("name"))
-            if not topics_text and not editorial_text and not style_text:
-                return ""
-            parts = [f"CHANNEL PROFILE (written and approved by the channel owner, version {version})"]
-            if topics_text:
-                parts.append("Topics:\n" + "\n".join(f"- {line}" for line in topics_text.splitlines() if line.strip()))
-            if editorial_text:
-                parts.append("Editorial rules:\n" + "\n".join(f"- {line}" for line in editorial_text.splitlines() if line.strip()))
-            if style_text:
-                parts.append("Style rules:\n" + style_text)
-            parts.append("These lines are guidelines, not a template. Choose the form each post needs; do not copy the structure or distinctive wording of past posts. Formatting shown in Markdown (**bold**, *italic*, [links](url)) is to be reproduced in the draft body using the same Markdown.")
-            return "\n\n".join(parts)
-
-        profile_block = _profile_block(raw_profile)
+        # Build the canonical Markdown profile block (never dropped).
+        profile_block = profile_block_from_mapping(raw_profile)
         base = {
             "context_version": CONTEXT_VERSION,
             "cache_key": key,
