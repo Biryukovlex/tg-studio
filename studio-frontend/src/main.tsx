@@ -368,11 +368,32 @@ function DraftMarkdownPreview({ text }: { text: string }) {
   );
 }
 
+export const DRAFT_CHARACTER_LIMIT = 4096;
+export const DRAFT_WARNING_THRESHOLD = 3800;
+
+export function draftPlainCharacterCount(body: string): number {
+  return Array.from(plainFromMarkdown(body)).length;
+}
+
+export function draftCounterState(body: string, serverCount?: number | null): { count: number; overLimit: boolean; warning: boolean } {
+  const count = serverCount ?? draftPlainCharacterCount(body);
+  return { count, overLimit: count > DRAFT_CHARACTER_LIMIT, warning: count >= DRAFT_WARNING_THRESHOLD };
+}
+
+export function draftSaveErrorMessage(error: unknown): string {
+  if (error instanceof StudioApiError) {
+    return error.payload.error?.message ?? error.message;
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return "Could not save this draft. Try again.";
+}
+
 function DraftPanel({
   conversationId,
   seedDraft,
   open,
   onClose,
+  onSelectConversation,
   watchForAgentChanges,
   refreshToken,
 }: {
@@ -380,6 +401,7 @@ function DraftPanel({
   seedDraft: Draft | null;
   open: boolean;
   onClose: () => void;
+  onSelectConversation: (conversationId: string) => void;
   watchForAgentChanges: boolean;
   refreshToken: number;
 }) {
@@ -395,6 +417,7 @@ function DraftPanel({
   }, [panelWidth]);
   const [versions, setVersions] = useState<DraftVersion[]>([]);
   const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving" | "conflict" | "error">("saved");
+  const [saveError, setSaveError] = useState("");
   const [copied, setCopied] = useState(false);
   const [copyNote, setCopyNote] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -405,6 +428,7 @@ function DraftPanel({
   const viewedVersion = versions.find((item) => item.version === selectedVersion);
   const viewingOld = !!(draft && viewedVersion && selectedVersion !== draft.current_version);
   const shownBody = viewingOld && viewedVersion ? viewedVersion.body : (draft?.body ?? "");
+  const shownCounter = draftCounterState(shownBody, viewingOld ? viewedVersion?.character_count : draft?.character_count);
   const canSave = saveState === "unsaved" || saveState === "error";
   const hydrated = useRef(false);
   const draftRef = useRef<Draft | null>(seedDraft);
@@ -417,6 +441,13 @@ function DraftPanel({
 
   const load = () => {
     const conversationChanged = loadedConversation.current !== conversationId;
+    const previousConversation = loadedConversation.current;
+    if (conversationChanged && saveStateRef.current === "unsaved") {
+      if (!window.confirm("Discard unsaved draft changes?")) {
+        if (previousConversation) onSelectConversation(previousConversation);
+        return Promise.resolve();
+      }
+    }
     loadedConversation.current = conversationId;
     if (!conversationId) {
       setDraft(null);
@@ -427,6 +458,11 @@ function DraftPanel({
     if (conversationChanged) {
       localChange.current = 0;
       setConflict(null);
+      setSaveState("saved");
+      setSaveError("");
+      setCopyNote("");
+      setCopied(false);
+      setPreviewOpen(false);
     }
     return api<{ draft: Draft | null; sources?: typeof sources }>(`/studio/api/conversations/${conversationId}/draft`)
       .then((payload) => {
@@ -501,13 +537,18 @@ function DraftPanel({
           return { ...current, revision: payload.draft.revision };
         });
         if (latest) setSaveState("saved");
+        setSaveError("");
         setConflict(null);
       })
       .catch((error: unknown) => {
         if (error instanceof StudioApiError && error.status === 409 && error.payload.server_draft) {
           setConflict({ server: error.payload.server_draft, localBody: local.body, localTitle: local.working_title });
+          setSaveError("");
           setSaveState("conflict");
-        } else setSaveState("error");
+        } else {
+          setSaveError(draftSaveErrorMessage(error));
+          setSaveState("error");
+        }
       });
   };
 
@@ -548,11 +589,12 @@ function DraftPanel({
       };
     });
     setSaveState("unsaved");
+    setSaveError("");
     setCopied(false);
   };
 
   const copy = async () => {
-    if (!draft || draft.over_limit) return;
+    if (!draft || shownCounter.overLimit) return;
     // Both flavours come from the Markdown shown in the editor (the current
     // draft, or the version being viewed), saved or not.
     // text/plain carries Telegram's own markup (**bold**, __italic__), which
@@ -586,9 +628,9 @@ function DraftPanel({
       setDraft((current) => current ? { ...current, copied_at: new Date().toISOString() } : current);
       window.setTimeout(() => { setCopied(false); setCopyNote(""); }, 3200);
       // Record the copy on the saved revision; failures here must not undo a successful copy.
-      if (saveState === "saved") void api(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } }).catch(() => undefined);
+      if (saveState === "saved" && !viewingOld) void api(`/studio/api/drafts/${draft.id}/copied`, { method: "POST", headers: { "x-csrf-token": csrfToken() } }).catch(() => undefined);
     } catch {
-      setSaveState("error");
+      setCopyNote("Clipboard unavailable — select the text and copy manually");
     }
   };
 
@@ -606,12 +648,14 @@ function DraftPanel({
       setDraft(payload.draft);
       setSelectedVersion(payload.draft.current_version);
       setSaveState("saved");
+      setSaveError("");
       setConflict(null);
     }).catch((error: unknown) => {
       if (error instanceof StudioApiError && error.status === 409 && error.payload.server_draft) {
         setConflict({ server: error.payload.server_draft, localBody: draft.body, localTitle: draft.working_title });
         setSaveState("conflict");
       } else {
+        setSaveError(draftSaveErrorMessage(error));
         setSaveState("error");
       }
     });
@@ -624,6 +668,7 @@ function DraftPanel({
     setDraft({ ...conflict.server, body: conflict.localBody, working_title: conflict.localTitle });
     setConflict(null);
     setSaveState("unsaved");
+    setSaveError("");
   };
 
   const useServer = () => {
@@ -632,6 +677,7 @@ function DraftPanel({
     setDraft(conflict.server);
     setConflict(null);
     setSaveState("saved");
+    setSaveError("");
   };
 
   const sourceLinks = new Map<string, { url: string; title: string }>();
@@ -688,13 +734,14 @@ function DraftPanel({
           {previewOpen
             ? <div className="studio-draft-preview" role="region" aria-label="Post preview"><div className="studio-markdown"><DraftMarkdownPreview text={shownBody} /></div></div>
             : <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={shownBody} readOnly={viewingOld} onChange={(event) => edit("body", event.target.value)} />}
-          <div className={`studio-char-count ${draft.over_limit ? "is-over" : draft.warning_threshold ? "is-warning" : ""}`}>
-            <span>{(draft.character_count ?? Array.from(plainFromMarkdown(draft.body)).length).toLocaleString()} / 4,096 plain-text characters</span>
-            <span>{draft.over_limit ? "Copy blocked" : draft.warning_threshold ? "Near Telegram limit" : "Telegram ready"}</span>
+          <div className={`studio-char-count ${shownCounter.overLimit ? "is-over" : shownCounter.warning ? "is-warning" : ""}`}>
+            <span>{shownCounter.count.toLocaleString()} / {DRAFT_CHARACTER_LIMIT.toLocaleString()} plain-text characters</span>
+            <span>{shownCounter.overLimit ? "Copy blocked" : shownCounter.warning ? "Near Telegram limit" : "Telegram ready"}</span>
           </div>
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}
           {clickableSources.length > 0 && <div className="studio-draft-notes"><strong>Sources</strong><div className="studio-source-chips">{clickableSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}</div></div>}
-          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={draft.over_limit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button>{copyNote && <span className="studio-copy-note" role="status">{copyNote}</span>}<span className="studio-draft-save-group"><button type="button" className="studio-draft-save" onClick={() => saveNow(false)} disabled={!canSave || viewingOld} title="Overwrite the current version with your edits">Save</button><button type="button" className="studio-draft-save" onClick={() => saveNow(true)} disabled={!canSave || viewingOld} title="Keep the current version and add your edits as a new one">Save as new version</button></span><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) choose(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version || saveState === "saving"}>Choose</button></label></div>
+          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={shownCounter.overLimit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button>{copyNote && <span className="studio-copy-note" role="status">{copyNote}</span>}<span className="studio-draft-save-group"><button type="button" className="studio-draft-save" onClick={() => saveNow(false)} disabled={!canSave || viewingOld} title="Overwrite the current version with your edits">Save</button><button type="button" className="studio-draft-save" onClick={() => saveNow(true)} disabled={!canSave || viewingOld} title="Keep the current version and add your edits as a new one">Save as new version</button></span><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) choose(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version || saveState === "saving"}>Choose</button></label></div>
+          {saveError && <p className="studio-save-error" role="alert">{saveError}</p>}
         </div>
       )}
     </aside>
@@ -1206,7 +1253,18 @@ function StudioApp() {
         <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
         {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} consent={bootstrap.consent} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
       </main>
-      <DraftPanel conversationId={selected?.id ?? null} seedDraft={bootstrap.draft} open={draftOpen} onClose={() => setDraftOpen(false)} watchForAgentChanges={agentRunActive} refreshToken={draftRefreshToken} />
+      <DraftPanel
+        conversationId={selected?.id ?? null}
+        seedDraft={bootstrap.draft}
+        open={draftOpen}
+        onClose={() => setDraftOpen(false)}
+        onSelectConversation={(conversationId) => {
+          const previous = bootstrap.conversations.find((item) => item.id === conversationId);
+          if (previous) setSelected(previous);
+        }}
+        watchForAgentChanges={agentRunActive}
+        refreshToken={draftRefreshToken}
+      />
     </div>
   );
 }

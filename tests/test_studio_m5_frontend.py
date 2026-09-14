@@ -32,6 +32,9 @@ def test_m5_artifact_panel_contract_is_built_and_responsive():
     assert "Artifact title" in bundle
     assert "Copy full post" not in bundle
     assert "Copy for Telegram" not in bundle
+    assert "Discard unsaved draft changes?" in source
+    assert "studio-save-error" in source
+    assert "Clipboard unavailable" in source
 
 
 def test_empty_thread_welcome_stays_inside_message_viewport():
