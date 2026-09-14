@@ -68,7 +68,8 @@ def test_chat_viewport_scrolls_to_history_and_live_agent_activity_is_visible():
     assert 'return TOOL_ACTIVITY_RESULT_LABELS[normalized] ?? "Tool result received";' in source
     assert 'The agent may continue working.' in source
     assert '`${toolActivityLabel(toolName)} complete`' not in source
-    assert '<AgentActivity run={recoveredRun} events={recoveredEvents} />' in source
+    assert '<AgentActivity run={recoveredRun} events={recoveredEvents} onStopRun={onStopRun} />' in source
+    assert 'Stop run' in source
     assert "onRunStartedEvent" in source
     assert "poll(runHint(input.runId" not in source
     assert ".studio-agent-activity" in styles

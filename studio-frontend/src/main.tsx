@@ -148,6 +148,16 @@ function buildRunHint(conversationId: string, id: string, status: RunSummary["st
   };
 }
 
+export function isConversationActiveRunError(error: unknown): boolean {
+  return error instanceof StudioApiError
+    && error.status === 409
+    && error.payload.error?.code === "conversation_active_run";
+}
+
+export function isActiveRun(run: RunSummary | null | undefined): boolean {
+  return run?.status === "queued" || run?.status === "running";
+}
+
 async function studioAgentFetch(url: string, init: RequestInit): Promise<Response> {
   const response = await fetch(url, init);
   if (response.ok) return response;
@@ -188,8 +198,9 @@ function describeAgentActivity(run: RunSummary, events: RunEvent[]): { label: st
   return { label: "Thinking through your request", detail: "Choosing the next useful action from your channel context.", stage: "thinking" };
 }
 
-function AgentActivity({ run, events }: { run: RunSummary | null; events: RunEvent[] }) {
-  const active = run?.status === "queued" || run?.status === "running";
+function AgentActivity({ run, events, onStopRun }: { run: RunSummary | null; events: RunEvent[]; onStopRun: (runId: string) => Promise<void> }) {
+  const active = isActiveRun(run);
+  const [stopping, setStopping] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -197,6 +208,10 @@ function AgentActivity({ run, events }: { run: RunSummary | null; events: RunEve
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
+  }, [active, run?.id]);
+
+  useEffect(() => {
+    if (!active) setStopping(false);
   }, [active, run?.id]);
 
   if (!run || !active) return null;
@@ -212,6 +227,16 @@ function AgentActivity({ run, events }: { run: RunSummary | null; events: RunEve
         <small>{activity.detail}</small>
       </span>
       <span className="studio-agent-elapsed">{elapsedSeconds}s</span>
+      <button
+        type="button"
+        className="studio-stop-run"
+        disabled={stopping}
+        onClick={() => {
+          if (!run) return;
+          setStopping(true);
+          void onStopRun(run.id).catch(() => setStopping(false));
+        }}
+      >{stopping ? "Stopping…" : "Stop run"}</button>
     </div>
   );
 }
@@ -244,6 +269,18 @@ function ConversationRail({
           <p className="studio-rail-title">Channel desk</p>
         </div>
       </div>
+      <select
+        className="studio-mobile-conversation-select"
+        aria-label="Studio conversation"
+        value={selected?.id ?? ""}
+        onChange={(event) => {
+          const conversation = conversations.find((item) => item.id === event.target.value);
+          if (conversation) onSelect(conversation);
+        }}
+      >
+        {!selected && <option value="">Choose a conversation</option>}
+        {conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.title}</option>)}
+      </select>
       <button className="studio-new" type="button" onClick={onNew}>
         <span aria-hidden="true">＋</span> New conversation
       </button>
@@ -917,12 +954,14 @@ function StudioThread({
   conversation,
   seedRun,
   consent,
+  onStopRun,
   onRunActivityChange,
   onRunFinished,
 }: {
   conversation: Conversation;
   seedRun: RunSummary | null;
   consent: Bootstrap["consent"];
+  onStopRun: (runId: string) => Promise<void>;
   onRunActivityChange: (active: boolean) => void;
   onRunFinished: () => void;
 }) {
@@ -1103,7 +1142,7 @@ function StudioThread({
             <ThreadPrimitive.Messages components={{ Message: StudioMessage }} />
           </ThreadPrimitive.Viewport>
           <div className="studio-composer-stack">
-            <AgentActivity run={recoveredRun} events={recoveredEvents} />
+            <AgentActivity run={recoveredRun} events={recoveredEvents} onStopRun={onStopRun} />
             <ComposerPrimitive.Root className="studio-composer">
               <ComposerPrimitive.Input
                 aria-label="Message the Studio agent"
@@ -1132,6 +1171,8 @@ function StudioApp() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [error, setError] = useState("");
+  const [inlineError, setInlineError] = useState("");
+  const [deleteRetryConversation, setDeleteRetryConversation] = useState<Conversation | null>(null);
   const [draftOpen, setDraftOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [agentRunActive, setAgentRunActive] = useState(false);
@@ -1139,37 +1180,61 @@ function StudioApp() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleText, setTitleText] = useState("");
   const [titleError, setTitleError] = useState("");
-
-  const handleRunFinished = useCallback(() => {
-    setAgentRunActive(false);
-    setDraftRefreshToken((current) => current + 1);
-    refresh();
-  }, []);
+  const bootstrapRef = useRef<Bootstrap | null>(null);
 
   useEffect(() => {
-    setAgentRunActive(false);
-  }, [selected?.id]);
+    bootstrapRef.current = bootstrap;
+  }, [bootstrap]);
 
-  const refresh = () => {
+  const showRequestError = useCallback((reason: unknown, fallback: string) => {
+    const message = reason instanceof Error && reason.message.trim() ? reason.message : fallback;
+    if (bootstrapRef.current) {
+      setInlineError(message);
+      setError("");
+    } else {
+      setError(message);
+    }
+  }, []);
+
+  const refresh = useCallback(() => {
     void api<Bootstrap>("/studio/api/bootstrap")
       .then((payload) => {
         setBootstrap(payload);
+        bootstrapRef.current = payload;
+        setInlineError("");
         setSelected((current) =>
           payload.conversations.find((conversation) => conversation.id === current?.id) ??
             payload.current_conversation,
         );
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Studio could not load."));
-  };
+      .catch((reason: unknown) => showRequestError(reason, "Studio could not load."));
+  }, [showRequestError]);
 
-  useEffect(refresh, []);
+  const handleRunFinished = useCallback(() => {
+    setAgentRunActive(false);
+    setDraftRefreshToken((current) => current + 1);
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    setAgentRunActive(false);
+  }, [selected?.id]);
+
+  useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
     if (agentRunActive) {
       const timer = window.setTimeout(refresh, 1500);
       return () => window.clearTimeout(timer);
     }
-  }, [agentRunActive]);
+  }, [agentRunActive, refresh]);
   useEffect(() => { setEditingTitle(false); setTitleError(""); }, [selected?.id]);
+
+  const cancelRun = useCallback(async (runId: string) => {
+    await api(`/studio/api/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: "POST",
+      headers: { "x-csrf-token": csrfToken() },
+    });
+  }, []);
 
   const rename = () => {
     if (!selected || !titleText.trim()) return;
@@ -1182,6 +1247,7 @@ function StudioApp() {
 
   const createConversation = () => {
     if (!bootstrap?.selected_channel_id) return;
+    setInlineError("");
     void api<{ conversation: Conversation }>("/studio/api/conversations", {
       method: "POST",
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
@@ -1191,37 +1257,91 @@ function StudioApp() {
         setSelected(payload.conversation);
         refresh();
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Could not create conversation."));
+      .catch((reason: unknown) => showRequestError(reason, "Could not create conversation."));
   };
+
+  const applyDeletedConversation = useCallback((conversation: Conversation) => {
+    setSelected((current) => current?.id === conversation.id ? null : current);
+    setBootstrap((current) => {
+      if (!current) return current;
+      const conversations = current.conversations.filter((item) => item.id !== conversation.id);
+      const removedCurrent = current.current_conversation?.id === conversation.id;
+      const next = {
+        ...current,
+        conversations,
+        current_conversation: removedCurrent ? (conversations[0] ?? null) : current.current_conversation,
+        draft: removedCurrent ? null : current.draft,
+        active_run: removedCurrent ? null : current.active_run,
+      };
+      bootstrapRef.current = next;
+      return next;
+    });
+    refresh();
+  }, [refresh]);
+
+  const deleteRequest = useCallback(async (conversation: Conversation) => {
+    setDeletingId(conversation.id);
+    setInlineError("");
+    setDeleteRetryConversation(null);
+    try {
+      await api<{ conversation_id: string; deleted: boolean }>(`/studio/api/conversations/${encodeURIComponent(conversation.id)}`, {
+        method: "DELETE",
+        headers: { "x-csrf-token": csrfToken() },
+      });
+      applyDeletedConversation(conversation);
+    } catch (reason: unknown) {
+      if (isConversationActiveRunError(reason)) {
+        setInlineError(reason instanceof StudioApiError ? reason.message : "Stop the active run before deleting this conversation.");
+        setDeleteRetryConversation(conversation);
+      } else {
+        showRequestError(reason, "Could not delete conversation.");
+      }
+    } finally {
+      setDeletingId(null);
+    }
+  }, [applyDeletedConversation, showRequestError]);
 
   const deleteConversation = (conversation: Conversation) => {
     if (!window.confirm(`Delete “${conversation.title}” permanently? Its Studio messages, drafts, research, and run history will be removed. Telegram channel data will not be affected.`)) return;
-    setDeletingId(conversation.id);
-    void api<{ conversation_id: string; deleted: boolean }>(`/studio/api/conversations/${encodeURIComponent(conversation.id)}`, {
-      method: "DELETE",
-      headers: { "x-csrf-token": csrfToken() },
-    })
-      .then(() => {
-        setSelected((current) => current?.id === conversation.id ? null : current);
-        setBootstrap((current) => {
-          if (!current) return current;
-          const conversations = current.conversations.filter((item) => item.id !== conversation.id);
-          const removedCurrent = current.current_conversation?.id === conversation.id;
-          return {
-            ...current,
-            conversations,
-            current_conversation: removedCurrent ? (conversations[0] ?? null) : current.current_conversation,
-            draft: removedCurrent ? null : current.draft,
-            active_run: removedCurrent ? null : current.active_run,
-          };
-        });
-        refresh();
-      })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Could not delete conversation."))
-      .finally(() => setDeletingId(null));
+    void deleteRequest(conversation);
   };
 
-  if (error) return <div className="studio-error" role="alert"><strong>Studio could not load.</strong><span>{error}</span><button type="button" onClick={() => { setError(""); refresh(); }}>Try again</button></div>;
+  const waitForRunToFinish = useCallback(async (conversationId: string, runId: string) => {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const payload = await api<{ run: RunSummary | null }>(`/studio/api/conversations/${encodeURIComponent(conversationId)}/active-run`);
+      if (!payload.run || payload.run.id !== runId || !isActiveRun(payload.run)) return;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+    }
+    throw new Error("The run is still active. Try deleting the conversation again when it finishes.");
+  }, []);
+
+  const stopAndDelete = useCallback(async () => {
+    const conversation = deleteRetryConversation;
+    if (!conversation) return;
+    setDeleteRetryConversation(null);
+    setInlineError("Stopping the active run…");
+    setDeletingId(conversation.id);
+    try {
+      const payload = await api<{ run: RunSummary | null }>(`/studio/api/conversations/${encodeURIComponent(conversation.id)}/active-run`);
+      if (payload.run && isActiveRun(payload.run)) {
+        await cancelRun(payload.run.id);
+        await waitForRunToFinish(conversation.id, payload.run.id);
+      }
+      await api<{ conversation_id: string; deleted: boolean }>(`/studio/api/conversations/${encodeURIComponent(conversation.id)}`, {
+        method: "DELETE",
+        headers: { "x-csrf-token": csrfToken() },
+      });
+      applyDeletedConversation(conversation);
+    } catch (reason: unknown) {
+      setDeleteRetryConversation(conversation);
+      showRequestError(reason, "Could not stop the run and delete conversation.");
+    } finally {
+      setDeletingId(null);
+    }
+  }, [applyDeletedConversation, cancelRun, deleteRetryConversation, showRequestError, waitForRunToFinish]);
+
+  if (error && !bootstrap) return <div className="studio-error" role="alert"><strong>Studio could not load.</strong><span>{error}</span><button type="button" onClick={() => { setError(""); refresh(); }}>Try again</button></div>;
   if (!bootstrap) return <div className="studio-loading studio-page-loading" role="status">Opening your workspace…</div>;
   if (!bootstrap.setup.ready) return null;
 
@@ -1246,12 +1366,14 @@ function StudioApp() {
             {titleError && <p role="alert">{titleError}</p>}
           </div>
           <button type="button" className="studio-draft-toggle" onClick={() => setDraftOpen(true)}>Draft</button>
+          {selected && <button type="button" className="studio-delete-mobile" onClick={() => deleteConversation(selected)} disabled={deletingId !== null}>Delete</button>}
           <button type="button" className="studio-settings-mobile" onClick={() => setProfileOpen(true)}>Profile</button>
           <button type="button" className="studio-settings-mobile" onClick={() => setSettingsOpen(true)}>System Prompt</button>
           <div className="studio-topbar-meta"><span className="studio-status-dot" aria-hidden="true" /> Agent context connected</div>
         </header>
         <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
-        {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} consent={bootstrap.consent} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
+        {(inlineError || (error && bootstrap)) && <div className="studio-inline-error" role="alert"><span>{inlineError || error}</span>{deleteRetryConversation && <button type="button" onClick={() => void stopAndDelete()} disabled={deletingId !== null}>{deletingId === deleteRetryConversation.id ? "Stopping…" : "Stop run and delete"}</button>}<button type="button" className="studio-inline-error-dismiss" onClick={() => { setInlineError(""); setError(""); setDeleteRetryConversation(null); }} aria-label="Dismiss error">×</button></div>}
+        {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} consent={bootstrap.consent} onStopRun={cancelRun} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
       </main>
       <DraftPanel
         conversationId={selected?.id ?? null}
