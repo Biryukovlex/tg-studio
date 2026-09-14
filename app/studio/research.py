@@ -213,9 +213,14 @@ class ResearchService:
         return bundle
 
     async def _ensure_loaded(self, *, workspace_id: Any, conversation_id: Any, channel_id: int) -> ResearchState:
-        state = self._state(workspace_id, conversation_id, channel_id)
-        if state.bundle is not None:
-            return state
+        # The loader is intentionally outside the lock so a slow database
+        # read does not block a concurrent search.  The merge itself is
+        # serialized: a result stored while the read is in flight must never
+        # be replaced by the older persisted snapshot.
+        async with self._lock:
+            state = self._state(workspace_id, conversation_id, channel_id)
+            if state.bundle is not None:
+                return state
         loader = getattr(self.repository, "get_research_bundle", None)
         if loader is None:
             return state
@@ -227,16 +232,26 @@ class ResearchService:
             return state
         sources = [to_source_evidence(item) for item in (raw.get("sources") or [])]
         stories = [story_from_dict(item) for item in (raw.get("stories") or []) if isinstance(item, dict)]
-        state.sources = {source.source_id: source for source in sources}
-        state.query = str(raw.get("query") or "")
-        state.bundle = ResearchBundle(
-            query=state.query,
-            sources=tuple(sources),
-            stories=tuple(stories),
-            warnings=tuple(str(item) for item in (raw.get("warnings") or [])[:20]),
-            retrieved_at=_aware(raw.get("retrieved_at")) or _now(),
-            selected_source_ids=tuple(str(item) for item in (raw.get("selected_source_ids") or [])[:12]),
-        )
+        async with self._lock:
+            state = self._state(workspace_id, conversation_id, channel_id)
+            # In-memory sources are newer than the snapshot we just loaded.
+            # Keep them and add only IDs that are not already present.
+            for source in sources:
+                state.sources.setdefault(source.source_id, source)
+            if state.bundle is None:
+                state.query = str(raw.get("query") or state.query)
+                state.bundle = ResearchBundle(
+                    query=state.query,
+                    sources=tuple(state.sources.values()),
+                    stories=tuple(stories),
+                    warnings=tuple(str(item) for item in (raw.get("warnings") or [])[:20]),
+                    retrieved_at=_aware(raw.get("retrieved_at")) or _now(),
+                    selected_source_ids=tuple(str(item) for item in (raw.get("selected_source_ids") or [])[:12]),
+                )
+            else:
+                # A concurrent _store won the race.  Preserve its bundle and
+                # make the merged source map visible to subsequent tools.
+                state.bundle = replace(state.bundle, sources=tuple(state.sources.values()))
         return state
 
     async def _record_activity(

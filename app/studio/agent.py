@@ -57,6 +57,10 @@ class StudioDeps:
     # repeatedly calling the previous search tool instead of reading results.
     strict_workflow: bool = False
     tool_call_counts: dict[str, int] = field(default_factory=dict)
+    # A provider may keep repeating a required tool after receiving a blocked
+    # result.  Once the same tool has been blocked twice, the output validator
+    # lets the model explain that result instead of exhausting the run.
+    blocked_tool_counts: dict[str, int] = field(default_factory=dict)
 
 
 _RESEARCH_INTENT = re.compile(
@@ -267,6 +271,19 @@ def _draft_error(exc: BaseException) -> dict[str, Any]:
     return {"status": "blocked", "error": {"code": "draft_unavailable", "message": "The draft could not be saved."}}
 
 
+def _record_blocked_tool(ctx: RunContext[StudioDeps], tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Record a blocked tool result without hiding its reason from the model."""
+
+    if result.get("status") == "blocked":
+        count = ctx.deps.blocked_tool_counts.get(tool_name, 0) + 1
+        ctx.deps.blocked_tool_counts[tool_name] = count
+        if count >= 2:
+            # ``completed_tools`` here means “the model has received the
+            # terminal reason and may answer”, not that the operation succeeded.
+            ctx.deps.completed_tools.add(tool_name)
+    return result
+
+
 def _draft_summary(row: dict[str, Any]) -> dict[str, Any]:
     """Small explainability envelope; never expose hidden model reasoning."""
 
@@ -327,6 +344,24 @@ async def _research_context(ctx: RunContext[StudioDeps]) -> tuple[list[str], lis
             evidence_ids = [post.post_id for post in analysis.evidence_posts]
             channel_evidence = [post.model_dump(mode="json") for post in analysis.evidence_posts[:20]]
     return topics[:20], recent_posts[:6], evidence_ids[:20], channel_evidence[:20]
+
+
+async def _channel_only_evidence(ctx: RunContext[StudioDeps]) -> list[dict[str, Any]]:
+    """Return bounded archive evidence for a factual draft without web research."""
+
+    _topics, _recent_posts, _evidence_ids, evidence = await _research_context(ctx)
+    if evidence:
+        return evidence[:20]
+    raw = await ctx.deps.repository.channel_context(ctx.deps.channel_id)
+    identifier = str(raw.get("identifier") or raw.get("title") or f"channel:{ctx.deps.channel_id}")[:240]
+    return [
+        {
+            "source_id": f"channel:{ctx.deps.channel_id}",
+            "channel_id": int(ctx.deps.channel_id),
+            "claim": f"Draft grounded in the selected channel context ({identifier}).",
+            "confidence": "low",
+        }
+    ]
 
 
 async def _draft_context(ctx: RunContext[StudioDeps]) -> dict[str, Any] | None:
@@ -404,7 +439,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         *,
         creative: bool,
         fallback_source_ids: list[str] | None = None,
-    ) -> tuple[list[str], list[dict[str, Any]]]:
+    ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
         """Keep only conversation-scoped IDs and tolerate imperfect tool JSON."""
 
         bundle = await _research(ctx, settings).get_bundle(
@@ -421,63 +456,75 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             if cu:
                 url_to_id[str(cu).strip()] = source.source_id
 
-        def valid_ids(values: Any) -> list[str]:
+        unknown_ids: list[str] = []
+
+        def raw_ids(values: Any) -> list[str]:
             if isinstance(values, str):
-                # Malformed claim_support where source_ids is a string should be treated as invalid
-                return []
+                return [values.strip()] if values.strip() else []
             if not isinstance(values, (list, tuple, set)):
                 return []
+            return [str(value).strip() for value in values if str(value).strip()]
+
+        def valid_ids(values: Any) -> list[str]:
             result: list[str] = []
-            for value in values:
-                candidate = str(value).strip()
-                if not candidate:
-                    continue
-                # Map URL to source_id if it matches a known source's URL
+            for raw_value in raw_ids(values):
+                candidate = raw_value
+                # Map URL to source_id if it matches a known source's URL.
                 if candidate not in known and candidate in url_to_id:
                     candidate = url_to_id[candidate]
-                if candidate and candidate in known and candidate not in result:
-                    result.append(candidate)
+                if candidate in known:
+                    if candidate not in result:
+                        result.append(candidate)
+                elif raw_value not in unknown_ids:
+                    unknown_ids.append(raw_value)
             return result[:12]
 
-        # Check for unknown IDs: if source_ids provided but after mapping still has unknown, block
-        if source_ids is not None:
-            # Normalize provided for check, handling string case
-            provided_raw = source_ids if isinstance(source_ids, (list, tuple, set, str)) else []
-            if isinstance(provided_raw, str):
-                provided_raw = [provided_raw]
-            provided = [str(v).strip() for v in provided_raw if str(v).strip()]
-            # Map URLs to IDs for check
-            mapped_provided = []
-            for v in provided:
-                if v in known:
-                    mapped_provided.append(v)
-                elif v in url_to_id:
-                    mapped_provided.append(url_to_id[v])
-                else:
-                    mapped_provided.append(v)
-            # If any still unknown, block
-            if provided and any(v not in known for v in mapped_provided):
-                return [], []
-            if not provided and not creative:
-                return [], []
+        explicit_ids = raw_ids(source_ids)
         selected = valid_ids(source_ids)
+        # An omitted list and an explicitly empty list have the same meaning:
+        # revisions inherit their existing evidence instead of clearing it.
         if not selected:
             selected = valid_ids(fallback_source_ids)
 
         claims: list[dict[str, Any]] = []
+        claim_requested = False
         for item in claim_support or []:
             if isinstance(item, ClaimSupport):
                 item = item.model_dump()
             if not isinstance(item, dict):
                 continue
             claim = " ".join(str(item.get("claim") or "").split())[:500]
-            ids = valid_ids(item.get("source_ids"))
+            # A claim's source_ids is a list contract.  Keep the historical
+            # fail-closed behavior for a provider that sends one bare string.
+            claim_values = [] if isinstance(item.get("source_ids"), str) else raw_ids(item.get("source_ids"))
+            claim_requested = claim_requested or bool(claim_values)
+            ids = valid_ids(claim_values)
             if claim and ids:
                 claims.append({"claim": claim, "source_ids": ids})
                 for source_id in ids:
                     if source_id not in selected:
                         selected.append(source_id)
-        return selected[:40], claims[:40]
+
+        warnings: list[str] = []
+        if unknown_ids:
+            warnings.append(f"Ignored unknown source id(s): {', '.join(unknown_ids[:12])}")
+
+        # Explicitly hallucinated IDs remain actionable, but a partially valid
+        # list is safe to salvage.  A stale fallback from an old draft is
+        # treated like an omitted list so channel-only drafting can recover.
+        if not selected and unknown_ids and (explicit_ids or claim_requested) and not creative:
+            raise DraftValidationError(
+                "unknown_source",
+                f"No known source ID remains; ignored unknown source id(s): {', '.join(unknown_ids[:12])}.",
+                field="source_ids",
+            )
+        if bundle is not None and not selected and not creative:
+            raise DraftValidationError(
+                "source_evidence_required",
+                "Factual drafts need at least one source from this conversation's research bundle.",
+                field="source_ids",
+            )
+        return selected[:40], claims[:40], warnings
 
     agent = Agent(
         model if model is not None else build_model(settings),
@@ -503,6 +550,15 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
     def enforce_required_workflow(ctx: RunContext[StudioDeps], output: str) -> str:
         missing = [name for name in ctx.deps.required_tools if name not in ctx.deps.completed_tools]
         if missing:
+            # A blocked tool result is already visible in the model context.
+            # After two attempts, continuing to force the same call only
+            # burns retries and turns a useful explanation into an invalid run.
+            exhausted = [name for name in missing if ctx.deps.blocked_tool_counts.get(name, 0) >= 2]
+            if exhausted:
+                ctx.deps.completed_tools.update(exhausted)
+                missing = [name for name in missing if name not in exhausted]
+                if not missing:
+                    return output
             raise ModelRetry(
                 f"The required evidence workflow is incomplete. Call {missing[0]} next; do not claim completion yet."
             )
@@ -871,18 +927,32 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         _require_predecessors(ctx, "create_draft")
         body, removed_commentary = _clean_publication_text(body)
         _require_publication_text(body)
-        normalized_source_ids, normalized_claims = await normalize_draft_evidence(
-            ctx,
-            source_ids,
-            claim_support,
-            creative=creative,
-        )
+        try:
+            normalized_source_ids, normalized_claims, evidence_warnings = await normalize_draft_evidence(
+                ctx,
+                source_ids,
+                claim_support,
+                creative=creative,
+            )
+        except DraftValidationError as exc:
+            return _record_blocked_tool(ctx, "create_draft", _draft_error(exc))
         normalized_warnings = list(warnings or [])
+        normalized_warnings.extend(evidence_warnings)
+        bundle = await _research(ctx, settings).get_bundle(
+            workspace_id=ctx.deps.workspace_id,
+            conversation_id=ctx.deps.conversation_id,
+            channel_id=ctx.deps.channel_id,
+        )
+        channel_evidence_value = list(channel_evidence or [])
+        if not creative and not normalized_source_ids and bundle is None:
+            if not channel_evidence_value:
+                channel_evidence_value = await _channel_only_evidence(ctx)
+            normalized_warnings.append("No web sources were used; the post is based on channel context only.")
         if removed_commentary:
             normalized_warnings.append("Service commentary or a trailing source list was removed from the publication text; sources stay on the artifact.")
         creator = getattr(ctx.deps.repository, "create_draft", None)
         if creator is None:
-            return {"status": "blocked", "error": {"code": "draft_unavailable", "message": "Draft persistence is unavailable."}}
+            return _record_blocked_tool(ctx, "create_draft", {"status": "blocked", "error": {"code": "draft_unavailable", "message": "Draft persistence is unavailable."}})
         payload = {
             "body": body,
             "working_title": working_title,
@@ -890,7 +960,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             "claim_support": normalized_claims,
             "assumptions": assumptions or [],
             "warnings": normalized_warnings,
-            "channel_evidence": channel_evidence or [],
+            "channel_evidence": channel_evidence_value,
             "web_evidence": web_evidence or [],
             "confidence": confidence,
             "creative": creative,
@@ -909,7 +979,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
                 instruction="Created from the user's request.",
             )
         except (DraftValidationError, DraftConflictError) as exc:
-            return _draft_error(exc)
+            return _record_blocked_tool(ctx, "create_draft", _draft_error(exc))
         _check_cancel(ctx)
         ctx.deps.completed_tools.add("create_draft")
         return {"status": "created", "draft": row, "version": row.get("current_version", 1), "decision_summary": _draft_summary(row)}
@@ -940,21 +1010,36 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         try:
             parsed_id = __import__("uuid").UUID(str(draft_id))
         except (TypeError, ValueError):
-            return {"status": "blocked", "error": {"code": "draft_not_found", "message": "A valid draft id is required."}}
+            return _record_blocked_tool(ctx, "revise_draft", {"status": "blocked", "error": {"code": "draft_not_found", "message": "A valid draft id is required."}})
         getter = getattr(ctx.deps.repository, "get_draft", None)
         if getter is None:
-            return {"status": "blocked", "error": {"code": "draft_unavailable", "message": "Draft persistence is unavailable."}}
+            return _record_blocked_tool(ctx, "revise_draft", {"status": "blocked", "error": {"code": "draft_unavailable", "message": "Draft persistence is unavailable."}})
         current = await getter(parsed_id, conversation_id=ctx.deps.conversation_id, channel_id=ctx.deps.channel_id)
         if current is None:
-            return {"status": "blocked", "error": {"code": "draft_not_found", "message": "Draft not found in this conversation."}}
-        normalized_source_ids, normalized_claims = await normalize_draft_evidence(
-            ctx,
-            source_ids,
-            claim_support,
-            creative=bool(current.get("creative")) if creative is None else creative,
-            fallback_source_ids=list(current.get("source_ids") or []),
-        )
+            return _record_blocked_tool(ctx, "revise_draft", {"status": "blocked", "error": {"code": "draft_not_found", "message": "Draft not found in this conversation."}})
+        effective_creative = bool(current.get("creative")) if creative is None else creative
+        try:
+            normalized_source_ids, normalized_claims, evidence_warnings = await normalize_draft_evidence(
+                ctx,
+                source_ids,
+                claim_support,
+                creative=effective_creative,
+                fallback_source_ids=list(current.get("source_ids") or []),
+            )
+        except DraftValidationError as exc:
+            return _record_blocked_tool(ctx, "revise_draft", _draft_error(exc))
         normalized_warnings = list(warnings if warnings is not None else current.get("warnings") or [])
+        normalized_warnings.extend(evidence_warnings)
+        bundle = await _research(ctx, settings).get_bundle(
+            workspace_id=ctx.deps.workspace_id,
+            conversation_id=ctx.deps.conversation_id,
+            channel_id=ctx.deps.channel_id,
+        )
+        channel_evidence_value = list(channel_evidence) if channel_evidence is not None else list(current.get("channel_evidence") or [])
+        if not effective_creative and not normalized_source_ids and bundle is None:
+            if not channel_evidence_value:
+                channel_evidence_value = await _channel_only_evidence(ctx)
+            normalized_warnings.append("No web sources were used; the post is based on channel context only.")
         if removed_commentary:
             normalized_warnings.append("Service commentary or a trailing source list was removed from the publication text; sources stay on the artifact.")
         # Use normalized claims only when body changed; otherwise keep current
@@ -969,7 +1054,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             "claim_support": claim_support_value,
             "assumptions": assumptions,
             "warnings": normalized_warnings,
-            "channel_evidence": channel_evidence,
+            "channel_evidence": channel_evidence_value,
             "web_evidence": web_evidence,
             "confidence": confidence,
             "creative": creative,
@@ -983,7 +1068,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         try:
             row = await ctx.deps.repository.revise_draft(draft_id=parsed_id, payload=payload, instruction=instruction)
         except (DraftValidationError, DraftConflictError) as exc:
-            return _draft_error(exc)
+            return _record_blocked_tool(ctx, "revise_draft", _draft_error(exc))
         _check_cancel(ctx)
         ctx.deps.completed_tools.add("revise_draft")
         return {
@@ -1014,7 +1099,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         try:
             parsed_id = __import__("uuid").UUID(str(draft_id))
         except (TypeError, ValueError):
-            return {"status": "blocked", "error": {"code": "draft_not_found", "message": "A valid draft id is required."}}
+            return _record_blocked_tool(ctx, "save_draft", {"status": "blocked", "error": {"code": "draft_not_found", "message": "A valid draft id is required."}})
         payload: dict[str, Any] = {"body": body}
         if working_title is not None:
             payload["working_title"] = working_title
@@ -1025,13 +1110,13 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             channel_id=ctx.deps.channel_id,
         ) if getter is not None else None
         if current is None:
-            return {
+            return _record_blocked_tool(ctx, "save_draft", {
                 "status": "blocked",
                 "error": {
                     "code": "draft_not_found",
                     "message": "Draft not found in this conversation.",
                 },
-            }
+            })
         try:
             row = await ctx.deps.repository.update_draft(
                 draft_id=parsed_id,
@@ -1041,7 +1126,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
                 instruction="Saved at the user's request.",
             )
         except (DraftValidationError, DraftConflictError) as exc:
-            return _draft_error(exc)
+            return _record_blocked_tool(ctx, "save_draft", _draft_error(exc))
         return {"status": "saved", "draft": row, "version": row.get("current_version"), "decision_summary": _draft_summary(row)}
 
     @agent.tool(prepare=workflow_tool_visibility)
@@ -1058,6 +1143,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         except (TypeError, ValueError):
             row = None
         if row is None:
+            ctx.deps.completed_tools.add("get_draft")
             return {"status": "empty", "draft": None, "message": "There is no draft in this conversation yet."}
         versions_getter = getattr(ctx.deps.repository, "list_draft_versions", None)
         versions = (
@@ -1069,6 +1155,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             if versions_getter is not None
             else []
         )
+        ctx.deps.completed_tools.add("get_draft")
         return {
             "status": "ready",
             "draft": row,

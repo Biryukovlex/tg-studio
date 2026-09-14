@@ -197,10 +197,14 @@ def validate_draft_input(
             "The draft references a source that is not available in this conversation.",
             field="source_ids",
         )
-    if require_sources and not parsed.creative and not referenced:
+    # A factual draft may be grounded in the channel archive when no web
+    # source was selected.  The agent adds a structured ``channel_evidence``
+    # record for this case; web-backed runs still require conversation-scoped
+    # source IDs at the agent boundary.
+    if require_sources and not parsed.creative and not referenced and not parsed.channel_evidence:
         raise DraftValidationError(
             "source_evidence_required",
-            "Factual drafts need at least one source, or mark the request as creative.",
+            "Factual drafts need at least one source or channel evidence, or mark the request as creative.",
             field="source_ids",
         )
 
