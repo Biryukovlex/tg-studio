@@ -318,11 +318,12 @@ class Database:
                 """SELECT cm.*, p.message_id AS post_message_id, p.posted_at AS post_posted_at,
                           ch.identifier AS channel_identifier
                      FROM comments cm
-                     JOIN posts p ON p.id=cm.post_id
-                     JOIN channels ch ON ch.id=p.channel_id
+                    JOIN posts p ON p.id=cm.post_id
+                    JOIN channels ch ON ch.id=p.channel_id
                     WHERE (? IS NULL OR p.channel_id=?)
+                      AND (? IS NOT NULL OR ch.active=1)
                     ORDER BY cm.posted_at DESC, cm.id DESC""",
-                (channel_id, channel_id),
+                (channel_id, channel_id, channel_id),
             ).fetchall()
 
     # ---------- queries for admin panel / commands ----------
@@ -353,11 +354,12 @@ class Database:
         LEFT JOIN dayago d ON d.post_id = p.id
         LEFT JOIN firstsnap f ON f.post_id = p.id
         WHERE (? IS NULL OR p.channel_id = ?)
+          AND (? IS NOT NULL OR c.active=1)
         ORDER BY {self._ORDER_SQL.get(order, 'p.posted_at DESC')}
         LIMIT ?
         """
         with self.conn() as c:
-            return c.execute(sql, (channel_id, channel_id, limit)).fetchall()
+            return c.execute(sql, (channel_id, channel_id, channel_id, limit)).fetchall()
 
     def kpis(self, channel_id: int | None = None) -> dict[str, Any]:
         sql = _LATEST_CTE + """
@@ -368,18 +370,25 @@ class Database:
                COALESCE(SUM(l.shares),0) AS shares,
                (SELECT COUNT(*) FROM comments cm
                   JOIN posts cp ON cp.id=cm.post_id
-                 WHERE cm.is_deleted=0 AND (? IS NULL OR cp.channel_id=?)) AS collected_comments,
+                  JOIN channels ccp ON ccp.id=cp.channel_id
+                 WHERE cm.is_deleted=0 AND (? IS NULL OR cp.channel_id=?)
+                   AND (? IS NOT NULL OR ccp.active=1)) AS collected_comments,
                (SELECT MAX(s.taken_at) FROM snapshots s
                   JOIN posts pp ON pp.id = s.post_id
-                 WHERE (? IS NULL OR pp.channel_id = ?)) AS last_poll
+                  JOIN channels cpp ON cpp.id=pp.channel_id
+                 WHERE (? IS NULL OR pp.channel_id = ?)
+                   AND (? IS NOT NULL OR cpp.active=1)) AS last_poll
         FROM posts p
+        JOIN channels c ON c.id=p.channel_id
         LEFT JOIN latest l ON l.post_id = p.id
         WHERE (? IS NULL OR p.channel_id = ?)
+          AND (? IS NOT NULL OR c.active=1)
         """
         with self.conn() as c:
             r = c.execute(
                 sql,
-                (channel_id, channel_id, channel_id, channel_id, channel_id, channel_id),
+                (channel_id, channel_id, channel_id, channel_id, channel_id, channel_id,
+                 channel_id, channel_id, channel_id),
             ).fetchone()
             return dict(r) if r else {}
 
@@ -414,17 +423,19 @@ class Database:
                           SUM(CASE WHEN length(p.text) = 500 THEN 1 ELSE 0 END) AS posts_at_500,
                           MIN(p.posted_at) AS oldest_post, MAX(p.posted_at) AS newest_post,
                           COUNT(DISTINCT p.channel_id) AS channels
-                     FROM posts p
-                    WHERE (? IS NULL OR p.channel_id=?)""",
-                (channel_id, channel_id),
+                     FROM posts p JOIN channels c ON c.id=p.channel_id
+                    WHERE (? IS NULL OR p.channel_id=?)
+                      AND (? IS NOT NULL OR c.active=1)""",
+                (channel_id, channel_id, channel_id),
             ).fetchone()
             channels = c.execute(
                 """SELECT p.channel_id, c.identifier, COUNT(*) AS posts_at_500
                      FROM posts p JOIN channels c ON c.id=p.channel_id
                     WHERE p.text IS NOT NULL AND length(p.text)=500
                       AND (? IS NULL OR p.channel_id=?)
+                      AND (? IS NOT NULL OR c.active=1)
                     GROUP BY p.channel_id, c.identifier ORDER BY p.channel_id""",
-                (channel_id, channel_id),
+                (channel_id, channel_id, channel_id),
             ).fetchall()
         return {
             "total_posts": int(row["total_posts"] or 0),
@@ -447,9 +458,11 @@ class Database:
         with self.conn() as c:
             if days is None:
                 first = c.execute(
-                    """SELECT MIN(substr(posted_at,1,10)) AS day FROM posts
-                        WHERE (? IS NULL OR channel_id=?)""",
-                    (channel_id, channel_id),
+                    """SELECT MIN(substr(p.posted_at,1,10)) AS day FROM posts p
+                        JOIN channels c ON c.id=p.channel_id
+                        WHERE (? IS NULL OR p.channel_id=?)
+                          AND (? IS NOT NULL OR c.active=1)""",
+                    (channel_id, channel_id, channel_id),
                 ).fetchone()
                 start_day = (first["day"] if first else None) or utcnow().strftime("%Y-%m-%d")
                 start_date = datetime.strptime(start_day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -467,18 +480,23 @@ class Database:
                 SELECT p.channel_id AS ch, s.taken_at, s.post_id, s.views, s.comments, s.reactions, s.shares
                 FROM snapshots s
                 JOIN posts p ON p.id = s.post_id
+                JOIN channels c ON c.id=p.channel_id
                 WHERE (? IS NULL OR p.channel_id = ?)
+                  AND (? IS NOT NULL OR c.active=1)
                 ORDER BY s.taken_at ASC, s.id ASC
                 """,
-                (channel_id, channel_id),
+                (channel_id, channel_id, channel_id),
             ).fetchall()
             new_posts = {
                 r["day"]: r["n"]
                 for r in c.execute(
                     """SELECT substr(posted_at,1,10) AS day, COUNT(*) AS n FROM posts
-                       WHERE (? IS NULL OR channel_id = ?) AND posted_at >= ?
+                       JOIN channels c ON c.id=posts.channel_id
+                       WHERE (? IS NULL OR posts.channel_id = ?)
+                         AND (? IS NOT NULL OR c.active=1)
+                         AND posted_at >= ?
                        GROUP BY day""",
-                    (channel_id, channel_id, since),
+                    (channel_id, channel_id, channel_id, since),
                 ).fetchall()
             }
 

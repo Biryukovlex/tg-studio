@@ -540,7 +540,9 @@ class PostgresDatabase:
                       ch.identifier AS channel_identifier
                FROM comments cm JOIN posts p ON p.id=cm.post_id AND p.workspace_id=cm.workspace_id
                JOIN channels ch ON ch.id=p.channel_id AND ch.workspace_id=p.workspace_id
-               WHERE cm.workspace_id=:workspace_id AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+               WHERE cm.workspace_id=:workspace_id
+                 AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+                 AND (CAST(:channel_id AS bigint) IS NOT NULL OR ch.active=true)
                ORDER BY cm.posted_at DESC, cm.id DESC""",
             {"channel_id": channel_id},
         )
@@ -583,7 +585,9 @@ class PostgresDatabase:
           FROM posts p JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
           LEFT JOIN latest l ON l.workspace_id=p.workspace_id AND l.post_id=p.id
           LEFT JOIN dayago d ON d.post_id=p.id LEFT JOIN firstsnap f ON f.post_id=p.id
-         WHERE p.workspace_id=:workspace_id AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+         WHERE p.workspace_id=:workspace_id
+           AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+           AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
          ORDER BY {self._ORDER_SQL.get(order, 'p.posted_at DESC')} LIMIT :limit"""
         result = await self._execute(sql, {"channel_id": channel_id, "limit": max(1, min(int(limit), 100000))})
         return [dict(row) for row in result.mappings().all()]
@@ -594,12 +598,19 @@ class PostgresDatabase:
                COALESCE(SUM(l.views),0) AS views, COALESCE(SUM(l.comments),0) AS comments,
                COALESCE(SUM(l.reactions),0) AS reactions, COALESCE(SUM(l.shares),0) AS shares,
                (SELECT COUNT(*) FROM comments cm JOIN posts cp ON cp.id=cm.post_id AND cp.workspace_id=cm.workspace_id
+                 JOIN channels ccp ON ccp.id=cp.channel_id AND ccp.workspace_id=cp.workspace_id
                  WHERE cm.workspace_id=:workspace_id AND cm.is_deleted=false
-                   AND (CAST(:channel_id AS bigint) IS NULL OR cp.channel_id=CAST(:channel_id AS bigint))) AS collected_comments,
+                   AND (CAST(:channel_id AS bigint) IS NULL OR cp.channel_id=CAST(:channel_id AS bigint))
+                   AND (CAST(:channel_id AS bigint) IS NOT NULL OR ccp.active=true)) AS collected_comments,
                (SELECT MAX(s.taken_at) FROM snapshots s JOIN posts pp ON pp.id=s.post_id AND pp.workspace_id=s.workspace_id
-                 WHERE s.workspace_id=:workspace_id AND (CAST(:channel_id AS bigint) IS NULL OR pp.channel_id=CAST(:channel_id AS bigint))) AS last_poll
-          FROM posts p LEFT JOIN latest l ON l.workspace_id=p.workspace_id AND l.post_id=p.id
-         WHERE p.workspace_id=:workspace_id AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))"""
+                 JOIN channels cpp ON cpp.id=pp.channel_id AND cpp.workspace_id=pp.workspace_id
+                 WHERE s.workspace_id=:workspace_id AND (CAST(:channel_id AS bigint) IS NULL OR pp.channel_id=CAST(:channel_id AS bigint))
+                   AND (CAST(:channel_id AS bigint) IS NOT NULL OR cpp.active=true)) AS last_poll
+          FROM posts p JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
+          LEFT JOIN latest l ON l.workspace_id=p.workspace_id AND l.post_id=p.id
+         WHERE p.workspace_id=:workspace_id
+           AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+           AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)"""
         result = await self._execute(sql, {"channel_id": channel_id})
         row = result.mappings().first()
         return dict(row) if row else {}
@@ -634,8 +645,11 @@ class PostgresDatabase:
                 start_row = (
                     await session.execute(
                         text(
-                            """SELECT MIN(posted_at) FROM posts
-                               WHERE workspace_id=:workspace_id AND (CAST(:channel_id AS bigint) IS NULL OR channel_id=CAST(:channel_id AS bigint))"""
+                            """SELECT MIN(p.posted_at) FROM posts p
+                               JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
+                               WHERE p.workspace_id=:workspace_id
+                                 AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+                                 AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)"""
                         ),
                         {"workspace_id": workspace_id, "channel_id": channel_id},
                     )
@@ -649,7 +663,10 @@ class PostgresDatabase:
                     text(
                         """SELECT s.taken_at, s.post_id, s.views, s.comments, s.reactions, s.shares
                            FROM snapshots s JOIN posts p ON p.id=s.post_id AND p.workspace_id=s.workspace_id
-                          WHERE s.workspace_id=:workspace_id AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+                           JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
+                          WHERE s.workspace_id=:workspace_id
+                            AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+                            AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
                           ORDER BY s.taken_at ASC, s.id ASC"""
                     ),
                     {"workspace_id": workspace_id, "channel_id": channel_id},
@@ -658,9 +675,12 @@ class PostgresDatabase:
             new_rows = (
                 await session.execute(
                     text(
-                        """SELECT posted_at::date AS day, COUNT(*) AS n FROM posts
-                           WHERE workspace_id=:workspace_id AND (CAST(:channel_id AS bigint) IS NULL OR channel_id=CAST(:channel_id AS bigint))
-                             AND posted_at >= :since GROUP BY posted_at::date"""
+                        """SELECT p.posted_at::date AS day, COUNT(*) AS n FROM posts p
+                           JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
+                           WHERE p.workspace_id=:workspace_id
+                             AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+                             AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
+                             AND p.posted_at >= :since GROUP BY p.posted_at::date"""
                     ),
                     {"workspace_id": workspace_id, "channel_id": channel_id, "since": start_date},
                 )
@@ -702,8 +722,10 @@ class PostgresDatabase:
                       COUNT(DISTINCT p.channel_id) AS channels,
                       COALESCE(jsonb_agg(DISTINCT jsonb_build_object('channel_id', p.channel_id))
                                FILTER (WHERE char_length(p.text) = 500), '[]'::jsonb) AS channels_requiring_recollection
-                 FROM posts p WHERE p.workspace_id=:workspace_id
-                   AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))""",
+                 FROM posts p JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
+                WHERE p.workspace_id=:workspace_id
+                  AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+                  AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)""",
             {"channel_id": channel_id},
         )
         row = result.mappings().first()
