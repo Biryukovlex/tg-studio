@@ -409,7 +409,9 @@ export const DRAFT_CHARACTER_LIMIT = 4096;
 export const DRAFT_WARNING_THRESHOLD = 3800;
 
 export function draftPlainCharacterCount(body: string): number {
-  return Array.from(plainFromMarkdown(body)).length;
+  // JavaScript string length is UTF-16 code units, matching Telegram's
+  // message limit and the server-side count.
+  return plainFromMarkdown(body).length;
 }
 
 export function draftCounterState(body: string, serverCount?: number | null): { count: number; overLimit: boolean; warning: boolean } {
@@ -618,10 +620,10 @@ function DraftPanel({
         // The server-rendered HTML belongs to the previous body; until the
         // edit is saved, a rich copy must fall back to plain text.
         body_html: undefined,
-        character_count: Array.from(plain).length,
-        plain_character_count: Array.from(plain).length,
-        over_limit: Array.from(plain).length > 4096,
-        warning_threshold: Array.from(plain).length >= 3800,
+        character_count: plain.length,
+        plain_character_count: plain.length,
+        over_limit: plain.length > 4096,
+        warning_threshold: plain.length >= 3800,
         copied_at: null,
       };
     });

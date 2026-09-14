@@ -18,6 +18,7 @@ from .drafts import (
     MAX_DRAFT_CHARS,
     copy_allowed,
     input_from_row,
+    telegram_character_count,
     validate_draft_input,
 )
 
@@ -96,10 +97,11 @@ def _draft_public(row: dict[str, Any]) -> dict[str, Any]:
     plain = render_markdown_plain(body)
     data["body_plain"] = plain
     data["body_html"] = render_markdown_html(body)
-    data["plain_character_count"] = len(plain)
-    data["character_count"] = len(plain)
-    data["over_limit"] = len(plain) > MAX_DRAFT_CHARS
-    data["warning_threshold"] = len(plain) >= 3800
+    count = telegram_character_count(plain)
+    data["plain_character_count"] = count
+    data["character_count"] = count
+    data["over_limit"] = count > MAX_DRAFT_CHARS
+    data["warning_threshold"] = count >= 3800
     data["revision"] = int(data.get("revision") or 1)
     data["current_version"] = int(data.get("current_version") or 1)
     data["current_version_origin"] = str(data.get("current_version_origin") or "generated")
@@ -113,7 +115,12 @@ def _version_public(row: dict[str, Any]) -> dict[str, Any]:
     data["draft_id"] = str(data["draft_id"])
     data["version"] = int(data["version"])
     data["body"] = str(data.get("body") or "")
-    data["character_count"] = len(data["body"])
+    # New rows persist the authoritative UTF-16 count.  Recompute only for
+    # legacy rows that predate that field.
+    if data.get("character_count") is None:
+        data["character_count"] = telegram_character_count(render_markdown_plain(data["body"]))
+    else:
+        data["character_count"] = int(data["character_count"])
     if data.get("created_at") is not None:
         data["created_at"] = _iso(data["created_at"])
     return data

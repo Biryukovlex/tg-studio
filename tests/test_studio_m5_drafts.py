@@ -21,9 +21,9 @@ from pydantic_ai.models.test import TestModel
 
 @pytest.mark.parametrize(
     ("body", "expected"),
-    [("🙂" * 3, 3), ("a\n\nб", 4)],
+    [("🙂" * 3, 6), ("a\n\nб", 4)],
 )
-def test_server_counts_unicode_code_points_and_preserves_paragraphs(body, expected):
+def test_server_counts_telegram_utf16_units_and_preserves_paragraphs(body, expected):
     payload = validate_draft_input({"body": body, "creative": True}, require_sources=False)
     assert payload.body == body
     assert payload.character_count == expected

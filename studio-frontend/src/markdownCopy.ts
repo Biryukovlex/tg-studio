@@ -3,7 +3,7 @@
 // breaks. Headings, images and HTML are not part of the dialect and are
 // reduced to their text.
 
-const TAG_PATTERN = /<[a-zA-Z\/][^>]*>/g;
+const TAG_PATTERN = /<\/?(?:a|b|i|u|s|em|strong|code|pre|p|br|div|span|img|script|style|blockquote|h[1-6]|ul|ol|li|table|tr|td|th)\b(?:\s+[A-Za-z_:][\w:.-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))*\s*\/?>/gi;
 
 function isHttpUrl(url: string): string | null {
   const trimmed = url.trim();
@@ -54,8 +54,8 @@ function escapeHtml(value: string): string {
 }
 
 function inlineHtml(line: string): string {
-  // Strip markup outside the dialect, then escape, then turn dialect tokens
-  // into the tags Telegram understands on paste: <b> <i> <s> <code> <a>.
+  // Strip only real HTML tags outside the dialect, then escape once, then turn
+  // dialect tokens into the tags Telegram understands on paste.
   let source = line.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^\s*#{1,6}\s+/, "").replace(TAG_PATTERN, "");
   source = escapeHtml(source);
   source = source.replace(/`([^`]+)`/g, "<code>$1</code>");

@@ -452,7 +452,7 @@ def test_telegram_length_and_copy_fidelity_are_server_authoritative():
     body = "Заголовок\n\nСтрока с emoji 🙂 и точным переносом."
     payload = validate_draft_input({"body": body, "creative": True}, require_sources=False)
     assert payload.body == body
-    assert payload.character_count == len(body)
+    assert payload.character_count == len(body.encode("utf-16-le")) // 2
     assert copy_allowed(payload) is True
     over = validate_draft_input(
         {"body": "x" * 4_097, "creative": True}, require_sources=False

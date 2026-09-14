@@ -25,6 +25,12 @@ DraftOrigin = Literal["generated", "regenerated", "user_edit"]
 DraftConfidence = Literal["high", "medium", "low"]
 
 
+def telegram_character_count(value: str) -> int:
+    """Count Telegram-visible text as UTF-16 code units."""
+
+    return len(str(value or "").encode("utf-16-le")) // 2
+
+
 class DraftValidationError(ValueError):
     """A safe, user-actionable draft contract error."""
 
@@ -210,7 +216,7 @@ def validate_draft_input(
 
     warnings = _unique([str(item).strip()[:500] for item in parsed.warnings if str(item).strip()])
     plain = render_markdown_plain(parsed.body)
-    count = len(plain)
+    count = telegram_character_count(plain)
     over_limit = count > MAX_DRAFT_CHARS
     warning_threshold = count >= DRAFT_WARNING_CHARS
     if warning_threshold and "Approaching Telegram's 4,096-character limit." not in warnings and not over_limit:
