@@ -172,10 +172,10 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
       return;
     }
     setBuilding(true);
-    setStatus("Analyzing posts. This usually takes under a minute.");
+    setStatus("Analyzing posts. Compatibility retries can take up to 90 seconds.");
     setStatusIsError(false);
     try {
-      const result = await api<{ draft: { topics_text: string; editorial_text: string; style_text: string; built_from_posts: number } }>("/studio/api/profile/build", {
+      const result = await api<{ draft: { topics_text: string; editorial_text: string; style_text: string; built_from_posts: number; limitations?: string[] } }>("/studio/api/profile/build", {
         method: "POST",
         headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
         body: JSON.stringify({ channel_id: channelId }),
@@ -185,7 +185,10 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
       setEditorial(d.editorial_text ?? "");
       setStyle(d.style_text ?? "");
       setMode("edit");
-      setStatus("Build replaces the text in all three fields with a fresh analysis of your posts. Nothing is saved until you press Save.");
+      const usedLocalFallback = d.limitations?.some((item) => item.includes("built locally"));
+      setStatus(usedLocalFallback
+        ? "The model could not return a valid profile, so this draft was built locally from channel statistics. Review it before saving."
+        : "Build replaces the text in all three fields with a fresh analysis of your posts. Nothing is saved until you press Save.");
       setStatusIsError(false);
     } catch (e) {
       const message = e instanceof StudioApiError ? (e.payload.error?.message ?? "Could not build.") : "Could not build.";

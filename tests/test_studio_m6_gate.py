@@ -157,7 +157,7 @@ class _CollectorClient:
         return _CollectorEntity()
 
     async def iter_messages(self, entity, **kwargs):
-        assert kwargs.get("limit") is None
+        assert kwargs.get("limit") == 1
         yield _CollectorMessage()
 
 

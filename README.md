@@ -130,6 +130,14 @@ page together with the API ID and hash.
 
 > Channels, collection windows, provider keys, and research toggles are now configured at **/settings** in the web panel after login. The `.env` values for `CHANNELS`, `POLL_MINUTES`, `TRACK_DAYS`, `BACKFILL_LIMIT`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `STUDIO_SEARCH_ENABLED`, and `STUDIO_SEARCH_BLOCKED_DOMAINS` are optional first-start seeds; edit them in **/settings** afterwards.
 
+`TRACK_DAYS` selects which post ages are eligible for future refreshes, while
+`BACKFILL_LIMIT` caps the Telegram messages inspected for each channel during
+one sync (including a whole-history scan). Neither setting deletes an existing
+archive or limits its total stored row count. In **Settings → Telegram**, use
+**Deactivate** to stop collection while preserving data, or **Delete data** to
+permanently remove the channel, posts, statistics, comments, profile,
+conversations, agent history and drafts after typing the exact channel name.
+
 > In PostgreSQL mode `API_ID`, `API_HASH`, and `SESSION_STRING` are optional
 > fallbacks too. The application starts the authenticated web panel when no
 > Telegram connection is available. Open **/settings**, save the Telegram

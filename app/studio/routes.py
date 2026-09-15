@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from .observability import duration_ms, normalize_usage, safe_error_for_code
 from .run_ids import resolve_run_id
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "web" / "templates"))
+log = logging.getLogger("studio.routes")
 
 
 def _iso(value: Any) -> str | None:
@@ -586,16 +588,22 @@ def build_router() -> APIRouter:
             except ConversationNotFound:
                 return _safe_error("channel_not_found", "Channel not found.", status_code=404)
         try:
-            # Use asyncio.wait_for to enforce 45s provider timeout per spec
+            # Structured output may need a text-JSON compatibility retry on
+            # models that do not support tool-based output schemas.
             import asyncio
-            result = await asyncio.wait_for(service.build_profile_draft(payload.channel_id), timeout=45)
+            result = await asyncio.wait_for(service.build_profile_draft(payload.channel_id), timeout=100)
         except asyncio.TimeoutError:
             return _safe_error("profile_build_failed", "Profile build timed out. Your previous profile is unchanged. Retry shortly.", status_code=502, retryable=True)
         except Exception as exc:
-            code = getattr(exc, "code", "profile_build_failed")
             if "too few" in str(exc).lower():
                 return _safe_error("too_few_posts", str(exc), status_code=409)
-            return _safe_error("profile_build_failed", f"Profile build failed: {exc}", status_code=502, retryable=True)
+            log.exception("Channel profile build failed for channel_id=%s", payload.channel_id)
+            return _safe_error(
+                "profile_build_failed",
+                "Profile build failed before a draft could be created. Your previous profile is unchanged. Retry shortly.",
+                status_code=502,
+                retryable=True,
+            )
         return {"draft": result}
 
     @router.get("/api/conversations")

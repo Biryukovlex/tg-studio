@@ -2,11 +2,14 @@
 import asyncio
 import hashlib
 import json
+import logging
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.usage import UsageLimits
 from .model import build_model, model_name
 from .profile import TopicInsight, build_profile, validate_profile_evidence, _style
+
+log = logging.getLogger("studio.semantic_profile")
 
 SEMANTIC_PROFILE_VERSION = "channel.semantic.v1"
 _NOISE_LABELS = {"его", "она", "они", "это", "что", "для", "как", "него", "нее", "них",
@@ -162,6 +165,20 @@ class ProfileTextExtraction(BaseModel):
     style_rules: list[str] = Field(default_factory=list, max_length=20)
 
 
+def _parse_profile_json(raw: str) -> ProfileTextExtraction:
+    """Parse a JSON object even when a text-only model wraps it in prose/fences."""
+
+    text_value = str(raw or "").strip()
+    start = text_value.find("{")
+    end = text_value.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("The model did not return a JSON object")
+    value = ProfileTextExtraction.model_validate_json(text_value[start : end + 1])
+    if not any(str(line).strip() for line in value.topics):
+        raise ValueError("The model returned no channel topics")
+    return value
+
+
 def _dedupe_clean(lines, *, limit: int) -> tuple[list[str], int]:
     from .profile import _is_template_line, _sanitize_line
 
@@ -232,11 +249,12 @@ async def build_profile_text_draft(analytics, rows, settings, *, model=None, cur
             if str((current or {}).get(key) or "").strip()
         },
     }
+    selected_model = model or build_model(settings)
     agent = Agent(
-        model or build_model(settings),
+        selected_model,
         output_type=ProfileTextExtraction,
         instructions=PROFILE_TEXT_INSTRUCTIONS,
-        retries=2,
+        retries=1,
         model_settings={"max_tokens": 2_500, "temperature": 0.2},
     )
 
@@ -246,12 +264,53 @@ async def build_profile_text_draft(analytics, rows, settings, *, model=None, cur
             raise ModelRetry("Return at least one topic line in the form 'Name — one-sentence scope'.")
         return value
 
-    async with asyncio.timeout(40):
-        result = await agent.run(json.dumps(payload, ensure_ascii=False), usage_limits=UsageLimits(request_limit=3))
+    extraction: ProfileTextExtraction | None = None
+    try:
+        async with asyncio.timeout(55):
+            result = await agent.run(
+                json.dumps(payload, ensure_ascii=False),
+                usage_limits=UsageLimits(request_limit=2),
+            )
+        extraction = result.output
+    except Exception as exc:  # noqa: BLE001 - provider/model capability fallback
+        log.warning(
+            "Structured channel-profile extraction failed with %s; retrying as plain JSON",
+            type(exc).__name__,
+        )
 
-    topics, r1 = _dedupe_clean(result.output.topics, limit=160)
-    editorial, r2 = _dedupe_clean(result.output.editorial_rules, limit=200)
-    style_model, r3 = _dedupe_clean(result.output.style_rules, limit=300)
+    if extraction is None:
+        json_instructions = PROFILE_TEXT_INSTRUCTIONS + """
+
+This model may not support structured output. Return one JSON object and no commentary:
+{"topics":["Topic — scope"],"editorial_rules":["Rule"],"style_rules":["Rule"]}
+All three values must be JSON arrays of strings. Do not use Markdown fences around the JSON."""
+        plain_agent = Agent(
+            selected_model,
+            output_type=str,
+            instructions=json_instructions,
+            retries=1,
+            model_settings={"max_tokens": 2_500, "temperature": 0.2},
+        )
+        try:
+            async with asyncio.timeout(35):
+                plain_result = await plain_agent.run(
+                    json.dumps(payload, ensure_ascii=False),
+                    usage_limits=UsageLimits(request_limit=2),
+                )
+            extraction = _parse_profile_json(plain_result.output)
+        except Exception as exc:  # noqa: BLE001 - keep profile building available offline/degraded
+            log.warning(
+                "Plain-JSON channel-profile extraction failed with %s; using deterministic profile",
+                type(exc).__name__,
+            )
+            deterministic.limitations.append(
+                "The configured model could not return a valid profile; this draft was built locally from channel statistics."
+            )
+            return deterministic
+
+    topics, r1 = _dedupe_clean(extraction.topics, limit=160)
+    editorial, r2 = _dedupe_clean(extraction.editorial_rules, limit=200)
+    style_model, r3 = _dedupe_clean(extraction.style_rules, limit=300)
     fact_keys = {line.casefold() for line in fact_lines}
     style = list(fact_lines) + [line for line in style_model if line.casefold() not in fact_keys]
     limitations: list[str] = []

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -295,6 +296,16 @@ class PostgresDatabase:
         self.active_channel_count = len(rows)
         return rows
 
+    async def get_channels_for_settings(self) -> list[dict[str, Any]]:
+        """List active and deactivated channels so either can be purged."""
+
+        result = await self._execute(
+            """SELECT id, workspace_id, identifier, title, chat_id, active
+                 FROM channels WHERE workspace_id=:workspace_id
+                 ORDER BY active DESC, id"""
+        )
+        return [dict(row) for row in result.mappings().all()]
+
     async def add_channel(self, identifier: str) -> int:
         # Normalize identifier: strip, ensure non-empty, basic validation
         ident = normalize_channel_identifier(identifier)
@@ -326,6 +337,93 @@ class PostgresDatabase:
         )
         await self.get_channels()
         return bool(result.rowcount and result.rowcount > 0)
+
+    async def channel_data_summaries(self) -> dict[int, dict[str, int]]:
+        """Return deletion-impact counts for every workspace channel."""
+
+        result = await self._execute(
+            """SELECT c.id,
+                      (SELECT COUNT(*) FROM posts p
+                        WHERE p.workspace_id=c.workspace_id AND p.channel_id=c.id) AS posts,
+                      (SELECT COUNT(*) FROM comments cm
+                        JOIN posts p ON p.workspace_id=cm.workspace_id AND p.id=cm.post_id
+                       WHERE p.workspace_id=c.workspace_id AND p.channel_id=c.id) AS comments,
+                      (SELECT COUNT(*) FROM studio_conversations sc
+                        WHERE sc.workspace_id=c.workspace_id AND sc.channel_id=c.id) AS conversations,
+                      (SELECT COUNT(*) FROM studio_drafts sd
+                        WHERE sd.workspace_id=c.workspace_id AND sd.channel_id=c.id) AS drafts
+                 FROM channels c
+                WHERE c.workspace_id=:workspace_id
+                ORDER BY c.id"""
+        )
+        return {
+            int(row["id"]): {
+                "posts": int(row["posts"] or 0),
+                "comments": int(row["comments"] or 0),
+                "conversations": int(row["conversations"] or 0),
+                "drafts": int(row["drafts"] or 0),
+            }
+            for row in result.mappings().all()
+        }
+
+    async def delete_channel(self, channel_id: int, *, confirmation: str) -> dict[str, Any] | None:
+        """Permanently purge a channel and all dependent archive/Studio data.
+
+        The composite foreign keys below ``channels`` use ``ON DELETE
+        CASCADE`` (with nullable cross-links using ``SET NULL``), so one
+        workspace-scoped delete is both complete and atomic.  We lock the
+        parent row and validate the exact identifier inside the transaction.
+        """
+
+        async with self.sessions.session() as session:
+            channel = (
+                await session.execute(
+                    text(
+                        """SELECT id, identifier
+                             FROM channels
+                            WHERE workspace_id=:workspace_id AND id=:channel_id
+                            FOR UPDATE"""
+                    ),
+                    {"workspace_id": self._workspace(), "channel_id": channel_id},
+                )
+            ).mappings().first()
+            if channel is None:
+                return None
+            identifier = str(channel["identifier"])
+            if not secrets.compare_digest(confirmation.strip(), identifier):
+                raise ValueError(f"Type {identifier} exactly to confirm deletion.")
+
+            counts = (
+                await session.execute(
+                    text(
+                        """SELECT
+                              (SELECT COUNT(*) FROM posts p
+                                WHERE p.workspace_id=:workspace_id AND p.channel_id=:channel_id) AS posts,
+                              (SELECT COUNT(*) FROM comments cm
+                                JOIN posts p ON p.workspace_id=cm.workspace_id AND p.id=cm.post_id
+                               WHERE p.workspace_id=:workspace_id AND p.channel_id=:channel_id) AS comments,
+                              (SELECT COUNT(*) FROM studio_conversations sc
+                                WHERE sc.workspace_id=:workspace_id AND sc.channel_id=:channel_id) AS conversations,
+                              (SELECT COUNT(*) FROM studio_drafts sd
+                                WHERE sd.workspace_id=:workspace_id AND sd.channel_id=:channel_id) AS drafts"""
+                    ),
+                    {"workspace_id": self._workspace(), "channel_id": channel_id},
+                )
+            ).mappings().one()
+            await session.execute(
+                text("DELETE FROM channels WHERE workspace_id=:workspace_id AND id=:channel_id"),
+                {"workspace_id": self._workspace(), "channel_id": channel_id},
+            )
+            await session.commit()
+
+        await self.get_channels()
+        return {
+            "identifier": identifier,
+            "posts": int(counts["posts"] or 0),
+            "comments": int(counts["comments"] or 0),
+            "conversations": int(counts["conversations"] or 0),
+            "drafts": int(counts["drafts"] or 0),
+        }
 
     async def telegram_connection_secrets(self, label: str, *, cipher) -> dict[str, Any] | None:
         """Server-side read of the stored connection so a partial edit can be merged.

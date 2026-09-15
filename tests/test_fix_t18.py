@@ -93,6 +93,69 @@ async def test_existing_guidelines_and_sanitized_posts_reach_the_model():
     assert "обычный текст" in seen["prompt"]
 
 
+@pytest.mark.asyncio
+async def test_profile_build_retries_as_plain_json_when_structured_output_is_unsupported(monkeypatch):
+    from types import SimpleNamespace
+    import app.studio.semantic_profile as semantic_profile
+
+    rows = _rows(8)
+    analytics = analyze_posts(rows, 1, now=datetime.now(timezone.utc), identifier="@test")
+
+    class CompatibilityAgent:
+        def __init__(self, _model, *, output_type, **_kwargs):
+            self.output_type = output_type
+
+        def output_validator(self, function):
+            return function
+
+        async def run(self, _prompt, **_kwargs):
+            if self.output_type is not str:
+                raise RuntimeError("tool calling is not supported")
+            return SimpleNamespace(output='```json\n{"topics":["Городской бюджет — решения и голосования"],"editorial_rules":["Проверять факты."],"style_rules":["Писать прямо."]}\n```')
+
+    monkeypatch.setattr(semantic_profile, "Agent", CompatibilityAgent)
+    draft = await build_profile_text_draft(
+        analytics,
+        rows,
+        _settings(studio_test_mode=False, openrouter_api_key="synthetic-key"),
+        model=object(),
+    )
+
+    assert draft.topics == ["Городской бюджет — решения и голосования"]
+    assert "Проверять факты." in draft.editorial_rules
+    assert "Писать прямо." in draft.style_rules
+
+
+@pytest.mark.asyncio
+async def test_profile_build_falls_back_locally_when_provider_modes_fail(monkeypatch):
+    import app.studio.semantic_profile as semantic_profile
+
+    rows = _rows(8)
+    analytics = analyze_posts(rows, 1, now=datetime.now(timezone.utc), identifier="@test")
+
+    class FailingAgent:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def output_validator(self, function):
+            return function
+
+        async def run(self, _prompt, **_kwargs):
+            raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(semantic_profile, "Agent", FailingAgent)
+    draft = await build_profile_text_draft(
+        analytics,
+        rows,
+        _settings(studio_test_mode=False, openrouter_api_key="synthetic-key"),
+        model=object(),
+    )
+
+    assert draft.topics
+    assert draft.built_from_posts == 8
+    assert any("built locally" in item for item in draft.limitations)
+
+
 def test_fit_field_lines_respects_dialog_and_api_limits():
     from app.studio.profile import fit_field_lines
 

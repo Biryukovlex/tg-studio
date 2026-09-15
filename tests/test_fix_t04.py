@@ -40,6 +40,7 @@ class FakeClient:
     def __init__(self, posts):
         self.posts = posts
         self.calls = 0
+        self.main_limits = []
 
     async def get_entity(self, ident):
         return FakeEntity()
@@ -55,6 +56,7 @@ class FakeClient:
                 if False:
                     yield
                 return
+            self.main_limits.append(limit)
             for p in self.posts:
                 yield p
         return gen()
@@ -122,6 +124,26 @@ async def test_poll_channel_continues_after_comment_rpc_error():
     assert seen == 3
     assert written == 3
     assert c_errors == 1  # one failed comment thread
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backfill_limit, expected", [(100, 100), (0, None)])
+async def test_whole_history_full_scan_honours_backfill_limit(backfill_limit, expected):
+    client = FakeClient([])
+    db = FakeDB()
+    settings = Settings(
+        api_id=1,
+        api_hash="h",
+        session_string="s",
+        channels="@test",
+        track_days=0,
+        backfill_limit=backfill_limit,
+    )
+    collector = Collector(client, db, settings)
+
+    await collector.poll_channel({"id": 1, "identifier": "@test"})
+
+    assert client.main_limits == [expected]
 
 
 @pytest.mark.asyncio

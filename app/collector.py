@@ -207,7 +207,10 @@ class Collector:
             last = self._last_full_scan.get(ch["id"])
             if last is None or (now - last).total_seconds() >= full_hours * 3600:
                 cutoff = None
-                limit = None
+                # A whole-history scan changes the date boundary, not the
+                # operator's explicit per-sync message cap.  ``0`` remains
+                # the only way to request an unlimited scan.
+                limit = self.settings.backfill_limit if self.settings.backfill_limit > 0 else None
                 is_full_scan = True
             else:
                 recent_minutes = max(float(self.settings.poll_minutes) * 2, 60)

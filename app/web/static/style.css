@@ -839,13 +839,39 @@ input[type="number"]:focus, textarea:focus { border-color: var(--cyan); box-shad
 .pill.pending { color: var(--coral); border-color: rgba(255, 113, 106, .4); background: rgba(255, 113, 106, .06); }
 .subsection-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px 22px 8px; border-top: 1px solid var(--line-strong); }
 .subsection-heading h3 { margin: 0; color: var(--text); font-size: 14px; letter-spacing: -.01em; }
-.settings-table { min-width: 640px; }
-.settings-table .col-actions { width: 130px; }
+.settings-table { min-width: 860px; }
+.settings-table .col-actions { width: 220px; }
 .settings-table .channel-id { color: var(--text) !important; font-weight: 550; }
 .settings-table .muted-cell { color: var(--muted) !important; }
+.channel-data-summary { white-space: nowrap; color: var(--soft-text) !important; font-size: 10px; line-height: 1.55; }
+.channel-data-summary strong { color: var(--text); font-weight: 650; }
+.channel-data-summary span { color: var(--muted); }
+.channel-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .inline-add { display: flex; gap: 10px; padding: 14px 22px 18px; border-top: 1px solid var(--line); }
 .inline-add input { flex: 1; }
 .btn.ghost.danger:hover { color: var(--danger); border-color: var(--danger); }
+.btn.danger-solid { border-color: rgba(255, 111, 133, .7); background: var(--danger); color: #07121c; }
+.btn.danger-solid:hover { border-color: #ff9aaa; background: #ff8ba0; }
+.collection-archive-note { max-width: 760px; margin-top: 8px !important; color: var(--soft-text) !important; }
+.delete-channel-dialog {
+  width: min(500px, calc(100vw - 28px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 111, 133, .42);
+  border-radius: 18px;
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .62);
+}
+.delete-channel-dialog::backdrop { background: rgba(1, 8, 14, .78); backdrop-filter: blur(6px); }
+.delete-dialog-copy { padding: 24px 24px 18px; border-bottom: 1px solid var(--line); }
+.delete-dialog-copy h3 { margin: 4px 0 10px; font-size: 20px; letter-spacing: -.025em; }
+.delete-dialog-copy p:last-child { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.delete-dialog-copy strong { color: var(--text); }
+.delete-channel-form { display: grid; gap: 12px; padding: 20px 24px 24px; }
+.delete-channel-form label { color: var(--soft-text); font-size: 11px; }
+.delete-channel-form code { color: var(--danger); font-size: 11px; }
+.delete-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; padding-top: 6px; }
 .banner.warn { border-color: rgba(255, 113, 106, .35); background: rgba(255, 113, 106, .06); color: var(--coral); }
 .field-note { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--coral); font-size: 11px; }
 .field-note i { font-size: 15px; }

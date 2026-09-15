@@ -76,6 +76,7 @@ class FakeDB:
         ]
         self._add_calls = []
         self._deactivate_calls = []
+        self._delete_calls = []
 
     async def get_channels(self):
         return [c for c in self._channels if c["active"]]
@@ -101,6 +102,24 @@ class FakeDB:
                 c["active"] = False
                 return True
         return False
+
+    async def channel_data_summaries(self):
+        return {
+            c["id"]: {"posts": c["id"] * 10, "comments": c["id"], "conversations": 2, "drafts": 1}
+            for c in self._channels
+            if c["active"]
+        }
+
+    async def delete_channel(self, channel_id, *, confirmation):
+        for index, channel in enumerate(self._channels):
+            if channel["id"] != channel_id:
+                continue
+            if confirmation.strip() != channel["identifier"]:
+                raise ValueError(f"Type {channel['identifier']} exactly to confirm deletion.")
+            self._delete_calls.append((channel_id, confirmation))
+            removed = self._channels.pop(index)
+            return {"identifier": removed["identifier"], "posts": 10, "comments": 1, "conversations": 2, "drafts": 1}
+        return None
 
     async def telegram_connection_status(self, label):
         return {"configured": True, "api_id": 123456, "has_session": True, "updated_at": "2026-09-05 14:02:00+00:00"}
@@ -400,6 +419,37 @@ async def test_channels_add_and_deactivate(tmp_path):
         # Invalid pattern -> 422
         resp = await client.post("/settings/channels/add", data={"identifier": "notvalid", "csrf_token": token})
         assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_channel_delete_requires_exact_confirmation_and_explains_archive_counts(tmp_path):
+    app, _, db = _make_app_with_fake(tmp_path, role="owner", available=True)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/login", data={"username": "admin", "password": "pw"})
+        page = await client.get("/settings")
+        token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+        assert "10</strong> posts · 1 comments" in page.text
+        assert "This is not a stored-post cap" in page.text
+        assert "Delete data" in page.text
+
+        mismatch = await client.post(
+            "/settings/channels/1/delete",
+            data={"csrf_token": token, "confirmation": "wrong"},
+        )
+        assert mismatch.status_code == 422
+        assert "Type @city_digest exactly" in mismatch.text
+        assert db._delete_calls == []
+
+        deleted = await client.post(
+            "/settings/channels/1/delete",
+            data={"csrf_token": token, "confirmation": "@city_digest"},
+            follow_redirects=False,
+        )
+        assert deleted.status_code == 303
+        assert db._delete_calls == [(1, "@city_digest")]
+        confirmation = await client.get("/settings")
+        assert "and all of its data were permanently deleted" in confirmation.text
 
 
 @pytest.mark.asyncio

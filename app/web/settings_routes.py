@@ -132,11 +132,24 @@ async def _page_context(
     settings = getattr(request.app.state, "settings", None)
 
     channels: list[dict[str, Any]] = []
-    if db is not None and hasattr(db, "get_channels"):
+    channel_reader = getattr(db, "get_channels_for_settings", None) or getattr(db, "get_channels", None)
+    if channel_reader is not None:
         try:
-            channels = [dict(row) for row in await maybe_await(db.get_channels())]
+            channels = [dict(row) for row in await maybe_await(channel_reader())]
         except Exception:  # noqa: BLE001 - render the page even when the channel query fails
             channels = []
+    summaries: dict[int, dict[str, int]] = {}
+    summary_reader = getattr(db, "channel_data_summaries", None)
+    if summary_reader is not None:
+        try:
+            summaries = dict(await maybe_await(summary_reader()))
+        except Exception:  # noqa: BLE001 - counts are explanatory, not required for setup
+            log.exception("Could not load channel archive counts for Settings")
+    for channel in channels:
+        channel["data_summary"] = summaries.get(
+            int(channel["id"]),
+            {"posts": 0, "comments": 0, "conversations": 0, "drafts": 0},
+        )
 
     connection = {"configured": False, "api_id": None, "has_session": False, "updated_at": None}
     if db is not None and hasattr(db, "telegram_connection_status"):
@@ -283,6 +296,44 @@ async def deactivate_channel(request: Request, channel_id: int):
         pass
     await db.deactivate_channel(channel_id)
     _flash(request, f"Channel {label} deactivated.", "telegram")
+    return _redirect("telegram")
+
+
+@router.post("/channels/{channel_id}/delete")
+async def delete_channel(request: Request, channel_id: int, confirmation: str = Form("")):
+    """Permanently delete one workspace channel and its dependent data."""
+
+    if (early := await _begin_write(request)) is not None:
+        return early
+    delete = getattr(request.app.state.db, "delete_channel", None)
+    if delete is None:
+        raise HTTPException(status_code=501, detail="Channel deletion is unavailable")
+    try:
+        deleted = await maybe_await(delete(channel_id, confirmation=confirmation))
+    except ValueError as exc:
+        return await _render(
+            request,
+            errors={"channel_delete": str(exc)},
+            values={"delete_channel_id": channel_id},
+            status_code=422,
+        )
+    if deleted is None:
+        return await _render(
+            request,
+            errors={"channel_delete": "Channel not found."},
+            values={"delete_channel_id": channel_id},
+            status_code=404,
+        )
+    label = str(deleted.get("identifier") or f"#{channel_id}")
+    log.info(
+        "Deleted channel %s from workspace: posts=%s comments=%s conversations=%s drafts=%s",
+        label,
+        deleted.get("posts", 0),
+        deleted.get("comments", 0),
+        deleted.get("conversations", 0),
+        deleted.get("drafts", 0),
+    )
+    _flash(request, f"Channel {label} and all of its data were permanently deleted.", "telegram")
     return _redirect("telegram")
 
 

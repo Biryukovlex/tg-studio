@@ -54,16 +54,16 @@
       <div>
         <p class="section-kicker">Telegram</p>
         <h2>Channels</h2>
-        <p class="panel-note">Public @username, t.me link, or numeric id. Deactivated channels keep their archived posts.</p>
+        <p class="panel-note">Public @username, t.me link, or numeric id. Deactivate stops collection but keeps the archive; Delete data permanently removes the channel and its complete archive and Studio workspace.</p>
       </div>
       <span class="row-count">{{ channels|length }} channel{% if channels|length != 1 %}s{% endif %}</span>
     </div>
     {% if available %}
     <div class="table-scroll">
       <table class="tbl settings-table">
-        <colgroup><col><col><col><col><col class="col-actions"></colgroup>
+        <colgroup><col><col><col><col><col><col class="col-actions"></colgroup>
         <thead>
-          <tr><th>Channel</th><th>Title</th><th>Chat id</th><th>Status</th><th class="actions-col">Action</th></tr>
+          <tr><th>Channel</th><th>Title</th><th>Chat id</th><th>Stored data</th><th>Status</th><th class="actions-col">Actions</th></tr>
         </thead>
         <tbody>
           {% for c in channels %}
@@ -71,22 +71,48 @@
             <td class="channel-id">{{ c.identifier }}</td>
             <td>{% if c.title %}{{ c.title }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
             <td class="number-cell">{% if c.chat_id %}{{ c.chat_id }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
+            <td class="channel-data-summary">
+              <strong>{{ c.data_summary.posts }}</strong> posts · {{ c.data_summary.comments }} comments<br>
+              <span>{{ c.data_summary.conversations }} conversations · {{ c.data_summary.drafts }} drafts</span>
+            </td>
             <td>
-              {% if c.chat_id %}
+              {% if not c.active %}
+              <span class="pill"><i class="mgc mgc-pause-circle-core-regular" aria-hidden="true"></i>Deactivated</span>
+              {% elif c.chat_id %}
               <span class="pill ok"><i class="mgc mgc-check-circle-core-regular" aria-hidden="true"></i>Collecting</span>
               {% else %}
               <span class="pill pending"><i class="mgc mgc-time-core-regular" aria-hidden="true"></i>Resolves on next sync</span>
               {% endif %}
             </td>
             <td class="actions-col">
-              <form method="post" action="/settings/channels/{{ c.id }}/deactivate" class="inline-form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-                <button type="submit" class="btn ghost small danger">Deactivate</button>
-              </form>
+              <div class="channel-actions">
+                {% if c.active %}<form method="post" action="/settings/channels/{{ c.id }}/deactivate" class="inline-form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                  <button type="submit" class="btn ghost small">Deactivate</button>
+                </form>{% endif %}
+                <button type="button" class="btn ghost small danger" data-delete-dialog-open="delete-channel-{{ c.id }}">Delete data</button>
+              </div>
+              <dialog class="delete-channel-dialog" id="delete-channel-{{ c.id }}" {% if errors.channel_delete and values.delete_channel_id == c.id %}open{% endif %}>
+                <div class="delete-dialog-copy">
+                  <p class="section-kicker">Permanent deletion</p>
+                  <h3>Delete {{ c.identifier }} and all its data?</h3>
+                  <p>This removes <strong>{{ c.data_summary.posts }} posts</strong>, {{ c.data_summary.comments }} comments, {{ c.data_summary.conversations }} Studio conversations and {{ c.data_summary.drafts }} drafts. This cannot be undone.</p>
+                </div>
+                <form method="post" action="/settings/channels/{{ c.id }}/delete" class="delete-channel-form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                  <label for="delete-confirmation-{{ c.id }}">Type <code>{{ c.identifier }}</code> to confirm</label>
+                  <input id="delete-confirmation-{{ c.id }}" name="confirmation" type="text" autocomplete="off" required autofocus {% if errors.channel_delete and values.delete_channel_id == c.id %}aria-invalid="true"{% endif %}>
+                  {% if errors.channel_delete and values.delete_channel_id == c.id %}<p class="field-error">{{ errors.channel_delete }}</p>{% endif %}
+                  <div class="delete-dialog-actions">
+                    <button type="button" class="btn ghost small" data-delete-dialog-close>Cancel</button>
+                    <button type="submit" class="btn small danger-solid">Permanently delete</button>
+                  </div>
+                </form>
+              </dialog>
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="5" class="empty-state">No channels yet. Add the first one below.</td></tr>
+          <tr><td colspan="6" class="empty-state">No channels yet. Add the first one below.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -100,9 +126,9 @@
     {% else %}
     <div class="table-scroll">
       <table class="tbl settings-table">
-        <colgroup><col><col><col><col><col class="col-actions"></colgroup>
+        <colgroup><col><col><col><col><col><col class="col-actions"></colgroup>
         <thead>
-          <tr><th>Channel</th><th>Title</th><th>Chat id</th><th>Status</th><th class="actions-col">Action</th></tr>
+          <tr><th>Channel</th><th>Title</th><th>Chat id</th><th>Stored data</th><th>Status</th><th class="actions-col">Action</th></tr>
         </thead>
         <tbody>
           {% for c in channels %}
@@ -110,8 +136,11 @@
             <td class="channel-id">{{ c.identifier }}</td>
             <td>{% if c.title %}{{ c.title }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
             <td class="number-cell">{% if c.chat_id %}{{ c.chat_id }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
+            <td class="channel-data-summary"><strong>{{ c.data_summary.posts }}</strong> posts · {{ c.data_summary.comments }} comments<br><span>{{ c.data_summary.conversations }} conversations · {{ c.data_summary.drafts }} drafts</span></td>
             <td>
-              {% if c.chat_id %}
+              {% if not c.active %}
+              <span class="pill"><i class="mgc mgc-pause-circle-core-regular" aria-hidden="true"></i>Deactivated</span>
+              {% elif c.chat_id %}
               <span class="pill ok"><i class="mgc mgc-check-circle-core-regular" aria-hidden="true"></i>Collecting</span>
               {% else %}
               <span class="pill pending"><i class="mgc mgc-time-core-regular" aria-hidden="true"></i>Resolves on next sync</span>
@@ -202,6 +231,7 @@
         <p class="section-kicker">Collection</p>
         <h2>Sync schedule and history</h2>
         <p class="panel-note">Changes apply on the collector's next cycle, at most one old interval away.</p>
+        <p class="panel-note collection-archive-note"><strong>These limits control future Telegram reads; they do not delete posts already stored.</strong> Use Delete data in the Telegram section to remove a channel archive.</p>
       </div>
     </div>
     {% if available %}
@@ -226,7 +256,7 @@
       <div class="field {% if errors.track_days %}has-error{% endif %}">
         <div class="field-label">
           <label class="field-name" for="track_days">History window</label>
-          <p class="field-help">Days of posts to keep refreshing. 0 = whole channel history.</p>
+          <p class="field-help">Age of posts eligible for future syncs. 100 means posts from the last 100 days; 0 means any age. Existing older posts stay archived.</p>
         </div>
         <div class="field-control">
           <input type="number" id="track_days" name="track_days" value="{{ values.track_days if values.track_days is defined else (ws_dict['collection.track_days'].value if ws_dict['collection.track_days'] is defined else '30') }}" min="0" max="3650" step="1" {% if errors.track_days %}aria-invalid="true"{% endif %}>
@@ -242,7 +272,7 @@
       <div class="field {% if errors.backfill_limit %}has-error{% endif %}">
         <div class="field-label">
           <label class="field-name" for="backfill_limit">Backfill limit</label>
-          <p class="field-help">Maximum posts fetched per channel per sync. 0 = unlimited.</p>
+          <p class="field-help">Maximum Telegram messages inspected per channel in each sync, including whole-history rescans. This is not a stored-post cap. 0 = unlimited.</p>
         </div>
         <div class="field-control">
           <input type="number" id="backfill_limit" name="backfill_limit" value="{{ values.backfill_limit if values.backfill_limit is defined else (ws_dict['collection.backfill_limit'].value if ws_dict['collection.backfill_limit'] is defined else '200') }}" min="0" max="100000" step="1" {% if errors.backfill_limit %}aria-invalid="true"{% endif %}>
@@ -278,11 +308,11 @@
         <div class="field-control"><input type="number" value="{{ ws_dict['collection.poll_minutes'].value if ws_dict['collection.poll_minutes'] is defined else '15' }}" disabled><p class="field-source"><span class="source-tag">from .env</span></p></div>
       </div>
       <div class="field">
-        <div class="field-label"><label class="field-name">History window</label><p class="field-help">Days of posts to keep refreshing. 0 = whole channel history.</p></div>
+        <div class="field-label"><label class="field-name">History window</label><p class="field-help">Age of posts eligible for future syncs. Existing older posts stay archived. 0 = any age.</p></div>
         <div class="field-control"><input type="number" value="{{ ws_dict['collection.track_days'].value if ws_dict['collection.track_days'] is defined else '30' }}" disabled><p class="field-source"><span class="source-tag">from .env</span></p></div>
       </div>
       <div class="field">
-        <div class="field-label"><label class="field-name">Backfill limit</label><p class="field-help">Maximum posts fetched per channel per sync. 0 = unlimited.</p></div>
+        <div class="field-label"><label class="field-name">Backfill limit</label><p class="field-help">Maximum Telegram messages inspected per channel per sync. This is not a stored-post cap. 0 = unlimited.</p></div>
         <div class="field-control"><input type="number" value="{{ ws_dict['collection.backfill_limit'].value if ws_dict['collection.backfill_limit'] is defined else '200' }}" disabled><p class="field-source"><span class="source-tag">from .env</span></p></div>
       </div>
     </div>

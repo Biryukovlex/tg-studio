@@ -69,7 +69,7 @@ class _AsyncDB:
 
 
 @pytest.mark.asyncio
-async def test_collector_uses_async_repository_and_unbounded_history_mode():
+async def test_collector_uses_async_repository_and_bounded_whole_history_mode():
     settings = Settings(
         api_id=1,
         api_hash="hash",
@@ -86,7 +86,7 @@ async def test_collector_uses_async_repository_and_unbounded_history_mode():
     assert summary["posts_seen"] == 1
     assert db.posts == ["a complete post body"]
     assert db.post_entities == [[{"type": "bold", "offset": 0, "length": 1}]]
-    assert client.message_kwargs == [{"limit": None}]
+    assert client.message_kwargs == [{"limit": 1}]
     assert db.jobs[0] == ("claim", 1)
     assert db.jobs[1][0:2] == ("finish", "job-1")
     assert db.jobs[1][2]["status"] == "succeeded"

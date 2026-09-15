@@ -90,6 +90,21 @@
     saveConfirmation.querySelector('.save-confirmation-close')?.addEventListener('click', dismiss);
   }
 
+  document.querySelectorAll('[data-delete-dialog-open]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const dialog = document.getElementById(button.dataset.deleteDialogOpen || '');
+      if (!(dialog instanceof HTMLDialogElement)) return;
+      dialog.showModal();
+      dialog.querySelector('input[name="confirmation"]')?.focus();
+    });
+  });
+  document.querySelectorAll('.delete-channel-dialog').forEach((dialog) => {
+    dialog.querySelector('[data-delete-dialog-close]')?.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+  });
+
   // Charts — read data from data-chart attributes to keep CSP script-src 'self'.
   function parseChartData(element) {
     const raw = element.getAttribute('data-chart') || element.dataset.chart;
