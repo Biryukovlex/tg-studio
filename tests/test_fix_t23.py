@@ -389,7 +389,6 @@ def test_saved_setting_animation_contract():
     script = (root / "app/web/static/app.js").read_text(encoding="utf-8")
     styles = (root / "app/web/static/style.css").read_text(encoding="utf-8")
     assert "data-save-confirmation" in script
-    assert "just-saved" in script
     assert "is-saved" in script
     assert "prefers-reduced-motion" in styles
     assert "save-confirmation-progress" in styles
@@ -402,9 +401,11 @@ def test_settings_save_uses_partial_panel_update_without_page_reload():
     assert "body: new FormData(form)" in script
     assert "new DOMParser()" in script
     assert "response.redirected" in script
-    assert "panel.replaceWith(nextPanel)" in script
+    assert "panel.replaceChildren(...updatedContents)" in script
     assert "activateSaveConfirmation(confirmation)" in script
     assert "window.location.reload" not in script
+    assert "just-saved" not in script
+    assert "settings-panel-saved" not in (root / "app/web/static/style.css").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

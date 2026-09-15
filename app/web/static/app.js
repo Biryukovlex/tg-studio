@@ -72,14 +72,12 @@
 
     requestAnimationFrame(() => {
       saveConfirmation.classList.add('is-visible');
-      target?.classList.add('just-saved');
       if (savedButton) {
         savedButton.textContent = 'Saved';
         savedButton.classList.add('is-saved');
       }
     });
 
-    window.setTimeout(() => target?.classList.remove('just-saved'), reducedMotion ? 0 : 1700);
     window.setTimeout(() => {
       if (savedButton && originalButtonText) {
         savedButton.textContent = originalButtonText;
@@ -133,8 +131,8 @@
         const nextPanel = nextDocument.getElementById(panel.id);
         if (!nextPanel) throw new Error('Updated settings section is missing from the response.');
 
-        nextPanel.classList.add('is-visible');
-        panel.replaceWith(nextPanel);
+        const updatedContents = [...nextPanel.childNodes].map((node) => document.importNode(node, true));
+        panel.replaceChildren(...updatedContents);
 
         const currentConfirmation = document.querySelector('[data-save-confirmation]');
         currentConfirmation?.remove();
@@ -145,7 +143,7 @@
           activateSaveConfirmation(confirmation);
         }
 
-        nextPanel.querySelector('[aria-invalid="true"]')?.focus({ preventScroll: true });
+        panel.querySelector('[aria-invalid="true"]')?.focus({ preventScroll: true });
       } catch {
         form.dataset.submitting = 'false';
         if (submitter) {
