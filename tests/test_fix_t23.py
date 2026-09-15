@@ -395,6 +395,18 @@ def test_saved_setting_animation_contract():
     assert "save-confirmation-progress" in styles
 
 
+def test_settings_save_uses_partial_panel_update_without_page_reload():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "app/web/static/app.js").read_text(encoding="utf-8")
+    assert "settingsStack.addEventListener('submit'" in script
+    assert "body: new FormData(form)" in script
+    assert "new DOMParser()" in script
+    assert "response.redirected" in script
+    assert "panel.replaceWith(nextPanel)" in script
+    assert "activateSaveConfirmation(confirmation)" in script
+    assert "window.location.reload" not in script
+
+
 @pytest.mark.asyncio
 async def test_channels_add_and_deactivate(tmp_path):
     app, ws, db = _make_app_with_fake(tmp_path, role="owner", available=True)

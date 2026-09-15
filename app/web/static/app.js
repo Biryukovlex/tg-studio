@@ -55,8 +55,8 @@
     });
   });
 
-  const saveConfirmation = document.querySelector('[data-save-confirmation]');
-  if (saveConfirmation) {
+  function activateSaveConfirmation(saveConfirmation) {
+    if (!saveConfirmation) return;
     const section = saveConfirmation.dataset.section;
     const target = section ? document.getElementById(section) : null;
     const savedButton = target?.querySelector('.form-actions button[type="submit"]');
@@ -90,19 +90,98 @@
     saveConfirmation.querySelector('.save-confirmation-close')?.addEventListener('click', dismiss);
   }
 
-  document.querySelectorAll('[data-delete-dialog-open]').forEach((button) => {
-    button.addEventListener('click', () => {
+  activateSaveConfirmation(document.querySelector('[data-save-confirmation]'));
+
+  const settingsStack = document.querySelector('.settings-stack');
+  if (settingsStack) {
+    settingsStack.addEventListener('submit', async (event) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== 'post') return;
+
+      const action = new URL(form.action, window.location.href);
+      if (action.origin !== window.location.origin || !action.pathname.startsWith('/settings/')) return;
+
+      event.preventDefault();
+      const panel = form.closest('.panel');
+      if (!panel?.id || form.dataset.submitting === 'true') return;
+
+      form.dataset.submitting = 'true';
+      const submitter = event.submitter instanceof HTMLButtonElement ? event.submitter : null;
+      if (submitter) {
+        submitter.disabled = true;
+        submitter.classList.add('is-busy');
+      }
+
+      try {
+        const response = await fetch(action, {
+          method: 'POST',
+          body: new FormData(form),
+          credentials: 'same-origin',
+          headers: { Accept: 'text/html' },
+        });
+        const responseURL = new URL(response.url, window.location.href);
+        if (response.redirected && (responseURL.origin !== window.location.origin || responseURL.pathname !== '/settings')) {
+          window.location.assign(response.url);
+          return;
+        }
+
+        if (!response.headers.get('content-type')?.includes('text/html')) {
+          throw new Error('Settings response is not HTML.');
+        }
+        const html = await response.text();
+        const nextDocument = new DOMParser().parseFromString(html, 'text/html');
+        const nextPanel = nextDocument.getElementById(panel.id);
+        if (!nextPanel) throw new Error('Updated settings section is missing from the response.');
+
+        nextPanel.classList.add('is-visible');
+        panel.replaceWith(nextPanel);
+
+        const currentConfirmation = document.querySelector('[data-save-confirmation]');
+        currentConfirmation?.remove();
+        const nextConfirmation = nextDocument.querySelector('[data-save-confirmation]');
+        if (nextConfirmation) {
+          const confirmation = document.importNode(nextConfirmation, true);
+          document.getElementById('main-content')?.prepend(confirmation);
+          activateSaveConfirmation(confirmation);
+        }
+
+        nextPanel.querySelector('[aria-invalid="true"]')?.focus({ preventScroll: true });
+      } catch {
+        form.dataset.submitting = 'false';
+        if (submitter) {
+          submitter.disabled = false;
+          submitter.classList.remove('is-busy');
+        }
+        panel.querySelector('[data-settings-save-error]')?.remove();
+        const message = document.createElement('div');
+        message.className = 'banner warn';
+        message.dataset.settingsSaveError = '';
+        message.setAttribute('role', 'alert');
+        message.textContent = 'Could not save these settings. Check the connection and try again.';
+        panel.prepend(message);
+      }
+    });
+  }
+
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-delete-dialog-open]');
+    if (button instanceof HTMLButtonElement) {
       const dialog = document.getElementById(button.dataset.deleteDialogOpen || '');
       if (!(dialog instanceof HTMLDialogElement)) return;
       dialog.showModal();
       dialog.querySelector('input[name="confirmation"]')?.focus();
-    });
-  });
-  document.querySelectorAll('.delete-channel-dialog').forEach((dialog) => {
-    dialog.querySelector('[data-delete-dialog-close]')?.addEventListener('click', () => dialog.close());
-    dialog.addEventListener('click', (event) => {
-      if (event.target === dialog) dialog.close();
-    });
+      return;
+    }
+
+    const closeButton = event.target.closest('[data-delete-dialog-close]');
+    if (closeButton instanceof HTMLButtonElement) {
+      closeButton.closest('dialog')?.close();
+      return;
+    }
+
+    if (event.target instanceof HTMLDialogElement && event.target.matches('.delete-channel-dialog')) {
+      event.target.close();
+    }
   });
 
   // Charts — read data from data-chart attributes to keep CSP script-src 'self'.
