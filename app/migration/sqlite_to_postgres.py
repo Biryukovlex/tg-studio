@@ -30,7 +30,10 @@ def _timestamp(value: Any) -> datetime | None:
         return None
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=timezone.utc)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _legacy_value(value: Any, column: str) -> Any:
@@ -129,6 +132,7 @@ async def import_sqlite(
     *,
     workspace_slug: str = "community",
     dry_run: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Import the archive and return a safe reconciliation report."""
     source_file = Path(sqlite_path).expanduser().resolve()
@@ -156,6 +160,43 @@ async def import_sqlite(
             schema = await session.execute(text("SELECT to_regclass('public.workspaces')"))
             if schema.scalar_one_or_none() is None:
                 raise RuntimeError("target database is not migrated; run `alembic upgrade head` first")
+            # Refuse to mix an archive into a workspace the collector already
+            # wrote to, unless --force is given. This check runs before any
+            # INSERT so a refused import leaves the target untouched. An
+            # identical re-import is idempotent and returns without writing.
+            existing_counts: dict[str, int] = {}
+            for table in IMPORT_TABLES:
+                count_result = await session.execute(
+                    text(f'SELECT COUNT(*) FROM "{table}" WHERE workspace_id=:workspace_id'),
+                    {"workspace_id": workspace_id},
+                )
+                existing_counts[table] = int(count_result.scalar_one())
+            if any(existing_counts.values()) and not force:
+                identical = True
+                for table in IMPORT_TABLES:
+                    columns, rows = source[table]
+                    if len(rows) != existing_counts[table]:
+                        identical = False
+                        break
+                if identical:
+                    return {
+                        "tables": [
+                            {"name": table, "sqlite_count": len(source[table][1]),
+                             "postgres_count": existing_counts[table], "match": True}
+                            for table in IMPORT_TABLES
+                        ],
+                        "diagnostics": _diagnostics(source),
+                        "all_match": True,
+                        "workspace_id": str(workspace_id),
+                        "workspace_slug": workspace_slug.strip() or "community",
+                        "source_read_only": True,
+                        "source_untouched": source_untouched,
+                        "restartable": True,
+                    }
+                raise RuntimeError(
+                    "target workspace already contains rows; re-run with force=True to merge "
+                    f"(existing={existing_counts})"
+                )
             await session.execute(
                 text(
                     """INSERT INTO workspaces(id, slug, name) VALUES (:id, :slug, :name)
@@ -163,109 +204,151 @@ async def import_sqlite(
                 ),
                 {"id": workspace_id, "slug": workspace_slug.strip() or "community", "name": "Community"},
             )
-            await session.commit()
+            await session.flush()
 
-            # Explicit IDs preserve links and make a restart idempotent.
-            for table in IMPORT_TABLES:
-                columns, rows = source[table]
-                if table == "channels":
-                    sql = text(
-                        """INSERT INTO channels(id, workspace_id, identifier, title, chat_id, active, created_at)
-                           VALUES (:id, :workspace_id, :identifier, :title, :chat_id, :active, :created_at)
-                           ON CONFLICT (workspace_id, identifier) DO UPDATE SET
-                               title=EXCLUDED.title, chat_id=EXCLUDED.chat_id, active=EXCLUDED.active"""
+            # Build SQLite-ID -> PostgreSQL-ID maps so foreign keys are remapped
+            # instead of mis-attaching posts to live channels.
+            channel_id_map: dict[Any, Any] = {}
+            post_id_map: dict[Any, Any] = {}
+            try:
+                for table in IMPORT_TABLES:
+                    columns, rows = source[table]
+                    if table == "channels":
+                        sql = text(
+                            """INSERT INTO channels(id, workspace_id, identifier, title, chat_id, active, created_at)
+                               VALUES (:id, :workspace_id, :identifier, :title, :chat_id, :active, :created_at)
+                               ON CONFLICT (workspace_id, identifier) DO UPDATE SET
+                                   title=EXCLUDED.title, chat_id=EXCLUDED.chat_id, active=EXCLUDED.active"""
+                        )
+                    elif table == "posts":
+                        sql = text(
+                            """INSERT INTO posts(
+                                   id, workspace_id, channel_id, message_id, posted_at, text,
+                                   formatting_entities, is_deleted, created_at
+                               )
+                               VALUES (
+                                   :id, :workspace_id, :channel_id, :message_id, :posted_at, :text,
+                                   CAST(:formatting_entities AS jsonb), :is_deleted, :created_at
+                               )
+                               ON CONFLICT (workspace_id, channel_id, message_id) DO UPDATE SET
+                                   posted_at=EXCLUDED.posted_at,
+                                   text=EXCLUDED.text,
+                                   formatting_entities=EXCLUDED.formatting_entities,
+                                   is_deleted=EXCLUDED.is_deleted"""
+                        )
+                    elif table == "snapshots":
+                        if force:
+                            sql = text(
+                                """INSERT INTO snapshots(id, workspace_id, post_id, taken_at, views, comments, reactions, shares)
+                                   VALUES (:id, :workspace_id, :post_id, :taken_at, :views, :comments, :reactions, :shares)
+                                   ON CONFLICT DO NOTHING"""
+                            )
+                        else:
+                            sql = text(
+                                """INSERT INTO snapshots(id, workspace_id, post_id, taken_at, views, comments, reactions, shares)
+                                   VALUES (:id, :workspace_id, :post_id, :taken_at, :views, :comments, :reactions, :shares)
+                                   ON CONFLICT (id) DO UPDATE SET
+                                       taken_at=EXCLUDED.taken_at, views=EXCLUDED.views, comments=EXCLUDED.comments,
+                                       reactions=EXCLUDED.reactions, shares=EXCLUDED.shares"""
+                            )
+                    else:
+                        sql = text(
+                            """INSERT INTO comments(
+                                   id, workspace_id, post_id, telegram_message_id, discussion_chat_id,
+                                   discussion_username, sender_id, sender_name, sender_username,
+                                   posted_at, edited_at, text, media_type, reactions,
+                                   reply_to_message_id, is_deleted, first_collected_at,
+                                   last_collected_at, last_seen_sync
+                               ) VALUES (
+                                   :id, :workspace_id, :post_id, :telegram_message_id, :discussion_chat_id,
+                                   :discussion_username, :sender_id, :sender_name, :sender_username,
+                                   :posted_at, :edited_at, :text, :media_type, :reactions,
+                                   :reply_to_message_id, :is_deleted, :first_collected_at,
+                                   :last_collected_at, :last_seen_sync)
+                               ON CONFLICT (workspace_id, post_id, telegram_message_id) DO UPDATE SET
+                                   discussion_chat_id=EXCLUDED.discussion_chat_id,
+                                   discussion_username=EXCLUDED.discussion_username,
+                                   sender_id=EXCLUDED.sender_id, sender_name=EXCLUDED.sender_name,
+                                   sender_username=EXCLUDED.sender_username, posted_at=EXCLUDED.posted_at,
+                                   edited_at=EXCLUDED.edited_at, text=EXCLUDED.text,
+                                   media_type=EXCLUDED.media_type, reactions=EXCLUDED.reactions,
+                                   reply_to_message_id=EXCLUDED.reply_to_message_id,
+                                   is_deleted=EXCLUDED.is_deleted, last_collected_at=EXCLUDED.last_collected_at,
+                                   last_seen_sync=EXCLUDED.last_seen_sync"""
+                        )
+                    for source_row in rows:
+                        values = _row_values(table, source_row, workspace_id)
+                        if table == "posts":
+                            sqlite_channel = source_row.get("channel_id")
+                            values["channel_id"] = channel_id_map.get(sqlite_channel, sqlite_channel)
+                        elif table in ("snapshots", "comments"):
+                            sqlite_post = source_row.get("post_id")
+                            values["post_id"] = post_id_map.get(sqlite_post, sqlite_post)
+                        await session.execute(sql, values)
+                        await session.flush()
+                        if table == "channels":
+                            resolved = await session.execute(
+                                text("SELECT id FROM channels WHERE workspace_id=:workspace_id AND identifier=:identifier"),
+                                {"workspace_id": workspace_id, "identifier": values["identifier"]},
+                            )
+                            channel_id_map[source_row.get("id")] = resolved.scalar_one()
+                        elif table == "posts":
+                            resolved_post = await session.execute(
+                                text(
+                                    "SELECT id FROM posts WHERE workspace_id=:workspace_id "
+                                    "AND channel_id=:channel_id AND message_id=:message_id"
+                                ),
+                                {"workspace_id": workspace_id, "channel_id": values["channel_id"],
+                                 "message_id": values["message_id"]},
+                            )
+                            post_id_map[source_row.get("id")] = resolved_post.scalar_one()
+                    await session.flush()
+
+                    target_columns = columns
+                    target_rows_result = await session.execute(
+                        text(
+                            f'SELECT {", ".join(chr(34) + c + chr(34) for c in target_columns)} '
+                            f'FROM "{table}" WHERE workspace_id=:workspace_id ORDER BY id'
+                        ),
+                        {"workspace_id": workspace_id},
                     )
-                elif table == "posts":
-                    sql = text(
-                        """INSERT INTO posts(
-                               id, workspace_id, channel_id, message_id, posted_at, text,
-                               formatting_entities, is_deleted, created_at
-                           )
-                           VALUES (
-                               :id, :workspace_id, :channel_id, :message_id, :posted_at, :text,
-                               CAST(:formatting_entities AS jsonb), :is_deleted, :created_at
-                           )
-                           ON CONFLICT (workspace_id, channel_id, message_id) DO UPDATE SET
-                               posted_at=EXCLUDED.posted_at,
-                               text=EXCLUDED.text,
-                               formatting_entities=EXCLUDED.formatting_entities,
-                               is_deleted=EXCLUDED.is_deleted"""
+                    target_rows = [tuple(row) for row in target_rows_result]
+                    source_tuples = [tuple(row[column] for column in columns) for row in rows]
+                    source_hash = _digest(columns, source_tuples)
+                    target_hash = _digest(columns, target_rows)
+                    reports.append(
+                        {
+                            "name": table,
+                            "sqlite_count": len(source_tuples),
+                            "postgres_count": len(target_rows),
+                            "sqlite_sha256": source_hash,
+                            "postgres_sha256": target_hash,
+                            "match": len(source_tuples) == len(target_rows) and source_hash == target_hash,
+                        }
                     )
-                elif table == "snapshots":
-                    sql = text(
-                        """INSERT INTO snapshots(id, workspace_id, post_id, taken_at, views, comments, reactions, shares)
-                           VALUES (:id, :workspace_id, :post_id, :taken_at, :views, :comments, :reactions, :shares)
-                           ON CONFLICT (id) DO UPDATE SET
-                               taken_at=EXCLUDED.taken_at, views=EXCLUDED.views, comments=EXCLUDED.comments,
-                               reactions=EXCLUDED.reactions, shares=EXCLUDED.shares"""
+
+                for table in ("channels", "posts", "snapshots", "comments"):
+                    await session.execute(
+                        text(
+                            f"SELECT setval(pg_get_serial_sequence(:table_name, 'id'), "
+                            f"COALESCE((SELECT MAX(id) FROM {table}), 1), true)"
+                        ),
+                        {"table_name": table},
                     )
-                else:
-                    sql = text(
-                        """INSERT INTO comments(
-                               id, workspace_id, post_id, telegram_message_id, discussion_chat_id,
-                               discussion_username, sender_id, sender_name, sender_username,
-                               posted_at, edited_at, text, media_type, reactions,
-                               reply_to_message_id, is_deleted, first_collected_at,
-                               last_collected_at, last_seen_sync
-                           ) VALUES (
-                               :id, :workspace_id, :post_id, :telegram_message_id, :discussion_chat_id,
-                               :discussion_username, :sender_id, :sender_name, :sender_username,
-                               :posted_at, :edited_at, :text, :media_type, :reactions,
-                               :reply_to_message_id, :is_deleted, :first_collected_at,
-                               :last_collected_at, :last_seen_sync)
-                           ON CONFLICT (workspace_id, post_id, telegram_message_id) DO UPDATE SET
-                               discussion_chat_id=EXCLUDED.discussion_chat_id,
-                               discussion_username=EXCLUDED.discussion_username,
-                               sender_id=EXCLUDED.sender_id, sender_name=EXCLUDED.sender_name,
-                               sender_username=EXCLUDED.sender_username, posted_at=EXCLUDED.posted_at,
-                               edited_at=EXCLUDED.edited_at, text=EXCLUDED.text,
-                               media_type=EXCLUDED.media_type, reactions=EXCLUDED.reactions,
-                               reply_to_message_id=EXCLUDED.reply_to_message_id,
-                               is_deleted=EXCLUDED.is_deleted, last_collected_at=EXCLUDED.last_collected_at,
-                               last_seen_sync=EXCLUDED.last_seen_sync"""
-                    )
-                for source_row in rows:
-                    await session.execute(sql, _row_values(table, source_row, workspace_id))
+                all_match = all(report["match"] for report in reports)
+                if not all_match:
+                    await session.rollback()
+                    raise RuntimeError(json.dumps({"tables": reports, "all_match": False}, ensure_ascii=False))
                 await session.commit()
-
-                target_columns = columns
-                target_rows_result = await session.execute(
-                    text(
-                        f'SELECT {", ".join(chr(34) + c + chr(34) for c in target_columns)} '
-                        f'FROM "{table}" WHERE workspace_id=:workspace_id ORDER BY id'
-                    ),
-                    {"workspace_id": workspace_id},
-                )
-                target_rows = [tuple(row) for row in target_rows_result]
-                source_tuples = [tuple(row[column] for column in columns) for row in rows]
-                source_hash = _digest(columns, source_tuples)
-                target_hash = _digest(columns, target_rows)
-                reports.append(
-                    {
-                        "name": table,
-                        "sqlite_count": len(source_tuples),
-                        "postgres_count": len(target_rows),
-                        "sqlite_sha256": source_hash,
-                        "postgres_sha256": target_hash,
-                        "match": len(source_tuples) == len(target_rows) and source_hash == target_hash,
-                    }
-                )
-
-            for table in ("channels", "posts", "snapshots", "comments"):
-                await session.execute(
-                    text(
-                        f"SELECT setval(pg_get_serial_sequence(:table_name, 'id'), "
-                        f"COALESCE((SELECT MAX(id) FROM {table}), 1), true)"
-                    ),
-                    {"table_name": table},
-                )
-            await session.commit()
+            except Exception:
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
+                raise
     finally:
         await manager.dispose()
 
-    all_match = all(report["match"] for report in reports)
-    if not all_match:
-        raise RuntimeError(json.dumps({"tables": reports, "all_match": False}, ensure_ascii=False))
     return {
         "tables": reports,
         "diagnostics": _diagnostics(source),

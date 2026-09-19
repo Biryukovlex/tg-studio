@@ -198,7 +198,7 @@ class Collector:
         cutoff = None
         is_full_scan = False
         if self.settings.track_days > 0:
-            cutoff = utcnow().replace(tzinfo=None) - timedelta(days=self.settings.track_days)
+            cutoff = utcnow() - timedelta(days=self.settings.track_days)
             limit = self.settings.backfill_limit if self.settings.backfill_limit > 0 else None
         else:
             # Whole-history mode with pacing: full scan only every FULL_RESCAN_HOURS
@@ -214,7 +214,7 @@ class Collector:
                 is_full_scan = True
             else:
                 recent_minutes = max(float(self.settings.poll_minutes) * 2, 60)
-                cutoff = utcnow().replace(tzinfo=None) - timedelta(minutes=recent_minutes)
+                cutoff = utcnow() - timedelta(minutes=recent_minutes)
                 limit = self.settings.backfill_limit if self.settings.backfill_limit > 0 else None
 
         # has_comments optimization: fetch post IDs with comments in one query
@@ -236,7 +236,8 @@ class Collector:
                 continue
             if msg.date is None:
                 continue
-            if cutoff is not None and msg.date.replace(tzinfo=None) < cutoff:
+            msg_date = msg.date if msg.date.tzinfo else msg.date.replace(tzinfo=timezone.utc)
+            if cutoff is not None and msg_date < cutoff:
                 break
             seen += 1
             # renew lease every 60s during long scans

@@ -91,18 +91,22 @@ def utcnow() -> datetime:
 
 
 def fmt_ts(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 class Database:
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, read_only: bool = False) -> None:
         self.path: str = str(db_path)
+        self.read_only: bool = bool(read_only)
 
     @contextmanager
     def conn(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self.path, timeout=30)
         con.row_factory = sqlite3.Row
-        con.execute("PRAGMA journal_mode=WAL")
+        if not self.read_only:
+            con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA foreign_keys=ON")
         try:
             yield con

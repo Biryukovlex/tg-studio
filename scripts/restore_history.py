@@ -24,6 +24,7 @@ from telethon.sessions import StringSession
 from app.collector import Collector
 from app.config import Settings, load_settings
 from app.db import Database
+from app.migration.sqlite_inventory import _read_only_connection
 from app.postgres_db import PostgresDatabase
 from app.session_crypto import build_cipher
 
@@ -31,9 +32,20 @@ from app.session_crypto import build_cipher
 def _diagnostic(settings: Settings) -> dict:
     if settings.postgres_enabled:
         return {"message": "use --run for PostgreSQL diagnostics after startup", "storage": "postgresql"}
-    db = Database(settings.db_path)
-    db.init_db()
-    return {"storage": "sqlite", **db.history_diagnostic()}
+    archive = settings.db_path
+    with _read_only_connection(archive) as connection:
+        posts = connection.execute("SELECT COUNT(*) AS n FROM posts").fetchone()["n"]
+        oldest = connection.execute("SELECT MIN(posted_at) AS v FROM posts").fetchone()["v"]
+        newest = connection.execute("SELECT MAX(posted_at) AS v FROM posts").fetchone()["v"]
+        channels = connection.execute("SELECT COUNT(*) AS n FROM channels").fetchone()["n"]
+    return {
+        "storage": "sqlite",
+        "read_only": True,
+        "total_posts": int(posts or 0),
+        "oldest_post": oldest,
+        "newest_post": newest,
+        "channels": int(channels or 0),
+    }
 
 
 async def _run(settings: Settings) -> dict:

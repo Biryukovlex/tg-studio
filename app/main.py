@@ -88,6 +88,14 @@ async def amain() -> None:
         if not settings.channel_list and not await db.get_channels():
             log.warning("No channels configured yet - add one at /settings after signing in.")
     else:
+        if not settings.allow_legacy_sqlite:
+            print(
+                "\nConfiguration problem: DATABASE_URL is empty. PostgreSQL is the only runtime; "
+                "set DATABASE_URL and run `alembic upgrade head`, or import a legacy archive with "
+                "`scripts/migrate_sqlite_to_postgres.py`. Local SQLite mode requires ALLOW_LEGACY_SQLITE=1.\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         db = Database(settings.db_path)
         db.init_db()
 

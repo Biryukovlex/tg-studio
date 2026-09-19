@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     # pre-M1 local SQLite mode until the operator completes the import.
     database_url: str = ""
     telegram_session_encryption_key: str = ""
+    allow_legacy_sqlite: bool = False
 
     @field_validator("api_id", mode="before")
     @classmethod

@@ -28,6 +28,7 @@ def _add_if_missing(table: str, column: sa.Column) -> None:
 
 
 def upgrade() -> None:
+    op.execute(sa.text("SET LOCAL TIME ZONE 'UTC'"))
     op.create_table(
         "workspaces",
         sa.Column("id", sa.UUID(as_uuid=True), nullable=False),
@@ -210,9 +211,10 @@ def downgrade() -> None:
     composite keys in place.  A downgrade must remove those additions before
     Alembic runs the M0 downgrade (which drops the archive tables and its
     indexes).  Text casts intentionally keep the values readable and avoid a
-    lossy epoch conversion; identity columns remain BIGINT because narrowing
+    lossy epoch conversion;     identity columns remain BIGINT because narrowing
     them could overflow a live archive.
     """
+    op.execute(sa.text("SET LOCAL TIME ZONE 'UTC'"))
     op.drop_index("ix_collection_jobs_lease", table_name="collection_jobs")
     op.drop_index("uq_collection_jobs_active_channel", table_name="collection_jobs")
     op.drop_table("collection_jobs")
