@@ -452,6 +452,18 @@ class PostgresDatabase:
         configured = bool(api_id and has_session)
         return {"configured": configured, "api_id": api_id, "has_session": has_session, "updated_at": updated_at}
 
+    async def active_connection_id(self) -> uuid.UUID | None:
+        """Return the active Telegram connection id for channel attribution."""
+        row = (
+            await self._execute(
+                """SELECT id FROM telegram_connections
+                    WHERE workspace_id=:workspace_id AND status='active'
+                    ORDER BY updated_at DESC NULLS LAST LIMIT 1""",
+                {},
+            )
+        ).mappings().first()
+        return row["id"] if row else None
+
     # ---------- posts / snapshots ----------
 
     async def upsert_post(
@@ -477,11 +489,13 @@ class PostgresDatabase:
                            :workspace_id, :channel_id, :message_id, :posted_at, :text,
                            CAST(:formatting_entities AS jsonb), false, now()
                        )
-                   ON CONFLICT (workspace_id, channel_id, message_id) DO UPDATE SET
-                       posted_at=EXCLUDED.posted_at,
-                       text=EXCLUDED.text,
-                       formatting_entities=EXCLUDED.formatting_entities
-                   RETURNING id""",
+                    ON CONFLICT (workspace_id, channel_id, message_id) DO UPDATE SET
+                        posted_at=EXCLUDED.posted_at,
+                        text=EXCLUDED.text,
+                        formatting_entities=EXCLUDED.formatting_entities,
+                        is_deleted=false,
+                        deleted_at=NULL
+                    RETURNING id""",
                 {
                     "channel_id": channel_db_id,
                     "message_id": message_id,
@@ -493,6 +507,25 @@ class PostgresDatabase:
         ).first()
         assert row is not None
         return int(row[0])
+
+    async def mark_unseen_posts_deleted(self, channel_id: int, seen_message_ids: list[int] | set[int]) -> int:
+        """Retire posts absent from a successful full-history scan."""
+        seen = list(seen_message_ids or [])
+        if seen:
+            result = await self._execute(
+                """UPDATE posts SET is_deleted=true, deleted_at=now()
+                    WHERE workspace_id=:workspace_id AND channel_id=:channel_id
+                      AND is_deleted=false AND NOT (message_id = ANY(:seen))""",
+                {"channel_id": channel_id, "seen": seen},
+            )
+        else:
+            result = await self._execute(
+                """UPDATE posts SET is_deleted=true, deleted_at=now()
+                    WHERE workspace_id=:workspace_id AND channel_id=:channel_id
+                      AND is_deleted=false""",
+                {"channel_id": channel_id},
+            )
+        return int(result.rowcount or 0)
 
     async def last_snapshot(self, post_id: int) -> dict[str, Any] | None:
         result = await self._execute(
@@ -677,6 +710,7 @@ class PostgresDatabase:
         limit: int = 500,
         order: str = "date",
         offset: int = 0,
+        include_deleted: bool = False,
     ) -> list[dict[str, Any]]:
         sql = self._LATEST_CTE + f"""
         SELECT p.id, p.message_id, p.posted_at, p.text, p.channel_id,
@@ -693,6 +727,7 @@ class PostgresDatabase:
          WHERE p.workspace_id=:workspace_id
            AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
            AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
+           AND (CAST(:include_deleted AS boolean) OR p.is_deleted=false)
          ORDER BY {self._ORDER_SQL.get(order, 'p.posted_at DESC')} LIMIT :limit OFFSET :offset"""
         result = await self._execute(
             sql,
@@ -700,30 +735,33 @@ class PostgresDatabase:
                 "channel_id": channel_id,
                 "limit": max(1, min(int(limit), 100000)),
                 "offset": max(0, int(offset)),
+                "include_deleted": bool(include_deleted),
             },
         )
         return [dict(row) for row in result.mappings().all()]
 
-    async def kpis(self, channel_id: int | None = None) -> dict[str, Any]:
+    async def kpis(self, channel_id: int | None = None, include_deleted: bool = False) -> dict[str, Any]:
         sql = self._LATEST_CTE + """
         SELECT COUNT(*) AS posts,
                COALESCE(SUM(l.views),0) AS views, COALESCE(SUM(l.comments),0) AS comments,
                COALESCE(SUM(l.reactions),0) AS reactions, COALESCE(SUM(l.shares),0) AS shares,
                (SELECT COUNT(*) FROM comments cm JOIN posts cp ON cp.id=cm.post_id AND cp.workspace_id=cm.workspace_id
                  JOIN channels ccp ON ccp.id=cp.channel_id AND ccp.workspace_id=cp.workspace_id
-                 WHERE cm.workspace_id=:workspace_id AND cm.is_deleted=false
+                 WHERE cm.workspace_id=:workspace_id AND cm.is_deleted=false AND cp.is_deleted=false
                    AND (CAST(:channel_id AS bigint) IS NULL OR cp.channel_id=CAST(:channel_id AS bigint))
                    AND (CAST(:channel_id AS bigint) IS NOT NULL OR ccp.active=true)) AS collected_comments,
                (SELECT MAX(s.taken_at) FROM snapshots s JOIN posts pp ON pp.id=s.post_id AND pp.workspace_id=s.workspace_id
                  JOIN channels cpp ON cpp.id=pp.channel_id AND cpp.workspace_id=pp.workspace_id
-                 WHERE s.workspace_id=:workspace_id AND (CAST(:channel_id AS bigint) IS NULL OR pp.channel_id=CAST(:channel_id AS bigint))
+                 WHERE s.workspace_id=:workspace_id AND pp.is_deleted=false
+                   AND (CAST(:channel_id AS bigint) IS NULL OR pp.channel_id=CAST(:channel_id AS bigint))
                    AND (CAST(:channel_id AS bigint) IS NOT NULL OR cpp.active=true)) AS last_poll
           FROM posts p JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
           LEFT JOIN latest l ON l.workspace_id=p.workspace_id AND l.post_id=p.id
          WHERE p.workspace_id=:workspace_id
            AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
-           AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)"""
-        result = await self._execute(sql, {"channel_id": channel_id})
+           AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
+           AND (CAST(:include_deleted AS boolean) OR p.is_deleted=false)"""
+        result = await self._execute(sql, {"channel_id": channel_id, "include_deleted": bool(include_deleted)})
         row = result.mappings().first()
         return dict(row) if row else {}
 
@@ -779,11 +817,12 @@ class PostgresDatabase:
                              FROM posts p
                              JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
                              LEFT JOIN latest ON latest.workspace_id=p.workspace_id AND latest.post_id=p.id
-                            WHERE p.workspace_id=:workspace_id
-                            AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
-                            AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
-                            GROUP BY p.posted_at::date
-                            ORDER BY p.posted_at::date"""
+                             WHERE p.workspace_id=:workspace_id
+                             AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+                             AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
+                             AND p.is_deleted=false
+                             GROUP BY p.posted_at::date
+                             ORDER BY p.posted_at::date"""
                     ),
                     {"workspace_id": workspace_id, "channel_id": channel_id},
                 )
@@ -860,8 +899,13 @@ class PostgresDatabase:
                 )
                 await session.commit()
                 return job_id
-        except IntegrityError:
-            return None
+        except IntegrityError as exc:
+            orig = getattr(exc, "orig", None)
+            pgcode = getattr(orig, "pgcode", "") or ""
+            message = str(exc.orig) if orig is not None else str(exc)
+            if pgcode == "23505" or "uq_collection_jobs_active_channel" in message:
+                return None
+            raise
 
     async def finish_collection_job(self, job_id: uuid.UUID, *, status: str = "succeeded", error: str | None = None) -> None:
         await self._execute(
@@ -879,6 +923,18 @@ class PostgresDatabase:
             """UPDATE collection_jobs SET status='failed', finished_at=now(),
                       error_code='stale_on_startup', error_detail='stale_on_startup'
                WHERE workspace_id=:workspace_id AND status='running' AND lease_until < now()""",
+        )
+        return int(result.rowcount or 0)
+
+    async def prune_collection_jobs(self, older_than_days: int = 7) -> int:
+        """Delete finished jobs older than the cutoff; running jobs are kept."""
+
+        result = await self._execute(
+            """DELETE FROM collection_jobs
+                WHERE workspace_id=:workspace_id AND status <> 'running'
+                  AND finished_at IS NOT NULL
+                  AND finished_at < now() - (CAST(:days AS integer) * interval '1 day')""",
+            {"days": max(0, int(older_than_days))},
         )
         return int(result.rowcount or 0)
 
@@ -903,3 +959,15 @@ class PostgresDatabase:
             {"channel_id": channel_id},
         )
         return [int(row[0]) for row in result.all()]
+
+    async def last_successful_cycle_at(self) -> datetime | None:
+        """Return the newest succeeded collection job finish time, if any."""
+        row = (
+            await self._execute(
+                """SELECT MAX(finished_at) AS value FROM collection_jobs
+                    WHERE workspace_id=:workspace_id AND status='succeeded'""",
+                {},
+            )
+        ).mappings().first()
+        value = row["value"] if row else None
+        return _aware(value) if value is not None else None

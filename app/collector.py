@@ -88,11 +88,24 @@ class Collector:
             return self._entities[identifier]
         entity = await self.client.get_entity(identifier)
         self._entities[identifier] = entity
-        await maybe_await(self.db.upsert_channel(
-            identifier,
-            title=getattr(entity, "title", "") or "",
-            chat_id=int(getattr(entity, "id", 0) or 0) or None,
-        ))
+        connection_id = None
+        connection_getter = getattr(self.db, "active_connection_id", None)
+        if connection_getter is not None:
+            try:
+                connection_id = await maybe_await(connection_getter())
+            except Exception:
+                connection_id = None
+        title = getattr(entity, "title", "") or ""
+        chat_id = int(getattr(entity, "id", 0) or 0) or None
+        try:
+            if connection_id is not None:
+                await maybe_await(
+                    self.db.upsert_channel(identifier, title=title, chat_id=chat_id, connection_id=connection_id)
+                )
+            else:
+                await maybe_await(self.db.upsert_channel(identifier, title=title, chat_id=chat_id))
+        except TypeError:
+            await maybe_await(self.db.upsert_channel(identifier, title=title, chat_id=chat_id))
         return entity
 
     async def sync_channels(self) -> list[str]:
@@ -218,18 +231,21 @@ class Collector:
                 limit = self.settings.backfill_limit if self.settings.backfill_limit > 0 else None
 
         # has_comments optimization: fetch post IDs with comments in one query
+        # per channel before the loop. The per-post fallback only runs when the
+        # repository has no bulk getter (legacy SQLite path), never when the
+        # channel simply has zero commented posts.
         commented_ids: set[int] = set()
+        has_bulk_comments = False
         getter = getattr(self.db, "post_ids_with_comments", None)
         if getter is not None:
             try:
                 commented_ids = set(await maybe_await(getter(ch["id"])))
+                has_bulk_comments = True
             except Exception:
                 commented_ids = set()
-        else:
-            # Fallback: try generic all_comments then filter, but avoid heavy load
-            pass
 
         seen = written = comments_seen = comments_written = comments_deleted = comment_errors = 0
+        seen_message_ids: list[int] = []
         last_renew = time.monotonic()
         async for msg in self.client.iter_messages(entity, limit=limit):
             if msg.action is not None:
@@ -240,6 +256,7 @@ class Collector:
             if cutoff is not None and msg_date < cutoff:
                 break
             seen += 1
+            seen_message_ids.append(int(msg.id))
             # renew lease every 60s during long scans
             if job_id is not None and time.monotonic() - last_renew >= 60:
                 renew = getattr(self.db, "renew_collection_job", None)
@@ -262,10 +279,10 @@ class Collector:
             should_fetch = False
             if comments > 0:
                 should_fetch = True
-            elif commented_ids:
+            elif has_bulk_comments:
                 should_fetch = post_id in commented_ids
             else:
-                # fallback per-post check
+                # fallback per-post check (repositories without a bulk getter)
                 try:
                     should_fetch = bool(await maybe_await(self.db.has_comments(post_id)))
                 except Exception:
@@ -289,6 +306,12 @@ class Collector:
                     continue
         if is_full_scan:
             self._last_full_scan[ch["id"]] = datetime.now(timezone.utc)
+            retire = getattr(self.db, "mark_unseen_posts_deleted", None)
+            if retire is not None:
+                try:
+                    await maybe_await(retire(ch["id"], seen_message_ids))
+                except Exception:
+                    log.warning("post retirement failed for channel %s", ch["identifier"])
         return seen, written, comments_seen, comments_written, comments_deleted, comment_errors
 
     async def poll_all(self, reason: str = "scheduled") -> dict[str, Any]:
@@ -356,6 +379,12 @@ class Collector:
                                 error=failure_code,
                             )
                         )
+            prune = getattr(self.db, "prune_collection_jobs", None)
+            if prune is not None:
+                try:
+                    await maybe_await(prune())
+                except Exception:
+                    log.warning("collection job pruning failed")
             summary = {
                 "reason": reason,
                 "started": started,

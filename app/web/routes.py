@@ -14,6 +14,7 @@ import logging
 import secrets
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -310,7 +311,22 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
             except Exception as exc:  # noqa: BLE001 - health endpoint must be bounded
                 log.warning("database readiness check failed: %s", type(exc).__name__)
                 return Response(content='{"status":"not_ready"}', media_type="application/json", status_code=503)
-        return {"status": "ok", "storage": "postgresql" if getattr(db, "is_postgres", False) else "sqlite"}
+        payload: dict[str, object] = {"status": "ok", "last_successful_cycle_at": None}
+        try:
+            cycle_getter = getattr(db, "last_successful_cycle_at", None)
+            last = await maybe_await(cycle_getter()) if cycle_getter is not None else None
+            if last is not None:
+                payload["last_successful_cycle_at"] = last.isoformat() if hasattr(last, "isoformat") else str(last)
+                try:
+                    poll_minutes = float(settings.poll_minutes)
+                except (TypeError, ValueError):
+                    poll_minutes = 15.0
+                moment = last if getattr(last, "tzinfo", None) else last.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - moment > timedelta(minutes=3 * poll_minutes):
+                    payload["status"] = "degraded"
+        except Exception:  # noqa: BLE001 - health must stay bounded without a cycle signal
+            pass
+        return payload
 
     @app.get("/login")
     async def login_form(request: Request):

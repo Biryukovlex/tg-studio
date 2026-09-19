@@ -171,6 +171,7 @@ class Post(Base):
         JSONB, nullable=False, server_default=sql_text("'[]'::jsonb")
     )
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=sql_text("false"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     __table_args__ = (
         ForeignKeyConstraint(
