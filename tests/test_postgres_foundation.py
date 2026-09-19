@@ -3,6 +3,8 @@ import uuid
 
 import pytest
 
+from cryptography.fernet import Fernet
+
 from app.db_session import normalize_database_url
 from app.postgres_models import Base
 from app.session_crypto import SessionCipher, build_cipher
@@ -19,12 +21,12 @@ def test_postgres_url_normalization_and_model_inventory():
 
 
 def test_session_cipher_round_trip_and_wrong_key_rejection():
-    cipher = SessionCipher("a" * 48)
+    cipher = SessionCipher(Fernet.generate_key().decode("ascii"))
     token = cipher.encrypt("telethon-session-value")
     assert token != b"telethon-session-value"
     assert cipher.decrypt(token) == "telethon-session-value"
     with pytest.raises(ValueError, match="could not be decrypted"):
-        SessionCipher("b" * 48).decrypt(token)
+        SessionCipher(Fernet.generate_key().decode("ascii")).decrypt(token)
     assert build_cipher("") is None
 
 
@@ -43,7 +45,7 @@ async def test_postgres_repository_smoke():
         context = await db.workspace_context(username="m1-test-admin")
         assert context["workspace_slug"] == "community" and context["role"] == "owner"
         from app.session_crypto import SessionCipher
-        cipher = SessionCipher("m1-session-secret" * 4)
+        cipher = SessionCipher(Fernet.generate_key().decode("ascii"))
         await db.persist_telegram_session(
             label="m1-test", api_id=1, api_hash="hash", session_string="encrypted-session", cipher=cipher
         )

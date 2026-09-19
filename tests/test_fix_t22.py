@@ -6,12 +6,17 @@ import asyncio
 
 import pytest
 
+from cryptography.fernet import Fernet
+
 from app.config import Settings
 from app.workspace_settings import EncryptionKeyRequired, RuntimeSettings, StoreUnavailable, WorkspaceSettings, SETTINGS
 from app.collector import Collector
 from app.studio.service import StudioService
 from app.studio.repository import MemoryStudioRepository
 from unittest.mock import AsyncMock, MagicMock
+
+
+_TEST_FERNET_KEY = Fernet.generate_key().decode("ascii")
 
 
 def test_runtime_settings_overlay_and_passthrough():
@@ -57,7 +62,7 @@ def test_validators():
 
 @pytest.mark.asyncio
 async def test_secret_without_cipher_raises_and_with_cipher_hides():
-    base = Settings(_env_file=None, telegram_session_encryption_key="x" * 32)
+    base = Settings(_env_file=None, telegram_session_encryption_key=_TEST_FERNET_KEY)
     fake_db = MagicMock()
     fake_db.is_postgres = True
     fake_db.workspace_id = __import__("uuid").uuid4()
@@ -73,7 +78,7 @@ async def test_secret_without_cipher_raises_and_with_cipher_hides():
     # With cipher
     from app.session_crypto import build_cipher
 
-    cipher = build_cipher("x" * 32)
+    cipher = build_cipher(_TEST_FERNET_KEY)
     ws = WorkspaceSettings(fake_db, base, cipher=cipher)
     ws.available = True
     # Mock DB to avoid actual postgres
@@ -106,7 +111,7 @@ async def test_collector_interval_callback():
     fake_db.get_channels = AsyncMock(return_value=[])
     from app.session_crypto import build_cipher
 
-    cipher = build_cipher("x" * 32)
+    cipher = build_cipher(_TEST_FERNET_KEY)
     ws = WorkspaceSettings(fake_db, base, cipher=cipher)
     ws.available = True
     await ws.set("collection.poll_minutes", 30.0)
@@ -162,7 +167,7 @@ async def test_studio_service_uses_new_model_per_run(monkeypatch):
     fake_db.workspace_id = __import__("uuid").uuid4()
     from app.session_crypto import build_cipher
 
-    cipher = build_cipher("x" * 32)
+    cipher = build_cipher(_TEST_FERNET_KEY)
     ws = WorkspaceSettings(fake_db, base, cipher=cipher)
     ws.available = True
     # Mock DB persistence for set

@@ -9,10 +9,15 @@ import pytest
 import httpx
 from unittest.mock import AsyncMock, MagicMock
 
+from cryptography.fernet import Fernet
+
 from app.config import Settings
 from app.db import Database
 from app.collector import Collector
 from app.web.routes import create_app
+
+
+_TEST_FERNET_KEY = Fernet.generate_key().decode("ascii")
 
 
 class FakeWorkspaceSettings:
@@ -177,7 +182,7 @@ def _make_app_with_fake(tmp_path, role="owner", available=True, ws=None, db=None
         api_hash="h",
         session_string="s",
         channels="@test",
-        telegram_session_encryption_key="x" * 32,
+        telegram_session_encryption_key=_TEST_FERNET_KEY,
     )
     if db is None:
         db = FakeDB()

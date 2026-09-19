@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     database_url: str = ""
     telegram_session_encryption_key: str = ""
     allow_legacy_sqlite: bool = False
+    telegram_session_encryption_key_previous: str = ""
 
     @field_validator("api_id", mode="before")
     @classmethod
@@ -122,11 +123,21 @@ class Settings(BaseSettings):
 
     def validate_postgres(self) -> list[str]:
         """Return PostgreSQL-only configuration errors without affecting Studio."""
+        from .session_crypto import _strict_fernet_key
+
         problems: list[str] = []
         if self.postgres_enabled and not self.database_url.startswith(("postgres://", "postgresql://", "postgresql+asyncpg://")):
             problems.append("DATABASE_URL must use postgres://, postgresql://, or postgresql+asyncpg://")
-        if self.postgres_enabled and self.telegram_session_encryption_key and len(self.telegram_session_encryption_key) < 32:
-            problems.append("TELEGRAM_SESSION_ENCRYPTION_KEY must be at least 32 characters")
+        if self.postgres_enabled and self.telegram_session_encryption_key:
+            try:
+                _strict_fernet_key(self.telegram_session_encryption_key, kind="TELEGRAM_SESSION_ENCRYPTION_KEY")
+            except ValueError as exc:
+                problems.append(str(exc))
+        if self.postgres_enabled and self.telegram_session_encryption_key_previous:
+            try:
+                _strict_fernet_key(self.telegram_session_encryption_key_previous, kind="TELEGRAM_SESSION_ENCRYPTION_KEY_PREVIOUS")
+            except ValueError as exc:
+                problems.append(str(exc))
         return problems
 
 

@@ -10,9 +10,13 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from cryptography.fernet import Fernet
+
 from app.config import Settings
 from app.studio.setup import build_setup_state
 from app.workspace_settings import WorkspaceSettings, format_timestamp
+
+_TEST_FERNET_KEY = Fernet.generate_key().decode("ascii")
 
 from tests.test_fix_t23 import FakeDB, FakeWorkspaceSettings, _make_app_with_fake
 
@@ -48,7 +52,7 @@ async def test_set_stamps_updated_at_and_as_dict_renders_it_as_text():
 
 
 def test_setup_state_accepts_channels_added_on_the_settings_page():
-    settings = Settings(_env_file=None, openrouter_api_key="k", telegram_session_encryption_key="x" * 32, channels="")
+    settings = Settings(_env_file=None, openrouter_api_key="k", telegram_session_encryption_key=_TEST_FERNET_KEY, channels="")
 
     class _DB:
         is_postgres = True

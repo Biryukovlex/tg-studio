@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from cryptography.fernet import Fernet
+
 from app.config import Settings
 from app.db import Database
 from app.main import resolve_telegram_connection, telegram_connection_problems
@@ -19,6 +21,8 @@ from app.workspace_settings import WorkspaceSettings
 from tests.test_fix_t23 import FakeDB, _make_app_with_fake
 
 TEST_POSTGRES_URL = os.getenv("TEST_POSTGRES_URL", "")
+
+_TEST_FERNET_KEY = Fernet.generate_key().decode("ascii")
 
 
 async def _login(client: httpx.AsyncClient) -> str:
@@ -61,7 +65,7 @@ def test_postgres_startup_can_defer_telegram_for_ui_setup() -> None:
 
 @pytest.mark.asyncio
 async def test_load_complete_telegram_connection() -> None:
-    cipher = build_cipher("x" * 32)
+    cipher = build_cipher(_TEST_FERNET_KEY)
     encrypted = cipher.encrypt("saved-session")
 
     class Result:
@@ -200,7 +204,7 @@ async def test_refresh_redirects_to_settings_while_telegram_is_unconfigured(tmp_
 
 @pytest.mark.asyncio
 async def test_set_many_commits_once_and_updates_memory_after_commit() -> None:
-    settings = Settings(_env_file=None, telegram_session_encryption_key="x" * 32)
+    settings = Settings(_env_file=None, telegram_session_encryption_key=_TEST_FERNET_KEY)
 
     class Session:
         def __init__(self):
@@ -224,7 +228,7 @@ async def test_set_many_commits_once_and_updates_memory_after_commit() -> None:
         workspace_id = "workspace"
         sessions = Sessions()
 
-    store = WorkspaceSettings(DB(), settings, build_cipher("x" * 32))
+    store = WorkspaceSettings(DB(), settings, build_cipher(_TEST_FERNET_KEY))
     await store.set_many(
         {
             "collection.poll_minutes": 30,
@@ -249,7 +253,7 @@ async def test_postgres_connection_loading_and_invalid_batch_are_atomic() -> Non
     slug = f"ui-setup-{uuid.uuid4().hex[:12]}"
     db = PostgresDatabase(TEST_POSTGRES_URL, workspace_slug=slug)
     await db.init_db(admin_username=f"admin-{slug}")
-    cipher = build_cipher("ui-setup-proof-key")
+    cipher = build_cipher(_TEST_FERNET_KEY)
     store = WorkspaceSettings(db, Settings(_env_file=None), cipher)
     await store.load()
     try:

@@ -236,3 +236,42 @@ license check, and the full test suite, then rebuild the image.
 - The split web refresh button reports worker ownership: this is expected; trigger `/refresh` from the all/worker deployment or restart the collector worker.
 - Posts/comments appear short: run the history restoration command with `--run`; it forces whole-history collection and preserves Telegram formatting entities.
 - A deployment must be stopped: use `docker compose down` only after taking a backup; never add `-v` unless intentionally destroying the database volume.
+
+## Key and secret rotation
+
+Rotate one secret at a time and keep a fresh PostgreSQL backup before each
+step. Never print session strings, API hashes, or encryption keys to logs.
+
+- **Telegram session** (account compromise or device loss): revoke the session
+  in Telegram Settings → Devices, generate a new string with
+  `python scripts/generate_session.py`, and save it on the Settings page.
+- **OpenRouter key**: rotate it in the provider dashboard, update the stored
+  key on the Settings page, and restart the app.
+- **`SESSION_SECRET`** (cookie signing): changing it invalidates every login
+  session; operators are signed out on the next request.
+- **`TELEGRAM_SESSION_ENCRYPTION_KEY`**: generate a new key with
+  `python scripts/generate_session_key.py`, set the old value as
+  `TELEGRAM_SESSION_ENCRYPTION_KEY_PREVIOUS`, then re-encrypt every stored
+  connection without printing secrets:
+
+  ```bash
+  TELEGRAM_SESSION_ENCRYPTION_KEY=<new> \
+  TELEGRAM_SESSION_ENCRYPTION_KEY_PREVIOUS=<old> \
+  DATABASE_URL=<url> \
+      .venv/bin/python scripts/rotate_session_key.py
+  ```
+
+  Clear the previous key once the report shows zero `unreadable` rows. The
+  collector also upgrades legacy rows transparently on read.
+- **`data/.secret`** (local cookie fallback): include it in backups; losing it
+  signs everyone out but does not lose collected data.
+
+## Incident response
+
+1. Revoke the affected credential at its source (Telegram Devices, provider
+   dashboard) before touching the deployment.
+2. Take a PostgreSQL backup for forensics, then rotate the secret using the
+   procedure above.
+3. Check `docker compose logs` for unexpected access and verify `/healthz`.
+4. Do not put session strings, channel exports, or provider payloads in
+   issues, pull requests, tests, or backups shared off-host.

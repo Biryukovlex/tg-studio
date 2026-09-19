@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import getpass
 import sys
 import tempfile
 import webbrowser
@@ -22,10 +23,18 @@ from pathlib import Path
 import qrcode
 from qrcode.image.svg import SvgPathImage
 from telethon import TelegramClient
+from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
+
+
+def _strip_quotes(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1].strip()
+    return text
 
 
 def ask_env_value(key: str, prompt: str) -> str:
@@ -34,11 +43,11 @@ def ask_env_value(key: str, prompt: str) -> str:
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith(f"{key}="):
-                val = line.split("=", 1)[1].strip()
+                val = _strip_quotes(line.split("=", 1)[1])
                 if val:
                     print(f"Using {key} from .env")
                     return val
-    return input(prompt).strip()
+    return _strip_quotes(input(prompt))
 
 
 def write_qr_page(url: str, directory: Path, generation: int) -> Path:
@@ -134,7 +143,11 @@ async def amain() -> None:
         method = input("Method [1]: ").strip() or "1"
 
         if method == "2":
-            await client.start()
+            try:
+                await client.start()
+            except SessionPasswordNeededError:
+                password = getpass.getpass("Two-step verification password: ")
+                await client.sign_in(password=password)
             me = await client.get_me()
         else:
             me = await login_with_qr(client)

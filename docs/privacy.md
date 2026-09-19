@@ -43,6 +43,7 @@ degraded and Telegram collection continues.
 
 Use a strong administrator password and PostgreSQL password, protect `.env`
 and backups, restrict reverse-proxy access, rotate provider/session keys using
-the documented migration/recovery procedure, and honor Telegram/source-site
+the [key rotation and incident response procedures](deployment.md#key-and-secret-rotation),
+and honor Telegram/source-site
 terms. Do not put private channel exports or real provider payloads in tests,
 issues, or pull requests.

@@ -191,20 +191,22 @@ class PostgresDatabase:
             raise ValueError("an external TELEGRAM_SESSION_ENCRYPTION_KEY is required for persistence")
         workspace_id = self._workspace()
         encrypted = cipher.encrypt(session_string)
+        encrypted_api_hash = cipher.encrypt(api_hash) if api_hash else None
         fingerprint = hashlib.sha256(session_string.encode("utf-8")).hexdigest()[:16]
         async with self.sessions.session() as session:
             row = (
                 await session.execute(
                     text(
                         """INSERT INTO telegram_connections(
-                               id, workspace_id, label, api_id, api_hash,
+                               id, workspace_id, label, api_id, api_hash, encrypted_api_hash,
                                encrypted_session, session_key_version,
                                session_fingerprint, status, updated_at
-                           ) VALUES (:id, :workspace_id, :label, :api_id, :api_hash,
+                           ) VALUES (:id, :workspace_id, :label, :api_id, NULL, :encrypted_api_hash,
                                      :encrypted_session, :key_version,
                                      :fingerprint, 'active', now())
                            ON CONFLICT (workspace_id, label) DO UPDATE SET
-                               api_id=EXCLUDED.api_id, api_hash=EXCLUDED.api_hash,
+                               api_id=EXCLUDED.api_id, api_hash=NULL,
+                               encrypted_api_hash=EXCLUDED.encrypted_api_hash,
                                encrypted_session=EXCLUDED.encrypted_session,
                                session_key_version=EXCLUDED.session_key_version,
                                session_fingerprint=EXCLUDED.session_fingerprint,
@@ -216,7 +218,7 @@ class PostgresDatabase:
                         "workspace_id": workspace_id,
                         "label": label,
                         "api_id": api_id,
-                        "api_hash": api_hash,
+                        "encrypted_api_hash": encrypted_api_hash,
                         "encrypted_session": encrypted,
                         "key_version": cipher.key_version,
                         "fingerprint": fingerprint,
@@ -232,17 +234,40 @@ class PostgresDatabase:
             return None
         row = (
             await self._execute(
-                """SELECT api_id, api_hash, encrypted_session FROM telegram_connections
+                """SELECT api_id, api_hash, encrypted_api_hash, encrypted_session, session_key_version
+                     FROM telegram_connections
                    WHERE workspace_id=:workspace_id AND label=:label AND status='active'""",
                 {"label": label},
             )
         ).mappings().first()
         if not row or row["encrypted_session"] is None:
             return None
+        session_string, session_from_previous = cipher.decrypt_with_previous_flag(bytes(row["encrypted_session"]))
+        stored_hash = row.get("encrypted_api_hash") if hasattr(row, "get") else row["encrypted_api_hash"]
+        if stored_hash is not None:
+            api_hash, hash_from_previous = cipher.decrypt_with_previous_flag(bytes(stored_hash))
+        else:
+            # Legacy row written before api_hash encryption; upgrade on read.
+            legacy_hash = row.get("api_hash") if hasattr(row, "get") else row["api_hash"]
+            api_hash, hash_from_previous = str(legacy_hash or ""), True
+        stored_version = row.get("session_key_version", "v1") if hasattr(row, "get") else row["session_key_version"]
+        if session_from_previous or hash_from_previous or stored_version != cipher.key_version:
+            await self._execute(
+                """UPDATE telegram_connections
+                      SET encrypted_session=:encrypted_session, encrypted_api_hash=:encrypted_api_hash,
+                          api_hash=NULL, session_key_version=:key_version, updated_at=now()
+                    WHERE workspace_id=:workspace_id AND label=:label AND status='active'""",
+                {
+                    "label": label,
+                    "encrypted_session": cipher.encrypt(session_string),
+                    "encrypted_api_hash": cipher.encrypt(api_hash) if api_hash else None,
+                    "key_version": cipher.key_version,
+                },
+            )
         return {
             "api_id": int(row["api_id"]),
-            "api_hash": str(row["api_hash"]),
-            "session_string": cipher.decrypt(bytes(row["encrypted_session"])),
+            "api_hash": str(api_hash),
+            "session_string": session_string,
         }
 
     async def load_telegram_session(self, *, label: str, cipher) -> str | None:
