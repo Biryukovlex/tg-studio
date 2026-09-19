@@ -13,7 +13,7 @@ from pydantic_ai import Agent, ModelRetry, RunContext
 from .. import limits
 from .model import build_model
 from .prompts import SYSTEM_INSTRUCTIONS
-from .analytics import analyze_posts
+from .analytics import analyze_posts, analyze_posts_async
 from .context import ContextAssembler, ContextPack, profile_block_from_mapping
 from .profile import (
     ChannelProfile,
@@ -61,6 +61,9 @@ class StudioDeps:
     # result.  Once the same tool has been blocked twice, the output validator
     # lets the model explain that result instead of exhausting the run.
     blocked_tool_counts: dict[str, int] = field(default_factory=dict)
+    # Computed once per run and reused across research tools so a single run
+    # never recomputes channel evidence per tool call.
+    research_context_cache: tuple | None = None
 
 
 _RESEARCH_INTENT = re.compile(
@@ -320,8 +323,15 @@ def _draft_summary(row: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _research_context(ctx: RunContext[StudioDeps]) -> tuple[list[str], list[str], list[int], list[dict[str, Any]]]:
-    """Collect only compact server-owned topic/text signals for ranking."""
+    """Collect only compact server-owned topic/text signals for ranking.
 
+    Computed once per run and cached on the deps object; every research tool
+    reuses the same evidence snapshot.
+    """
+
+    cached = ctx.deps.research_context_cache
+    if cached is not None and cached[0] == ctx.deps.channel_id:
+        return cached[1]
     raw = await ctx.deps.repository.channel_context(ctx.deps.channel_id)
     topics: list[str] = []
     getter = getattr(ctx.deps.repository, "get_profile", None)
@@ -340,10 +350,12 @@ async def _research_context(ctx: RunContext[StudioDeps]) -> tuple[list[str], lis
     if reader is not None:
         rows = await reader(ctx.deps.channel_id)
         if rows:
-            analysis = analyze_posts(rows, ctx.deps.channel_id, identifier=raw.get("identifier"))
+            analysis = await analyze_posts_async(rows, ctx.deps.channel_id, identifier=raw.get("identifier"))
             evidence_ids = [post.post_id for post in analysis.evidence_posts]
             channel_evidence = [post.model_dump(mode="json") for post in analysis.evidence_posts[:20]]
-    return topics[:20], recent_posts[:6], evidence_ids[:20], channel_evidence[:20]
+    result = (topics[:20], recent_posts[:6], evidence_ids[:20], channel_evidence[:20])
+    ctx.deps.research_context_cache = (ctx.deps.channel_id, result)
+    return result
 
 
 async def _channel_only_evidence(ctx: RunContext[StudioDeps]) -> list[dict[str, Any]]:
@@ -628,7 +640,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         raw = await ctx.deps.repository.channel_context(ctx.deps.channel_id)
         rows = await reader(ctx.deps.channel_id)
         _check_cancel(ctx)
-        analysis = analyze_posts(rows, ctx.deps.channel_id, identifier=raw.get("identifier"))
+        analysis = await analyze_posts_async(rows, ctx.deps.channel_id, identifier=raw.get("identifier"))
         result = analysis.model_dump(mode="json")
         ctx.deps.completed_tools.add("get_performance_evidence")
         return result
@@ -847,7 +859,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         channel_evidence: dict[str, Any] = {"claim": "No performance evidence is available.", "evidence_post_ids": []}
         if reader is not None:
             raw = await ctx.deps.repository.channel_context(ctx.deps.channel_id)
-            analysis = analyze_posts(await reader(ctx.deps.channel_id), ctx.deps.channel_id, identifier=raw.get("identifier"))
+            analysis = await analyze_posts_async(await reader(ctx.deps.channel_id), ctx.deps.channel_id, identifier=raw.get("identifier"))
             if post_id is not None:
                 evidence = next((post for post in analysis.evidence_posts if post.post_id == int(post_id)), None)
                 channel_evidence = evidence.model_dump(mode="json") if evidence else {"claim": "The requested post is not in the evidence set.", "evidence_post_ids": []}

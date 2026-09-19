@@ -29,7 +29,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 
 from .agent import StudioDeps, build_agent, is_revision_request, is_short_continuation_request, workflow_tool_sequence
 from .. import limits
-from .analytics import analyze_posts
+from .analytics import analyze_posts, analyze_posts_async
 from .profile import build_profile
 from .semantic_profile import build_semantic_profile
 from .research import ResearchService
@@ -98,7 +98,13 @@ class RunRegistry:
         self._runs[run_id] = handle
         while len(self._runs) > self.max_runs:
             oldest = next(iter(self._runs))
-            del self._runs[oldest]
+            if self._runs[oldest].active:
+                oldest_inactive = next((key for key, item in self._runs.items() if not item.active), None)
+                if oldest_inactive is None:
+                    break
+                del self._runs[oldest_inactive]
+            else:
+                del self._runs[oldest]
         return handle
 
     def attach(self, run_id: uuid.UUID, task: asyncio.Task[Any]) -> None:
@@ -133,8 +139,24 @@ class RunCoordinator:
         self._slots = asyncio.Semaphore(self.max_concurrency)
 
     @asynccontextmanager
-    async def slot(self):
-        await self._slots.acquire()
+    async def slot(self, heartbeat=None, interval: float = 20.0):
+        """Acquire a local execution slot, optionally heartbeating while queued.
+
+        The heartbeat runs each time the wait exceeds the interval so an
+        already-claimed run can renew its durable lease while waiting.
+        """
+        while True:
+            try:
+                if heartbeat is None:
+                    await self._slots.acquire()
+                else:
+                    await asyncio.wait_for(self._slots.acquire(), timeout=max(0.05, float(interval)))
+                break
+            except asyncio.TimeoutError:
+                try:
+                    await heartbeat()
+                except Exception:  # noqa: BLE001 - heartbeat must not fail the wait
+                    pass
         self.active += 1
         try:
             yield
@@ -313,7 +335,9 @@ class StudioService:
 
     async def recover_stale_runs(self) -> int:
         return await self.repository.mark_stale_runs_interrupted(
-            queued_grace_seconds=max(1, int(limits.QUEUED_RUN_GRACE_SECONDS))
+            queued_grace_seconds=max(
+                1, int(limits.QUEUED_RUN_GRACE_SECONDS), int(limits.RUN_TIMEOUT_SECONDS)
+            )
         )
 
     async def _watch_run_control(self, run_id: uuid.UUID, worker_id: str, handle: RunHandle) -> None:
@@ -357,7 +381,7 @@ class StudioService:
             return existing
         channel = await self.repository.channel_context(channel_id)
         rows = await reader(channel_id)
-        analytics = analyze_posts(rows, channel_id, identifier=channel.get("identifier"))
+        analytics = await analyze_posts_async(rows, channel_id, identifier=channel.get("identifier"))
         profile, analysis = build_profile(
             analytics,
             provider="local",
@@ -415,7 +439,7 @@ class StudioService:
         min_posts = int(limits.MIN_PROFILE_POSTS)
         if len(rows) < min_posts:
             raise ValueError(f"too few posts: {len(rows)} < {min_posts}")
-        analytics = analyze_posts(rows, channel_id, identifier=channel.get("identifier"))
+        analytics = await analyze_posts_async(rows, channel_id, identifier=channel.get("identifier"))
         from .semantic_profile import build_profile_text_draft
         current = None
         getter = getattr(self.repository, "get_profile", None)
@@ -466,15 +490,26 @@ class StudioService:
             return JSONResponse({"error": {"code": "message_too_large", "message": "Message is too large.", "retryable": False}}, status_code=413)
 
         history_rows = await self.repository.list_messages(conversation_id)
+        user_row: dict[str, Any] | None = None
         try:
-            user_row = await self.repository.append_message(conversation_id=conversation_id, role="user", content=content)
-            run = await self.repository.create_run(
-                conversation_id=conversation_id,
-                user_message_id=int(user_row["id"]),
-                requested_model=model_name(self.settings),
-                provider="openrouter",
-                run_id=run_id,
-            )
+            combined = getattr(self.repository, "append_user_message_and_create_run", None)
+            if combined is not None:
+                user_row, run = await combined(
+                    conversation_id=conversation_id,
+                    content=content,
+                    requested_model=model_name(self.settings),
+                    provider="openrouter",
+                    run_id=run_id,
+                )
+            else:
+                user_row = await self.repository.append_message(conversation_id=conversation_id, role="user", content=content)
+                run = await self.repository.create_run(
+                    conversation_id=conversation_id,
+                    user_message_id=int(user_row["id"]),
+                    requested_model=model_name(self.settings),
+                    provider="openrouter",
+                    run_id=run_id,
+                )
             handle = self.registry.begin(run_id)
             renamer = getattr(self.repository, "rename_conversation", None)
             if renamer is not None:
@@ -482,6 +517,13 @@ class StudioService:
                 title = title[:77].rsplit(" ", 1)[0] + "…" if len(title) > 80 else title
                 await renamer(conversation_id, title=title, only_default=True)
         except ActiveRunExists:
+            if user_row is not None:
+                remover = getattr(self.repository, "delete_message", None)
+                if remover is not None:
+                    try:
+                        await remover(conversation_id=conversation_id, message_id=int(user_row["id"]))
+                    except Exception:  # noqa: BLE001 - compensation must not fail the 409
+                        pass
             return JSONResponse({"error": {"code": "run_already_active", "message": "This conversation already has an active run.", "retryable": False}}, status_code=409)
         except ConversationNotFound:
             return JSONResponse({"error": {"code": "conversation_not_found", "message": "Conversation not found.", "retryable": False}}, status_code=404)
@@ -671,16 +713,31 @@ class StudioService:
             finished_event = None
             watchdog: asyncio.Task[Any] | None = None
             run_finished = False
+            lease_seconds = max(30, int(limits.RUN_LEASE_SECONDS))
+            # Claim before waiting for a local slot so a queued run is owned
+            # while it waits; the heartbeat below renews that ownership.
+            claimed = await self.repository.claim_run(
+                run_id,
+                worker_id=worker_id,
+                lease_seconds=lease_seconds,
+            )
+            if claimed is None:
+                await emit_terminal_notice(await self.repository.get_run(run_id))
+                self.registry.finish(run_id)
+                await queue.put(complete)
+                return
+
+            async def _queued_heartbeat() -> None:
+                await self.repository.renew_run_lease(
+                    run_id, worker_id=worker_id, lease_seconds=lease_seconds
+                )
+                await self.repository.append_event(
+                    run_id, event_type="RUN_QUEUED", safe_payload={"lease_seconds": lease_seconds}
+                )
+
+            heartbeat_interval = max(0.05, min(float(limits.RUN_HEARTBEAT_SECONDS), lease_seconds / 3))
             try:
-                async with self.coordinator.slot():
-                    claimed = await self.repository.claim_run(
-                        run_id,
-                        worker_id=worker_id,
-                        lease_seconds=max(30, int(limits.RUN_LEASE_SECONDS)),
-                    )
-                    if claimed is None:
-                        await emit_terminal_notice(await self.repository.get_run(run_id))
-                        return
+                async with self.coordinator.slot(heartbeat=_queued_heartbeat, interval=heartbeat_interval):
                     watchdog = asyncio.create_task(
                         self._watch_run_control(run_id, worker_id, handle),
                         name=f"studio-run-watchdog-{run_id}",
@@ -874,17 +931,31 @@ class StudioService:
                         )
                     else:
                         failure_text = message
-                    await self.repository.append_message(
-                        conversation_id=conversation_id,
-                        role="assistant",
-                        content=failure_text,
-                        metadata={
-                            "run_id": str(run_id),
-                            "prompt_version": PROMPT_VERSION,
-                            "run_failed": not artifact_ready,
-                            "run_recovered": artifact_ready,
-                        },
-                    )
+                    try:
+                        await self.repository.append_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=failure_text,
+                            metadata={
+                                "run_id": str(run_id),
+                                "prompt_version": PROMPT_VERSION,
+                                "run_failed": not artifact_ready,
+                                "run_recovered": artifact_ready,
+                            },
+                        )
+                    except Exception as append_exc:  # noqa: BLE001 - a failed acknowledgement must still finish the run
+                        log.warning("failure acknowledgement could not be saved: %s", type(append_exc).__name__)
+                        with suppress(RunClaimLost):
+                            await self.repository.set_run_status(
+                                run_id,
+                                status="failed",
+                                stage="failed",
+                                error_code=code,
+                                error_message=message,
+                                usage=usage,
+                                worker_id=worker_id,
+                            )
+                        return
                     failure_message_id = f"studio-failure-{run_id}"
                     await queue.put(TextMessageStartEvent(message_id=failure_message_id, role="assistant"))
                     await queue.put(TextMessageContentEvent(message_id=failure_message_id, delta=failure_text))

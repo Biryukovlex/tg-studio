@@ -134,6 +134,7 @@ class ResearchState:
     query: str = ""
     bundle: ResearchBundle | None = None
     persistence_warning: str | None = None
+    last_persisted_hash: str | None = None
 
 
 class ResearchService:
@@ -166,7 +167,14 @@ class ResearchService:
 
     def _state(self, workspace_id: Any, conversation_id: Any, channel_id: int) -> ResearchState:
         key = _scope(workspace_id, conversation_id, channel_id)
-        return self._states.setdefault(key, ResearchState())
+        state = self._states.setdefault(key, ResearchState())
+        # Bound process memory: evict the oldest conversation beyond 64.
+        while len(self._states) > 64:
+            oldest = next(iter(self._states))
+            if oldest == key:
+                break
+            del self._states[oldest]
+        return self._states[key]
 
     async def _store(
         self,
@@ -184,6 +192,10 @@ class ResearchService:
         async with self._lock:
             state = self._state(workspace_id, conversation_id, channel_id)
             merged = list({source.source_id: source for source in [*state.sources.values(), *values]}.values())
+            max_sources = int(getattr(self.settings, "studio_research_max_sources", 300) or 300)
+            max_sources = max(12, min(max_sources, 1000))
+            if len(merged) > max_sources:
+                merged = merged[-max_sources:]
             state.sources = {source.source_id: source for source in merged}
             state.query = query or state.query
             state.bundle = build_research_bundle(
@@ -198,6 +210,19 @@ class ResearchService:
             bundle = state.bundle
         persist = getattr(self.repository, "persist_research_bundle", None)
         if persist is not None:
+            import hashlib as _hashlib
+            import json as _json
+
+            try:
+                fingerprint = _hashlib.sha256(
+                    _json.dumps(bundle.model_dump(mode="json"), sort_keys=True, default=str).encode()
+                ).hexdigest()
+            except Exception:  # noqa: BLE001 - fall through to persisting
+                fingerprint = None
+            async with self._lock:
+                state = self._state(workspace_id, conversation_id, channel_id)
+                if fingerprint is not None and state.last_persisted_hash == fingerprint:
+                    return bundle
             try:
                 await persist(
                     conversation_id=conversation_id,
@@ -210,6 +235,10 @@ class ResearchService:
                     state.persistence_warning = "Research results could not be persisted; this result is available for the current run only."
                     state.bundle = replace(bundle, warnings=tuple(dict.fromkeys([*bundle.warnings, state.persistence_warning])))
                     bundle = state.bundle
+            else:
+                if fingerprint is not None:
+                    async with self._lock:
+                        self._state(workspace_id, conversation_id, channel_id).last_persisted_hash = fingerprint
         return bundle
 
     async def _ensure_loaded(self, *, workspace_id: Any, conversation_id: Any, channel_id: int) -> ResearchState:
@@ -230,8 +259,18 @@ class ResearchService:
             return state
         if not raw:
             return state
+        import logging as _logging
+
+        _research_log = _logging.getLogger("studio.research")
         sources = [to_source_evidence(item) for item in (raw.get("sources") or [])]
-        stories = [story_from_dict(item) for item in (raw.get("stories") or []) if isinstance(item, dict)]
+        stories = []
+        for item in raw.get("stories") or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                stories.append(story_from_dict(item))
+            except Exception:  # noqa: BLE001 - one corrupt row must not break every research tool
+                _research_log.warning("skipping corrupt persisted story cluster")
         async with self._lock:
             state = self._state(workspace_id, conversation_id, channel_id)
             # In-memory sources are newer than the snapshot we just loaded.

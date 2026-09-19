@@ -169,7 +169,7 @@ class StudioRepositoryProtocol(Protocol):
 
     async def list_channels(self) -> list[dict[str, Any]]: ...
     async def channel_context(self, channel_id: int) -> dict[str, Any]: ...
-    async def performance_rows(self, channel_id: int) -> list[dict[str, Any]]: ...
+    async def performance_rows(self, channel_id: int, limit: int = 2000) -> list[dict[str, Any]]: ...
     async def get_profile(self, channel_id: int) -> dict[str, Any] | None: ...
     async def get_analysis(self, analysis_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def create_analysis(self, payload: dict[str, Any]) -> dict[str, Any]: ...
@@ -296,10 +296,11 @@ class StudioRepository:
             "note": "Read-only channel context; discussion comment bodies are excluded.",
         }
 
-    async def performance_rows(self, channel_id: int) -> list[dict[str, Any]]:
+    async def performance_rows(self, channel_id: int, limit: int = 2000) -> list[dict[str, Any]]:
         """Return latest snapshot metrics without joining comment bodies."""
 
         workspace_id = self.workspace_id
+        bounded = max(1, min(int(limit), 10_000))
         async with self.db.sessions.session() as session:
             rows = (
                 await session.execute(
@@ -320,9 +321,10 @@ class StudioRepository:
                              JOIN latest l
                                ON l.workspace_id=p.workspace_id AND l.post_id=p.id
                             WHERE p.workspace_id=:workspace_id AND p.channel_id=:channel_id
-                            ORDER BY p.posted_at DESC, p.id DESC"""
+                            ORDER BY p.posted_at DESC, p.id DESC
+                            LIMIT :limit"""
                     ),
-                    {"workspace_id": workspace_id, "channel_id": channel_id},
+                    {"workspace_id": workspace_id, "channel_id": channel_id, "limit": bounded},
                 )
             ).mappings().all()
         return [dict(row) for row in rows]
@@ -1543,6 +1545,115 @@ class StudioRepository:
             await session.commit()
         return dict(row)
 
+    async def delete_message(self, *, conversation_id: uuid.UUID, message_id: int) -> bool:
+        """Remove one message; used to clean up an orphaned user message."""
+        workspace_id = self.workspace_id
+        async with self.db.sessions.session() as session:
+            deleted = await session.execute(
+                text(
+                    """DELETE FROM studio_messages
+                        WHERE workspace_id=:workspace_id AND conversation_id=:conversation_id AND id=:message_id"""
+                ),
+                {"workspace_id": workspace_id, "conversation_id": conversation_id, "message_id": message_id},
+            )
+            await session.commit()
+        return bool(deleted.rowcount)
+
+    async def append_user_message_and_create_run(
+        self,
+        *,
+        conversation_id: uuid.UUID,
+        content: str,
+        requested_model: str,
+        provider: str = "openrouter",
+        run_id: uuid.UUID | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Append the user message and queue its run in one transaction.
+
+        Only unique violations on the active-run index become
+        ``ActiveRunExists``; every other integrity error propagates and the
+        transaction rolls back, so a failed run creation never orphans the
+        user message.
+        """
+        if not isinstance(content, str) or not content.strip():
+            raise StudioRepositoryError("message content is required")
+        if len(content) > 32_000:
+            raise StudioRepositoryError("message content is too large")
+        workspace_id = self.workspace_id
+        run_id = run_id or uuid.uuid4()
+        async with self.db.sessions.session() as session:
+            try:
+                conversation = (
+                    await session.execute(
+                        text(
+                            "SELECT id FROM studio_conversations WHERE workspace_id=:workspace_id AND id=:conversation_id AND archived_at IS NULL FOR UPDATE"
+                        ),
+                        {"workspace_id": workspace_id, "conversation_id": conversation_id},
+                    )
+                ).first()
+                if conversation is None:
+                    raise ConversationNotFound("conversation is not part of the active workspace")
+                active = (
+                    await session.execute(
+                        text(
+                            "SELECT id FROM studio_agent_runs WHERE workspace_id=:workspace_id AND conversation_id=:conversation_id AND status IN ('queued', 'running') LIMIT 1"
+                        ),
+                        {"workspace_id": workspace_id, "conversation_id": conversation_id},
+                    )
+                ).first()
+                if active is not None:
+                    raise ActiveRunExists("conversation already has an active run")
+                message = (
+                    await session.execute(
+                        text(
+                            """INSERT INTO studio_messages(workspace_id, conversation_id, role, content, metadata_json)
+                               VALUES (:workspace_id, :conversation_id, 'user', :content, '{}'::jsonb)
+                            RETURNING id, role, content, metadata_json, created_at"""
+                        ),
+                        {"workspace_id": workspace_id, "conversation_id": conversation_id, "content": content},
+                    )
+                ).mappings().one()
+                try:
+                    run = (
+                        await session.execute(
+                            text(
+                                """INSERT INTO studio_agent_runs(
+                                       id, workspace_id, conversation_id, user_message_id,
+                                       status, stage, provider, requested_model
+                                   ) VALUES (:id, :workspace_id, :conversation_id, :user_message_id,
+                                             'queued', 'queued', :provider, :requested_model)
+                                RETURNING *"""
+                            ),
+                            {
+                                "id": run_id,
+                                "workspace_id": workspace_id,
+                                "conversation_id": conversation_id,
+                                "user_message_id": message["id"],
+                                "provider": provider,
+                                "requested_model": requested_model,
+                            },
+                        )
+                    ).mappings().one()
+                except IntegrityError as exc:
+                    orig = getattr(exc, "orig", None)
+                    pgcode = getattr(orig, "pgcode", "") or ""
+                    text_ = str(orig) if orig is not None else str(exc)
+                    if pgcode == "23505" or "uq_studio_runs_active_conversation" in text_:
+                        raise ActiveRunExists("conversation already has an active run") from exc
+                    raise
+                await session.execute(
+                    text("UPDATE studio_conversations SET updated_at=now() WHERE workspace_id=:workspace_id AND id=:conversation_id"),
+                    {"workspace_id": workspace_id, "conversation_id": conversation_id},
+                )
+                await session.commit()
+            except Exception:
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
+                raise
+        return dict(message), dict(run)
+
     async def create_run(
         self,
         *,
@@ -1608,7 +1719,12 @@ class StudioRepository:
                 ).mappings().one()
             except IntegrityError as exc:
                 await session.rollback()
-                raise ActiveRunExists("conversation already has an active run") from exc
+                orig = getattr(exc, "orig", None)
+                pgcode = getattr(orig, "pgcode", "") or ""
+                message = str(orig) if orig is not None else str(exc)
+                if pgcode == "23505" or "uq_studio_runs_active_conversation" in message:
+                    raise ActiveRunExists("conversation already has an active run") from exc
+                raise
             await session.commit()
         return dict(row)
 
@@ -1930,7 +2046,7 @@ class MemoryStudioRepository:
             "note": "Synthetic context for the local Studio test model; no channel data was read.",
         }
 
-    async def performance_rows(self, channel_id: int) -> list[dict[str, Any]]:
+    async def performance_rows(self, channel_id: int, limit: int = 2000) -> list[dict[str, Any]]:
         if not any(row["id"] == channel_id and row["active"] for row in self.channels):
             raise ConversationNotFound("channel is not part of the active workspace")
         return []
@@ -2592,6 +2708,70 @@ class MemoryStudioRepository:
             self.messages[conversation_id].append(message)
             row["updated_at"] = message["created_at"]
         return dict(message)
+
+    async def delete_message(self, *, conversation_id: uuid.UUID, message_id: int) -> bool:
+        """Remove one message; used to clean up an orphaned user message."""
+        async with self._lock:
+            rows = self.messages.get(conversation_id)
+            if not rows:
+                return False
+            kept = [row for row in rows if int(row["id"]) != int(message_id)]
+            if len(kept) == len(rows):
+                return False
+            self.messages[conversation_id] = kept
+            return True
+
+    async def append_user_message_and_create_run(
+        self,
+        *,
+        conversation_id: uuid.UUID,
+        content: str,
+        requested_model: str,
+        provider: str = "openrouter",
+        run_id: uuid.UUID | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Append the user message and queue its run atomically (in-memory)."""
+        if not isinstance(content, str) or not content.strip():
+            raise StudioRepositoryError("invalid message")
+        if len(content) > 32_000:
+            raise StudioRepositoryError("message content is too large")
+        row = self.conversations.get(conversation_id)
+        if row is None or row["archived_at"] is not None:
+            raise ConversationNotFound("conversation is not part of the active workspace")
+        async with self._lock:
+            if any(
+                item["conversation_id"] == conversation_id and item["status"] in {"queued", "running"}
+                for item in self.runs.values()
+            ):
+                raise ActiveRunExists("conversation already has an active run")
+            self._message_id += 1
+            message = {"id": self._message_id, "role": "user", "content": content, "metadata_json": {}, "created_at": utcnow()}
+            self.messages[conversation_id].append(message)
+            row["updated_at"] = message["created_at"]
+            run_id = run_id or uuid.uuid4()
+            run = {
+                "id": run_id,
+                "workspace_id": self.workspace_id,
+                "conversation_id": conversation_id,
+                "user_message_id": message["id"],
+                "status": "queued",
+                "stage": "queued",
+                "provider": provider,
+                "requested_model": requested_model,
+                "actual_model": None,
+                "usage": {},
+                "error_code": None,
+                "error_message": None,
+                "worker_id": None,
+                "lease_expires_at": None,
+                "cancel_requested": False,
+                "created_at": utcnow(),
+                "started_at": None,
+                "finished_at": None,
+            }
+            self.runs[run_id] = run
+            self.events[run_id] = []
+            return dict(message), dict(run)
 
     async def create_run(self, *, conversation_id: uuid.UUID, user_message_id: int, requested_model: str, provider: str = "openrouter", run_id: uuid.UUID | None = None) -> dict[str, Any]:
         if conversation_id not in self.conversations:

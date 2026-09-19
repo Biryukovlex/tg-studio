@@ -9,6 +9,8 @@ little history for confident conclusions.
 
 from __future__ import annotations
 
+import asyncio
+import bisect
 import hashlib
 import json
 import math
@@ -142,18 +144,22 @@ class ChannelAnalytics(BaseModel):
 
 
 def _percentiles(values: list[float]) -> list[float]:
-    """Return deterministic mid-rank percentiles in the inclusive [0, 1]."""
+    """Return deterministic mid-rank percentiles in the inclusive [0, 1].
+
+    One sort plus binary search per value (O(n log n)); the mid-rank formula
+    matches the previous quadratic implementation exactly.
+    """
 
     if not values:
         return []
     if len(values) == 1:
         return [1.0]
     ordered = sorted(values)
-    result: list[float] = []
     denominator = float(len(values) - 1)
+    result: list[float] = []
     for value in values:
-        lower = sum(1 for candidate in ordered if candidate < value)
-        equal = sum(1 for candidate in ordered if candidate == value)
+        lower = bisect.bisect_left(ordered, value)
+        equal = bisect.bisect_right(ordered, value) - lower
         result.append((lower + (equal - 1) / 2) / denominator)
     return result
 
@@ -219,10 +225,11 @@ def _normalise_row(row: Mapping[str, Any], *, now: datetime, channel_id: int) ->
 
 
 def _canonical_input(rows: list[dict[str, Any]], channel_id: int, now: datetime) -> str:
+    day = _utc(now).date().isoformat() if _utc(now) else ""
     payload = {
         "analytics_version": ANALYTICS_VERSION,
         "channel_id": int(channel_id),
-        "as_of": now.isoformat(),
+        "as_of": day,
         "rows": [
             {
                 key: (value.isoformat() if isinstance(value, datetime) else value)
@@ -391,6 +398,18 @@ def analyze_posts(
 # the deterministic contract is discoverable without coupling the UI to one
 # spelling.
 build_channel_analytics = analyze_posts
+
+
+async def analyze_posts_async(
+    rows: Iterable[Mapping[str, Any]],
+    channel_id: int,
+    **kwargs: Any,
+) -> ChannelAnalytics:
+    """Run analyze_posts off the event loop when the row count exceeds 1,000."""
+    materialized = list(rows)
+    if len(materialized) > 1_000:
+        return await asyncio.to_thread(analyze_posts, materialized, channel_id, **kwargs)
+    return analyze_posts(materialized, channel_id, **kwargs)
 analyze_channel_posts = analyze_posts
 
 
