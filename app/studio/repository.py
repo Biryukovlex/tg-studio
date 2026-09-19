@@ -1860,7 +1860,7 @@ class StudioRepository:
                         "run_id": run_id,
                         "sequence": sequence,
                         "event_type": event_type,
-                        "safe_payload": __import__("json").dumps(safe_payload or {}),
+                        "safe_payload": json.dumps(safe_payload or {}),
                         "result_content": result_content,
                     },
                 )

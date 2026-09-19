@@ -380,7 +380,7 @@ class SearchCache:
             self._entries.clear()
 
 
-def _normalize_query(value: SearchQuery | str, *, max_results: int, max_queries: int = 3, **kwargs: Any) -> SearchQuery:
+def _normalize_query(value: SearchQuery | str, *, max_results: int, **kwargs: Any) -> SearchQuery:
     if isinstance(value, SearchQuery):
         query = value
     else:
@@ -482,7 +482,6 @@ class SearXNGSearchProvider:
         self.timeout_seconds = max(0.2, min(float(timeout_seconds if timeout_seconds is not None else limits.SEARCH_TIMEOUT_SECONDS), 30.0))
         self.retries = max(0, min(int(retries if retries is not None else limits.SEARCH_RETRIES), 3))
         self.max_results = max(1, min(int(max_results if max_results is not None else limits.SEARCH_MAX_RESULTS), 50))
-        self.max_queries = limits.SEARCH_MAX_QUERIES
         self.engines = _normalize_engines(limits.SEARCH_ENGINES)
         self.allowed_engines = set(_normalize_engines(limits.SEARCH_ALLOWED_ENGINES))
         self.blocked_domains = tuple(
@@ -508,7 +507,7 @@ class SearXNGSearchProvider:
             )
         options = dict(kwargs)
         options.pop("max_results", None)
-        normalized = _normalize_query(query, max_results=self.max_results, max_queries=self.max_queries, **options)
+        normalized = _normalize_query(query, max_results=self.max_results, **options)
         requested_engines = tuple(engine for engine in normalized.engines if not self.allowed_engines or engine in self.allowed_engines)
         rejected_engines = tuple(engine for engine in normalized.engines if self.allowed_engines and engine not in self.allowed_engines)
         if normalized.engines and not requested_engines:
@@ -544,7 +543,7 @@ class SearXNGSearchProvider:
         try:
             payload = await self._request(params, attempts=attempts)
             excluded = tuple(dict.fromkeys([*self.blocked_domains, *normalized.excluded_domains]))
-            results, filtered_count, blocked_count = self._normalize_results(payload, normalized, fetched_at, excluded_domains=excluded)
+            results, _filtered_count, blocked_count = self._normalize_results(payload, normalized, fetched_at, excluded_domains=excluded)
             warnings_list = []
             if rejected_engines:
                 warnings_list.append("Engines not enabled: " + ", ".join(rejected_engines))
@@ -553,8 +552,6 @@ class SearXNGSearchProvider:
                     engine = _clean_text(failure[0], limit=80)
                     reason = _clean_text(failure[1] if len(failure) > 1 else "unavailable", limit=120)
                     warnings_list.append(f"Engine {engine} did not respond successfully: {reason}.")
-            if filtered_count:
-                warnings_list.append(f"Filtered {filtered_count} low-relevance result{'s' if filtered_count != 1 else ''} for this precise query.")
             if blocked_count:
                 warnings_list.append(f"Excluded {blocked_count} result{'s' if blocked_count != 1 else ''} from low-trust or explicitly excluded domains.")
             response = SearchResponse(

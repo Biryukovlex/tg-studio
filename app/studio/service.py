@@ -303,11 +303,6 @@ def _model_history(rows: list[dict[str, Any]]) -> list[Any]:
     return history
 
 
-def _continuation_history(rows: list[dict[str, Any]]) -> list[Any]:
-    """Compatibility helper: continuations retain completed assistant replies."""
-    return _model_history(rows)
-
-
 def _safe_error(exc: BaseException) -> tuple[str, str, bool]:
     return safe_error(exc)
 

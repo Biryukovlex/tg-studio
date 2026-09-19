@@ -269,6 +269,20 @@ def downgrade() -> None:
     op.drop_column("posts", "is_deleted")
     op.drop_column("posts", "created_at")
 
+    # The M0 contract keys channels globally by identifier.  A multi-workspace
+    # archive cannot satisfy that shape: fail closed with a clear message
+    # instead of a raw unique-violation from PostgreSQL.
+    duplicates = op.get_bind().execute(
+        sa.text("SELECT identifier FROM channels GROUP BY identifier HAVING COUNT(*) > 1 LIMIT 5")
+    ).fetchall()
+    if duplicates:
+        names = ", ".join(sorted(str(row[0]) for row in duplicates))
+        raise RuntimeError(
+            "Cannot downgrade to the M0 probe shape: these channel identifiers "
+            f"are tracked by more than one workspace ({names}). Deactivate or "
+            "purge the duplicates, then retry the downgrade."
+        )
+
     op.drop_table("telegram_connections")
     op.drop_table("provider_consents")
     op.drop_table("memberships")

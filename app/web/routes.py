@@ -34,9 +34,8 @@ from .dependencies import require_auth as shared_require_auth
 from .dependencies import require_csrf as shared_require_csrf
 from .dependencies import WorkspaceContext
 from ..studio.routes import _TEMPLATES as _studio_templates
-from ..studio.routes import _public_event_payload as _filter_event_payload
 from ..studio.routes import build_router as build_studio_router
-from ..studio.repository import MemoryStudioRepository, RunNotFound, StudioRepository
+from ..studio.repository import MemoryStudioRepository, StudioRepository
 from ..studio.service import StudioService
 from .settings_routes import router as settings_router
 from .links import telegram_message_link
@@ -363,60 +362,6 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
     async def logout(request: Request):
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
-
-    # ---------------- Studio compatibility alias ----------------
-
-    @app.get("/studio-spike")
-    async def studio_spike_compat(request: Request):
-        """Redirect the M0 URL to the durable M2 Studio surface."""
-        require_auth(request)
-        return RedirectResponse("/studio", status_code=307)
-
-    @app.post("/studio-spike/api/agent")
-    async def studio_spike_agent_compat(request: Request):
-        """Accept one release cycle of clients that still use the M0 path."""
-        require_auth(request)
-        require_csrf(request)
-        return await app.state.studio_service.stream_request(request, await request.body())
-
-    @app.post("/studio-spike/api/runs/{run_id}/cancel")
-    async def studio_spike_cancel_compat(request: Request, run_id: str):
-        require_auth(request)
-        require_csrf(request)
-        try:
-            parsed = uuid.UUID(run_id)
-        except ValueError:
-            raise HTTPException(status_code=404, detail="Run not found") from None
-        try:
-            run = await app.state.studio_service.cancel(parsed)
-        except RunNotFound:
-            raise HTTPException(status_code=404, detail="Run not found") from None
-        status = "cancel_requested" if run["status"] in {"queued", "running"} else run["status"]
-        return {"run_id": run_id, "status": status}
-
-    @app.get("/studio-spike/api/runs/{run_id}/events")
-    async def studio_spike_events_compat(request: Request, run_id: str, after: int = 0):
-        require_auth(request)
-        try:
-            parsed = uuid.UUID(run_id)
-        except ValueError:
-            raise HTTPException(status_code=404, detail="Run not found") from None
-        run = await app.state.studio_repository.get_run(parsed)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Run not found")
-        events = await app.state.studio_repository.get_events(parsed, after=after)
-        return {
-            "run_id": run_id,
-            "thread_id": str(run["conversation_id"]),
-            "events": [
-                {
-                    "type": event["event_type"],
-                    "runId": run_id,
-                    **_filter_event_payload(event.get("safe_payload", {})),
-                }
-                for event in events
-            ],
-        }
 
     # ---------------- pages ----------------
 

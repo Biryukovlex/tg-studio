@@ -152,8 +152,8 @@ def test_configuration_fingerprint_is_stable():
 def test_searxng_client_defaults_and_agent_prompt_use_limits():
     settings = Settings(_env_file=None, studio_search_enabled=True, studio_search_base_url="http://example.test")
     provider = SearXNGSearchProvider(settings)
-    assert provider.max_queries == 12
-    assert provider.max_queries == limits.SEARCH_MAX_QUERIES
+    assert provider.max_results == limits.SEARCH_MAX_RESULTS
+    assert not hasattr(provider, "max_queries")
     # Agent prompt quotes limits
     from app.studio.agent import build_agent
     settings2 = Settings(_env_file=None, studio_test_mode=True)

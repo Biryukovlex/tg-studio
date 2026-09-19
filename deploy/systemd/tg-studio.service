@@ -1,18 +1,20 @@
-# Alternative to Docker: run as a systemd service on Hetzner.
+# Alternative to Docker: run as a systemd service on a VPS.
 #
 #   sudo cp deploy/systemd/tg-studio.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now tg-studio
 #
 [Unit]
-Description=TG Studio collector
-After=network-online.target
+Description=TG Studio collector and web panel
+After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=alex
-Group=alex
+User=tgstudio
+Group=tgstudio
 WorkingDirectory=/opt/tg-studio
+# DATABASE_URL must point at PostgreSQL; run migrations separately with
+# `docker compose --profile migrate run --rm migrate` or `alembic upgrade head`.
 EnvironmentFile=/opt/tg-studio/.env
 ExecStart=/opt/tg-studio/.venv/bin/python -m app.main
 Restart=always
@@ -23,6 +25,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
 ReadWritePaths=/opt/tg-studio/data
 
 [Install]

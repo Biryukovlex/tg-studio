@@ -16,8 +16,9 @@ preserve privacy, tenant isolation, and source provenance.
 
 ## Local development
 
-TG Studio requires Python 3.12+, Node.js 22+, and PostgreSQL 16 for integration
-tests. The default unit suite does not connect to Telegram or OpenRouter.
+TG Studio requires Python 3.12+ (enforced by `pyproject.toml`), Node.js 22+,
+and PostgreSQL 16 for integration tests. The default unit suite does not
+connect to Telegram or OpenRouter.
 
 ```bash
 python3 -m venv .venv
@@ -30,12 +31,17 @@ Run the standard checks before submitting:
 
 ```bash
 .venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q -m postgres  # needs TEST_POSTGRES_URL on a disposable database
 .venv/bin/python -m compileall -q app scripts alembic tests
 .venv/bin/python -m pip check
 .venv/bin/python scripts/check_dependency_licenses.py
+.venv/bin/python scripts/check_lock_consistency.py
+.venv/bin/python -m ruff check app scripts tests alembic
+.venv/bin/python -m mypy app
 npm --prefix studio-frontend run typecheck
+npm --prefix studio-frontend run lint
 npm --prefix studio-frontend run build
-npm --prefix studio-frontend audit --omit=dev --audit-level=high
+npm --prefix studio-frontend audit --audit-level=high
 docker compose config --quiet
 git diff --check
 ```

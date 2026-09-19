@@ -39,7 +39,7 @@ def _state_context(request: Request) -> WorkspaceContext:
 
 def _wants_json(request: Request) -> bool:
     path = request.url.path or ""
-    if path.startswith("/studio/api/") or path.startswith("/studio-spike/api/"):
+    if path.startswith("/studio/api/"):
         return True
     accept = request.headers.get("accept", "")
     # Prefer JSON when Accept explicitly prefers it over HTML.

@@ -33,7 +33,9 @@ COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
 COPY --from=frontend-build /app/web/static/studio-dist ./app/web/static/studio-dist
 
-# SQLite db + session secret live here; mount a volume on this path.
+# Local file state (cookie fallback secret, legacy SQLite rollback archive)
+# lives here; mount a volume on this path. PostgreSQL remains the runtime
+# store and is never kept inside the image.
 RUN useradd -r -u 10001 appuser && mkdir -p /app/data && chown -R appuser:appuser /app/data
 VOLUME ["/app/data"]
 

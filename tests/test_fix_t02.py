@@ -179,7 +179,7 @@ async def test_unauthenticated_api_returns_401_json(tmp_path):
         assert html.status_code == 303
         assert html.headers["location"] == "/login"
 
-        compat = await client.get("/studio-spike/api/runs/00000000-0000-0000-0000-000000000000/events")
+        compat = await client.get("/studio/api/runs/00000000-0000-0000-0000-000000000000/events")
         assert compat.status_code == 401
         assert _extract_error(compat.json()).get("code") == "unauthenticated"
 
@@ -276,13 +276,16 @@ async def test_compat_events_filters_allowlist(tmp_path):
         run_id = uuid.uuid4()
 
         async def fake_get_run(rid):
-            return {"conversation_id": conv_id, "id": rid}
+            return {"conversation_id": conv_id, "id": rid, "status": "succeeded", "stage": "complete"}
 
         async def fake_get_events(rid, after=0):
             return [
                 {
+                    "id": 1,
+                    "sequence": 1,
                     "event_type": "TOOL_CALL_START",
                     "safe_payload": {"tool_name": "search_web", "malicious": "should_be_hidden", "source_count": 1},
+                    "created_at": "2026-09-19T00:00:00+00:00",
                 }
             ]
 
@@ -291,13 +294,13 @@ async def test_compat_events_filters_allowlist(tmp_path):
         repo.get_run = fake_get_run  # type: ignore
         repo.get_events = fake_get_events  # type: ignore
         try:
-            resp = await client.get(f"/studio-spike/api/runs/{run_id}/events")
+            resp = await client.get(f"/studio/api/runs/{run_id}/events")
             assert resp.status_code == 200
             events = resp.json()["events"]
             assert len(events) == 1
-            assert events[0]["type"] == "TOOL_CALL_START"
-            assert "malicious" not in events[0]
-            assert events[0]["tool_name"] == "search_web"
+            assert events[0]["event_type"] == "TOOL_CALL_START"
+            assert "malicious" not in events[0]["safe_payload"]
+            assert events[0]["safe_payload"]["tool_name"] == "search_web"
         finally:
             repo.get_run = orig_get_run  # type: ignore
             repo.get_events = orig_get_events  # type: ignore

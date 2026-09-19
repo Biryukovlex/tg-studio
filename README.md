@@ -273,11 +273,6 @@ npm run typecheck
 npm run build
 ```
 
-The old `/studio-spike` URL is retained only as a compatibility redirect and
-API alias for existing bookmarks. It uses the production conversation/run
-service and does not have a separate model, event log, or frontend bundle.
-Run ownership, reload recovery, cancellation, and operator limits are enforced
-by the PostgreSQL-backed Studio service and its automated test suite.
 
 Studio agent and cancellation POSTs require the session-bound `X-CSRF-Token`
 emitted on the protected page. OpenRouter credentials, Telegram sessions, and
@@ -315,8 +310,9 @@ secrets have been prepared on the server.
 ### Option A — Docker (recommended)
 
 ```bash
-# local: copy project
-rsync -av --exclude .venv --exclude data ./ user@SERVER_IP:/opt/tg-studio/
+# local: copy project (warning: .env holds secrets - copy it only over an
+# encrypted channel and never publish it; .git, data/, and node_modules stay excluded)
+rsync -av --exclude .venv --exclude .git --exclude node_modules --exclude .npm-cache --exclude data ./ user@SERVER_IP:/opt/tg-studio/
 rsync -av data user@SERVER_IP:/opt/tg-studio/   # keep collected history
 
 # server:

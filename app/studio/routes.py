@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+import json
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,7 @@ def _draft(row: dict[str, Any] | None) -> dict[str, Any] | None:
         raw = value.get(key)
         if isinstance(raw, str):
             try:
-                raw = __import__("json").loads(raw)
+                raw = json.loads(raw)
             except (TypeError, ValueError):
                 raw = default
         value[key] = raw if isinstance(raw, (list, dict)) else default
