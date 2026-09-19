@@ -5,9 +5,7 @@ from __future__ import annotations
 import pathlib
 import re
 
-import pytest
 import httpx
-from fastapi.templating import Jinja2Templates
 
 from app import limits
 from app.config import Settings
@@ -159,7 +157,7 @@ def test_searxng_client_defaults_and_agent_prompt_use_limits():
     # Agent prompt quotes limits
     from app.studio.agent import build_agent
     settings2 = Settings(_env_file=None, studio_test_mode=True)
-    agent = build_agent(settings2)
+    assert build_agent(settings2) is not None
     # The agent instructions are stored in the agent object; check that the run budget string contains limits values
     # build_agent creates instructions with f"Run budget: {limits.MAX_TOOL_CALLS} ..."
     # We can inspect the agent's system prompt via its instructions attribute if available, else check limits values are as expected
@@ -181,13 +179,12 @@ def test_monkeypatch_heartbeat_changes_service_interval(monkeypatch):
     # We can verify by checking that limits value is indeed 0.05
     repo = MemoryStudioRepository()
     settings = Settings(_env_file=None, studio_test_mode=True)
-    service = StudioService(repo, settings)
+    assert StudioService(repo, settings) is not None
     # The service does not cache heartbeat at init, but reads at _watch_run_control time
     # So we verify that after monkeypatch, the limits value is seen
     assert limits.RUN_HEARTBEAT_SECONDS == 0.05
     # Also verify that a timeout change would be reflected in a new provider
     monkeypatch.setattr(limits, "SEARCH_TIMEOUT_SECONDS", 2.5)
-    from app.studio.search_health import check_search_health
 
     assert limits.SEARCH_TIMEOUT_SECONDS == 2.5
 
@@ -202,7 +199,6 @@ def test_studio_always_on_and_sidebar_and_env_clean():
     from app.collector import Collector
     from app.web.routes import create_app
     import tempfile
-    import os
 
     with tempfile.TemporaryDirectory() as tmp:
         # Use Database with tmp path for isolated test
@@ -236,9 +232,8 @@ def test_studio_always_on_and_sidebar_and_env_clean():
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 # Login
-                resp = await client.post("/login", data={"username": "admin", "password": "pw"})
+                await client.post("/login", data={"username": "admin", "password": "pw"})
                 # After login, GET /studio should be 200
-                cookies = resp.cookies
                 # Need to follow redirect and keep session
                 # Use client with cookies automatically
                 studio_resp = await client.get("/studio")

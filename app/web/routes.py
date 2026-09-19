@@ -26,6 +26,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from ..collector import Collector
 from ..config import Settings
+from ..workspace_settings import RuntimeSettings
 from ..async_compat import maybe_await
 from ..telegram_formatting import render_telegram_html
 from .dependencies import csrf_token as shared_csrf_token
@@ -217,7 +218,7 @@ def _comment_link(row) -> str:
     )
 
 
-def _load_or_create_secret(settings: Settings) -> str:
+def _load_or_create_secret(settings: Settings | RuntimeSettings) -> str:
     if settings.session_secret:
         return settings.session_secret
     secret_file = settings.data_path / ".secret"
@@ -234,7 +235,7 @@ def _load_or_create_secret(settings: Settings) -> str:
     return key
 
 
-def create_app(collector: Collector, settings: Settings, workspace_settings=None) -> FastAPI:
+def create_app(collector: Collector, settings: Settings | RuntimeSettings, workspace_settings=None) -> FastAPI:
     db = collector.db
     app = FastAPI(title="TG Studio", docs_url=None, redoc_url=None)
     app.add_middleware(
@@ -493,15 +494,15 @@ def create_app(collector: Collector, settings: Settings, workspace_settings=None
     @app.get("/post/{post_id}")
     async def post_detail(request: Request, post_id: int):
         require_auth(request)
-        row = await maybe_await(db.post_row(post_id))
-        if row is None:
+        post = await maybe_await(db.post_row(post_id))
+        if post is None:
             raise HTTPException(status_code=404, detail="Post not found")
         hist = await maybe_await(db.post_history(post_id))
         comments = [
             dict(comment) | {"link": _comment_link(comment)}
             for comment in await maybe_await(db.comments_for_post(post_id))
         ]
-        row = dict(row)
+        row = dict(post)
         row["link"] = _post_link(row)
         row["formatted_html"] = render_telegram_html(
             row.get("text"), row.get("formatting_entities")

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 import uuid
 
 import pytest
+from tests.helpers.postgres import pg_url
 
 from app.studio.repository import ActiveRunExists, MemoryStudioRepository, RunNotFound, StudioRepository
 
@@ -137,9 +137,9 @@ def test_conversation_delete_ui_contract_is_confirmed_and_accessible():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_postgres_delete_cascades_studio_records_and_rejects_active_runs():
-    database_url = os.environ.get("M7_POSTGRES_URL")
+    database_url = pg_url("M7_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M7_POSTGRES_URL to run the PostgreSQL conversation-delete proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M7_POSTGRES_URL) to run the PostgreSQL conversation-delete proof")
 
     from app.postgres_db import PostgresDatabase
 

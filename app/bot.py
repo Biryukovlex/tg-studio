@@ -19,6 +19,7 @@ from datetime import datetime
 
 from .collector import Collector
 from .config import Settings
+from .workspace_settings import RuntimeSettings
 from .async_compat import maybe_await
 from .web.links import normalize_channel_identifier, telegram_message_link
 
@@ -53,7 +54,7 @@ def _fmt_row(row, with_channel: bool = False) -> str:
 
 
 class CommandHandlers:
-    def __init__(self, client: TelegramClient, collector: Collector, settings: Settings) -> None:
+    def __init__(self, client: TelegramClient, collector: Collector, settings: Settings | RuntimeSettings) -> None:
         self.client = client
         self.collector = collector
         self.db = collector.db

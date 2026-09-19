@@ -869,7 +869,7 @@ class PostgresDatabase:
                     totals[key] += int(row[key] or 0)
             else:
                 by_day[day] = dict(row)
-        output = {key: [] for key in ("views", "comments", "reactions", "shares", "posts_per_day")}
+        output: dict[str, list] = {key: [] for key in ("views", "comments", "reactions", "shares", "posts_per_day")}
         for day in days_list:
             row = by_day.get(day)
             if row:

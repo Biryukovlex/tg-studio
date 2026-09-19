@@ -9,29 +9,35 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  lint-and-unit:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            requirements.txt
+            requirements.lock
             requirements-dev.txt
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: studio-frontend/package-lock.json
       - name: Install Python dependencies
-        run: python -m pip install -r requirements-dev.txt
+        run: python -m pip install -r requirements.lock -r requirements-dev.txt
       - name: Install frontend dependencies
         run: npm --prefix studio-frontend ci --ignore-scripts
-      - name: Python tests
-        run: python -m pytest -q
+      - name: Python lint
+        run: python -m ruff check app scripts tests alembic
+      - name: Python type check
+        run: python -m mypy app
+      - name: Frontend lint
+        run: npm --prefix studio-frontend run lint
+      - name: Python tests (unit)
+        run: python -m pytest -q -m "not postgres"
       - name: Python compile check
         run: python -m compileall -q app scripts alembic tests
       - name: Dependency consistency
@@ -44,9 +50,78 @@ jobs:
         run: npm --prefix studio-frontend run typecheck
       - name: Frontend production build
         run: npm --prefix studio-frontend run build
+      - name: Frontend bundle is committed
+        run: git diff --exit-code -- app/web/static/studio-dist
       - name: Frontend vulnerability audit
         run: npm --prefix studio-frontend audit --audit-level=high
+      - name: Container image builds
+        run: docker build -t tg-studio:ci .
       - name: Compose configuration
         run: |
           cp .env.example .env
           docker compose config --quiet
+
+  lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Verify the lockfile matches the documented ranges
+        # The lockfile is curated, not pip-compile output: regenerating it
+        # would churn unrelated upgrades. This gate proves every locked
+        # version satisfies the documented ranges instead.
+        run: python scripts/check_lock_consistency.py
+
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: tg_studio_test
+          POSTGRES_USER: tg_studio_test
+          POSTGRES_PASSWORD: tg_studio_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tg_studio_test -d tg_studio_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql+asyncpg://tg_studio_test:tg_studio_test@localhost:5432/tg_studio_test
+      TEST_POSTGRES_URL: postgresql+asyncpg://tg_studio_test:tg_studio_test@localhost:5432/tg_studio_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            requirements-dev.txt
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.lock -r requirements-dev.txt
+      - name: Apply migrations to the disposable database
+        run: python -m alembic upgrade head
+      - name: PostgreSQL integration tests
+        run: python -m pytest -q -m postgres
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          languages: python, javascript
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4

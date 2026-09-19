@@ -102,7 +102,7 @@ export function copyRenderedSelection(html: string): boolean {
   const selection = window.getSelection();
   const previous: Range[] = [];
   if (selection) for (let i = 0; i < selection.rangeCount; i += 1) previous.push(selection.getRangeAt(i));
-  let done = false;
+  let done: boolean;
   try {
     const range = document.createRange();
     range.selectNodeContents(host);

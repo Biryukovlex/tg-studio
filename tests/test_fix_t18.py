@@ -171,7 +171,6 @@ def test_fit_field_lines_respects_dialog_and_api_limits():
 @pytest.mark.asyncio
 async def test_build_result_always_fits_the_profile_fields():
     """Regression: a build whose lines overflowed a field left Save disabled."""
-    from types import SimpleNamespace
     from app.studio.service import StudioService
     from app.studio.repository import MemoryStudioRepository
 

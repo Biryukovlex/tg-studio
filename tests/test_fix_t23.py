@@ -7,14 +7,12 @@ from pathlib import Path
 
 import pytest
 import httpx
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from cryptography.fernet import Fernet
 
 from app.config import Settings
-from app.db import Database
 from app.collector import Collector
-from app.web.routes import create_app
 
 
 _TEST_FERNET_KEY = Fernet.generate_key().decode("ascii")
@@ -168,8 +166,6 @@ class FakeDB:
 
 
 def _make_app_with_fake(tmp_path, role="owner", available=True, ws=None, db=None):
-    import tempfile
-    from pathlib import Path
 
     settings = Settings(
         _env_file=None,
@@ -194,7 +190,6 @@ def _make_app_with_fake(tmp_path, role="owner", available=True, ws=None, db=None
     collector.workspace_settings = ws
     # Patch WorkspaceContext to have role
     from app.web.routes import create_app, WorkspaceContext
-    import uuid
 
     # Create app with our fake ws
     app = create_app(collector, settings, workspace_settings=ws)
@@ -222,7 +217,7 @@ async def test_get_settings_auth_and_sidebar(tmp_path):
         # Login as owner
         # Need to set session for auth
         # Use the app's login flow: post to /login
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
+        await client.post("/login", data={"username": "admin", "password": "pw"})
         # After login, GET /settings should be 200 and contain ids
         resp = await client.get("/settings")
         assert resp.status_code == 200
@@ -241,7 +236,7 @@ async def test_get_settings_auth_and_sidebar(tmp_path):
         # Need to login but with member role, the session will still be owner? Actually login creates owner context
         # For this test, we need to simulate member via directly setting workspace_context role to member and having auth
         # We'll manually set session auth and then request
-        login2 = await client2.post("/login", data={"username": "admin", "password": "pw"})
+        await client2.post("/login", data={"username": "admin", "password": "pw"})
         # Override role to member after login
         app2.state.workspace_context = app2.state.workspace_context.__class__(
             user_id=app2.state.workspace_context.user_id,
@@ -258,7 +253,7 @@ async def test_post_collection_csrf_and_validation(tmp_path):
     app, ws, db = _make_app_with_fake(tmp_path, role="owner", available=True)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
+        await client.post("/login", data={"username": "admin", "password": "pw"})
         # Get CSRF
         page = await client.get("/settings")
         import re
@@ -292,7 +287,7 @@ async def test_post_studio_key_handling(tmp_path):
     app, ws, db = _make_app_with_fake(tmp_path, role="owner", available=True)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
+        await client.post("/login", data={"username": "admin", "password": "pw"})
         page = await client.get("/settings")
         import re
 
@@ -338,7 +333,7 @@ async def test_post_studio_key_handling(tmp_path):
         app2, _, _ = _make_app_with_fake(tmp_path, role="owner", available=True, ws=ws2, db=db)
         transport2 = httpx.ASGITransport(app=app2)
         async with httpx.AsyncClient(transport=transport2, base_url="http://test") as client2:
-            login2 = await client2.post("/login", data={"username": "admin", "password": "pw"})
+            await client2.post("/login", data={"username": "admin", "password": "pw"})
             page2 = await client2.get("/settings")
             import re
 
@@ -418,7 +413,7 @@ async def test_channels_add_and_deactivate(tmp_path):
     app, ws, db = _make_app_with_fake(tmp_path, role="owner", available=True)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
+        await client.post("/login", data={"username": "admin", "password": "pw"})
         page = await client.get("/settings")
         import re
 
@@ -475,7 +470,7 @@ async def test_connection_render_and_persist(tmp_path):
     app, ws, db = _make_app_with_fake(tmp_path, role="owner", available=True)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
+        await client.post("/login", data={"username": "admin", "password": "pw"})
         page = await client.get("/settings")
         assert "123456" in page.text
         assert "Session set" in page.text
@@ -505,7 +500,7 @@ async def test_reset_and_source_tags(tmp_path):
     ws._as_dict_return["collection.backfill_limit"] = {"value": 500, "source": "db", "updated_at": "2026-09-06 21:14 UTC"}
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
+        await client.post("/login", data={"username": "admin", "password": "pw"})
         page = await client.get("/settings")
         assert 'class="source-tag saved"' in page.text
         assert "Use .env value" in page.text
@@ -522,7 +517,7 @@ async def test_reset_and_source_tags(tmp_path):
         app2, _, _ = _make_app_with_fake(tmp_path, role="owner", available=True, ws=ws2, db=db)
         transport2 = httpx.ASGITransport(app=app2)
         async with httpx.AsyncClient(transport=transport2, base_url="http://test") as client2:
-            login2 = await client2.post("/login", data={"username": "admin", "password": "pw"})
+            await client2.post("/login", data={"username": "admin", "password": "pw"})
             page2 = await client2.get("/settings")
             assert "from .env" in page2.text
 
@@ -532,7 +527,7 @@ async def test_sqlite_mode_warn_and_no_forms(tmp_path):
     app, ws, db = _make_app_with_fake(tmp_path, role="owner", available=False)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
+        await client.post("/login", data={"username": "admin", "password": "pw"})
         page = await client.get("/settings")
         assert "Settings are read from .env until PostgreSQL is configured" in page.text
         # Count forms - should be zero (the logout link is an anchor, not counted)
@@ -548,7 +543,7 @@ async def test_base_sidebar_link_visibility(tmp_path):
     app, ws, db = _make_app_with_fake(tmp_path, role="owner", available=True)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
+        await client.post("/login", data={"username": "admin", "password": "pw"})
         dash = await client.get("/")
         assert 'href="/settings"' in dash.text
         studio = await client.get("/studio")
@@ -557,7 +552,7 @@ async def test_base_sidebar_link_visibility(tmp_path):
     app2, ws2, db2 = _make_app_with_fake(tmp_path, role="member", available=True)
     transport2 = httpx.ASGITransport(app=app2)
     async with httpx.AsyncClient(transport=transport2, base_url="http://test") as client2:
-        login2 = await client2.post("/login", data={"username": "admin", "password": "pw"})
+        await client2.post("/login", data={"username": "admin", "password": "pw"})
         # Need to override role after login as before
         app2.state.workspace_context = app2.state.workspace_context.__class__(
             user_id=app2.state.workspace_context.user_id,

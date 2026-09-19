@@ -5,7 +5,6 @@ import asyncio
 import httpx
 import pytest
 
-from app.config import Settings
 from app.studio.sources import SafeSourceReader, SSRFBlockedError, SourcePolicyError
 
 
@@ -126,11 +125,11 @@ async def test_source_reader_can_use_explicit_private_fixture_only():
 @pytest.mark.asyncio
 async def test_source_reader_total_timeout_returns_inaccessible_state():
     async def handler(request: httpx.Request) -> httpx.Response:
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(1.0)
         return httpx.Response(200, headers={"content-type": "text/plain"}, text="late")
 
     reader = SafeSourceReader(
-        transport=httpx.MockTransport(handler), allow_private_for_tests=True, timeout_seconds=0.2
+        transport=httpx.MockTransport(handler), allow_private_for_tests=True, timeout_seconds=0.1
     )
     document = await reader.read("http://127.0.0.1:8765/slow")
     assert document.status == "inaccessible"

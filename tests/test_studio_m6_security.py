@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import ast
 import asyncio
-import os
-from pathlib import Path
 import re
-from types import SimpleNamespace
 import uuid
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from tests.helpers.postgres import pg_url
 
 from app.config import Settings
 from app.studio.agent import StudioDeps, build_agent
@@ -17,32 +16,67 @@ from app.studio.repository import MemoryStudioRepository
 
 ROOT = Path(__file__).resolve().parents[1]
 
+_MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
-def test_every_studio_route_requires_auth_and_every_mutation_requires_csrf():
-    source = (ROOT / "app/studio/routes.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    route_count = 0
-    mutation_count = 0
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        methods: list[str] = []
-        for decorator in node.decorator_list:
-            if not isinstance(decorator, ast.Call) or not isinstance(decorator.func, ast.Attribute):
-                continue
-            owner = decorator.func.value
-            if isinstance(owner, ast.Name) and owner.id == "router":
-                methods.append(decorator.func.attr.lower())
-        if not methods:
-            continue
-        route_count += 1
-        body = ast.get_source_segment(source, node) or ""
-        assert "require_auth(request)" in body, f"{node.name} lacks authentication"
-        if any(method in {"post", "put", "patch", "delete"} for method in methods):
-            mutation_count += 1
-            assert "require_csrf(request)" in body, f"{node.name} lacks CSRF validation"
-    assert route_count >= 20
-    assert mutation_count >= 10
+
+def _studio_api_routes(app) -> list[tuple[str, set[str]]]:
+    routes: list[tuple[str, set[str]]] = []
+
+    def visit(route, prefix: str = "") -> None:
+        original = getattr(route, "original_router", None)
+        if original is not None:
+            inner_prefix = getattr(original, "prefix", "") or ""
+            for inner in getattr(original, "routes", []):
+                visit(inner, prefix + inner_prefix)
+            return
+        path = getattr(route, "path", "")
+        methods = set(getattr(route, "methods", set()) or set())
+        full = path if path.startswith("/studio/api") else prefix + path
+        if full.startswith("/studio/api") and methods:
+            routes.append((full, methods))
+
+    for route in app.routes:
+        visit(route)
+    return routes
+
+
+def _concrete_path(path: str) -> str:
+    return (
+        path.replace("{conversation_id}", str(uuid.uuid4()))
+        .replace("{draft_id}", str(uuid.uuid4()))
+        .replace("{run_id}", str(uuid.uuid4()))
+    )
+
+
+@pytest.mark.asyncio
+async def test_every_studio_route_requires_auth_and_every_mutation_requires_csrf(client, app, settings):
+    routes = _studio_api_routes(app)
+    assert len(routes) >= 20
+    mutations = [(path, methods) for path, methods in routes if methods & _MUTATION_METHODS]
+    assert len(mutations) >= 10
+
+    # No session: every Studio API route answers 401 JSON.
+    for path, methods in routes:
+        for method in sorted(methods):
+            url = _concrete_path(path)
+            if method == "GET":
+                url += ("&" if "?" in url else "?") + "channel_id=1"
+            response = await client.request(method, url, json={})
+            assert response.status_code == 401, f"{method} {path} is not auth-gated"
+
+    # Valid session but no CSRF header: every mutation answers 403.
+    await _login(client, settings)
+    for path, methods in mutations:
+        for method in sorted(methods & _MUTATION_METHODS):
+            response = await client.request(method, _concrete_path(path), json={})
+            assert response.status_code == 403, f"{method} {path} lacks CSRF validation"
+
+    # Positive control: the same mutation with a valid CSRF token is not 403,
+    # proving the 403s above come from CSRF validation rather than a blanket block.
+    home = await client.get("/studio")
+    token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
+    response = await client.post("/studio/api/setup/validate", headers={"x-csrf-token": token})
+    assert response.status_code != 403
 
 
 @pytest.mark.asyncio
@@ -142,9 +176,9 @@ def test_default_log_calls_do_not_include_private_body_or_prompt_values():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_postgres_repository_and_routes_fail_closed_across_workspaces():
-    database_url = os.environ.get("M6_POSTGRES_URL")
+    database_url = pg_url("M6_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M6_POSTGRES_URL to run the M6 tenant/encryption proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M6_POSTGRES_URL) to run the M6 tenant/encryption proof")
 
     import httpx
 
@@ -204,7 +238,10 @@ async def test_postgres_repository_and_routes_fail_closed_across_workspaces():
         assert await db_a.claim_collection_job(channel_b) is None
 
         session_plaintext = "m6-plaintext-telegram-session-never-return"
-        cipher = SessionCipher("m6-external-encryption-key" * 2)
+        from cryptography.fernet import Fernet
+
+        encryption_key = Fernet.generate_key().decode("ascii")
+        cipher = SessionCipher(encryption_key)
         await db_b.persist_telegram_session(
             label="m6-security",
             api_id=1,
@@ -229,7 +266,7 @@ async def test_postgres_repository_and_routes_fail_closed_across_workspaces():
             admin_password="m6-test-password",
             session_secret="m6-http-session-secret",
             database_url=database_url,
-            telegram_session_encryption_key="m6-external-encryption-key" * 2,
+            telegram_session_encryption_key=encryption_key,
             local_workspace_slug=slug_a,
             studio_test_mode=True,
         )

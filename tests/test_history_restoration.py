@@ -3,7 +3,6 @@ import json
 import sqlite3
 
 from app.db import Database
-from app.collector import Collector
 from app.config import Settings
 
 

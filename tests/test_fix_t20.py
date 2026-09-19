@@ -1,14 +1,11 @@
 """Draft versioning UX: Save overwrites, Save as new version appends, Choose moves
 the pointer, agent revisions become current, nothing is minted implicitly."""
-import json
 import os
 import re
 import uuid
 
-import httpx
 import pytest
 
-from app.config import Settings
 from app.studio.drafts import DraftConflictError
 from app.studio.repository import DraftNotFound, MemoryStudioRepository
 

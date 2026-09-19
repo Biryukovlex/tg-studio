@@ -223,8 +223,8 @@ def render_telegram_html(text: Any, entities: Any = None) -> str:
         chunk = html.escape(del_surrogate(source[left:right]), quote=False)
         openings: list[str] = []
         closes: list[str] = []
-        for entity_start, entity_end, _, entity in active:
-            opening, closing = _wrapper(entity, source, entity_start, entity_end)
+        for entity_start, entity_end, _, active_entity in active:
+            opening, closing = _wrapper(active_entity, source, entity_start, entity_end)
             if opening:
                 openings.append(opening)
                 closes.append(closing)

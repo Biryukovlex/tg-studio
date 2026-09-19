@@ -17,10 +17,9 @@ from ..web.dependencies import require_auth, require_csrf
 from .consent import PROVIDER_NAME, configuration_fingerprint, consent_state, disclosure
 from .drafts import DraftConflictError, DraftValidationError
 from .markdown import render_markdown_html, render_markdown_plain
-from .repository import ActiveRunExists, ConversationNotFound, DraftNotFound, MemoryStudioRepository, RunNotFound, StudioRepository, StudioRepositoryError
-from .profile import ChannelProfile, propose_topic_change
+from .repository import ActiveRunExists, ConversationNotFound, DraftNotFound, RunNotFound
 from .prompts import PROMPT_VERSION
-from .schemas import ConversationCreate, DraftPatchRequest, ProfileChangeRequest, ProviderConsentRequest, StudioSettingsPatch
+from .schemas import ConversationCreate, DraftPatchRequest, ProviderConsentRequest, StudioSettingsPatch
 from .service import StudioService
 from .setup import build_setup_state
 from .search_health import check_search_health
@@ -76,7 +75,8 @@ def _draft(row: dict[str, Any] | None) -> dict[str, Any] | None:
     value["over_limit"] = len(plain) > 4096
     value["warning_threshold"] = len(plain) >= 3800
     # Keep legacy plain count under character_count for backward compat
-    for key, default in (("source_ids", []), ("claim_support", []), ("assumptions", []), ("warnings", []), ("channel_evidence", []), ("web_evidence", [])):
+    list_defaults: tuple[tuple[str, list[Any]], ...] = (("source_ids", []), ("claim_support", []), ("assumptions", []), ("warnings", []), ("channel_evidence", []), ("web_evidence", []))
+    for key, default in list_defaults:
         raw = value.get(key)
         if isinstance(raw, str):
             try:
@@ -279,6 +279,8 @@ def build_router() -> APIRouter:
     async def studio_settings(request: Request, channel_id: int = Query(..., gt=0)):
         require_auth(request)
         _, selected_channel_id = await _selected_channel(request, channel_id)
+        if selected_channel_id is None:
+            return _safe_error("channel_not_found", "Selected channel is not part of this workspace.", status_code=404)
         return {
             "channel_id": selected_channel_id,
             "system_prompt": await _service(request).repository.get_system_prompt(selected_channel_id),
@@ -293,6 +295,8 @@ def build_router() -> APIRouter:
         except (ValidationError, ValueError):
             return _safe_error("invalid_settings", "System prompt must be text, up to 12,000 characters.", status_code=422)
         _, selected_channel_id = await _selected_channel(request, payload.channel_id)
+        if selected_channel_id is None:
+            return _safe_error("channel_not_found", "Selected channel is not part of this workspace.", status_code=404)
         value = await _service(request).repository.set_system_prompt(
             selected_channel_id, payload.system_prompt
         )
@@ -639,6 +643,8 @@ def build_router() -> APIRouter:
         service = _service(request)
         try:
             _, channel_id = await _selected_channel(request, payload.channel_id)
+            if channel_id is None:
+                return _safe_error("channel_not_found", "Selected channel is not part of this workspace.", status_code=404)
             row = await service.create_conversation(channel_id=channel_id, title=payload.title)
         except ConversationNotFound:
             return _safe_error("channel_not_found", "Selected channel is not part of this workspace.", status_code=404)

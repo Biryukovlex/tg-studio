@@ -10,10 +10,46 @@ from app.db import Database
 from app.web.routes import create_app
 
 
+def pytest_collection_modifyitems(items):
+    """Mirror the postgres marker onto every integration test.
+
+    PostgreSQL-gated tests are marked ``integration`` at their definition
+    sites; CI runs them separately with ``pytest -m postgres`` against a
+    disposable service. Keeping the mapping here (instead of editing every
+    test) guarantees a new integration test is automatically included.
+    """
+
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(pytest.mark.postgres)
+
+
 @pytest.fixture(autouse=True)
 def isolate_tests_from_operator_env(monkeypatch):
     """Keep private deployment settings from changing default-state tests."""
 
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    for key in (
+        "API_ID",
+        "API_HASH",
+        "SESSION_STRING",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_MODEL",
+        "TELEGRAM_SESSION_ENCRYPTION_KEY",
+        "TELEGRAM_SESSION_ENCRYPTION_KEY_PREVIOUS",
+        "STUDIO_ENABLED",
+        "STUDIO_TEST_MODE",
+        "STUDIO_SEARCH_ENABLED",
+        "STUDIO_SEARCH_BASE_URL",
+        "STUDIO_SEARCH_BLOCKED_DOMAINS",
+        "ADMIN_USERNAME",
+        "ADMIN_PASSWORD",
+        "SESSION_SECRET",
+        "DATABASE_URL",
+        "CHANNELS",
+        "PROCESS_ROLE",
+    ):
+        monkeypatch.delenv(key, raising=False)
     for key, value in {
         "DATABASE_URL": "",
         "OPENROUTER_API_KEY": "",

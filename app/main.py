@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from typing import Any
 
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -33,7 +34,7 @@ from .web.routes import create_app
 from .workspace_settings import WorkspaceSettings
 
 
-def resolve_telegram_connection(settings, persisted: dict | None = None) -> dict[str, object]:
+def resolve_telegram_connection(settings, persisted: dict | None = None) -> dict[str, Any]:
     """Prefer the saved workspace connection and fill missing values from .env."""
     saved = persisted or {}
     return {
@@ -43,7 +44,7 @@ def resolve_telegram_connection(settings, persisted: dict | None = None) -> dict
     }
 
 
-def telegram_connection_problems(connection: dict[str, object]) -> list[str]:
+def telegram_connection_problems(connection: dict[str, Any]) -> list[str]:
     problems: list[str] = []
     if not connection.get("api_id") or not connection.get("api_hash"):
         problems.append("Telegram API ID and API hash are missing.")
@@ -81,12 +82,13 @@ async def amain() -> None:
             for problem in postgres_problems:
                 print(f"  - {problem}", file=sys.stderr)
             sys.exit(1)
-        db = PostgresDatabase.from_settings(settings)
-        await db.init_db(admin_username=settings.admin_username)
+        pg_db = PostgresDatabase.from_settings(settings)
+        await pg_db.init_db(admin_username=settings.admin_username)
         # Channels can be added later on the settings page, so an empty
         # CHANNELS seed is only a warning once PostgreSQL holds the workspace.
-        if not settings.channel_list and not await db.get_channels():
+        if not settings.channel_list and not await pg_db.get_channels():
             log.warning("No channels configured yet - add one at /settings after signing in.")
+        db: Database | PostgresDatabase = pg_db
     else:
         if not settings.allow_legacy_sqlite:
             print(
@@ -96,8 +98,9 @@ async def amain() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-        db = Database(settings.db_path)
-        db.init_db()
+        sqlite_db = Database(settings.db_path)
+        sqlite_db.init_db()
+        db = sqlite_db
 
     def _uvicorn_config(app) -> uvicorn.Config:
         kwargs: dict = dict(host=settings.web_host, port=settings.web_port, log_level="info")

@@ -179,8 +179,6 @@ async def test_stats_last_poll_datetime_formatting():
 @pytest.mark.asyncio
 async def test_floodwait_does_not_block_beyond_30s(monkeypatch):
     # collector that raises FloodWait
-    now = datetime.now(timezone.utc)
-    posts = [FakeMsg(1, now)]
     class FloodClient(FakeClient):
         async def get_entity(self, ident):
             return FakeEntity()
@@ -253,7 +251,6 @@ async def test_persisted_session_fallback(monkeypatch):
     monkeypatch.setattr("app.main.StringSession", lambda s: s)
     # We need to test the logic directly without running full amain
     # Simulate the session handling block from main.py
-    from app.session_crypto import build_cipher
     cipher = MagicMock()
     cipher.key_version = 1
     # mimic main's logic
@@ -284,7 +281,6 @@ async def test_persisted_session_fallback(monkeypatch):
 async def test_expire_stale_collection_jobs_in_memory():
     # Test PostgresDatabase method via fake in-memory logic
     # Use a fake that mimics SQL: we test the method exists and handles rowcount
-    db = MagicMock(spec=PostgresDatabase)
     # Instead test our real method with mocked _execute
     real_db = PostgresDatabase("postgresql+asyncpg://user:pass@localhost/db", workspace_slug="community")
     real_db.workspace_id = uuid.uuid4()

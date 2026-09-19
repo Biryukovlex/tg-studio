@@ -6,6 +6,7 @@ import sys
 import uuid
 
 import pytest
+from tests.helpers.postgres import pg_url
 
 from app.config import Settings
 from app.postgres_db import PostgresDatabase
@@ -17,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _database_url() -> str | None:
-    return os.environ.get("M6_POSTGRES_URL")
+    return pg_url("M6_POSTGRES_URL")
 
 
 @pytest.mark.integration
@@ -25,7 +26,7 @@ def _database_url() -> str | None:
 async def test_postgres_expired_lease_recovers_with_durable_event():
     database_url = _database_url()
     if not database_url:
-        pytest.skip("set M6_POSTGRES_URL to run the M6 durability proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M6_POSTGRES_URL) to run the M6 durability proof")
     workspace_slug = f"m6-recovery-{uuid.uuid4().hex[:10]}"
     db = PostgresDatabase(database_url, workspace_slug=workspace_slug)
     try:
@@ -89,7 +90,7 @@ async def _claim_process(*, kind: str, resource: str, worker_id: str, workspace_
 async def test_two_worker_processes_cannot_double_claim_runs_or_collection_jobs():
     database_url = _database_url()
     if not database_url:
-        pytest.skip("set M6_POSTGRES_URL to run the M6 multi-worker proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M6_POSTGRES_URL) to run the M6 multi-worker proof")
     workspace_slug = f"m6-workers-{uuid.uuid4().hex[:10]}"
     db = PostgresDatabase(database_url, workspace_slug=workspace_slug)
     try:

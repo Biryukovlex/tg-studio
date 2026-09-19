@@ -3,7 +3,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 
 from app.config import Settings
-from app.studio.profile import _build_draft_from_analytics, PROFILE_EXTRACTION_VERSION
+from app.studio.profile import _build_draft_from_analytics
 from app.studio.analytics import analyze_posts
 
 
@@ -161,7 +161,6 @@ def test_migration_upgrade_downgrade():
 
 def test_routes_auth_csrf():
     # Check that new routes require auth and CSRF
-    import inspect
     from app.studio.routes import build_router
     router = build_router()
     routes = {r.path: r for r in router.routes}

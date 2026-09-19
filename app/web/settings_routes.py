@@ -151,7 +151,7 @@ async def _page_context(
             {"posts": 0, "comments": 0, "conversations": 0, "drafts": 0},
         )
 
-    connection = {"configured": False, "api_id": None, "has_session": False, "updated_at": None}
+    connection: dict[str, Any] = {"configured": False, "api_id": None, "has_session": False, "updated_at": None}
     if db is not None and hasattr(db, "telegram_connection_status"):
         try:
             connection = dict(await db.telegram_connection_status(limits.TELEGRAM_CONNECTION_LABEL))
@@ -389,6 +389,7 @@ async def save_telegram_connection(
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
 
+    assert final_api_id is not None
     await db.persist_telegram_session(
         label=limits.TELEGRAM_CONNECTION_LABEL,
         api_id=int(final_api_id),
@@ -440,6 +441,7 @@ async def save_collection(
     if (early := await _begin_write(request)) is not None:
         return early
     store = _store(request)
+    assert store is not None  # _begin_write guarantees an available store
     errors: dict[str, str] = {}
     values = {"poll_minutes": poll_minutes, "track_days": track_days, "backfill_limit": backfill_limit}
     changes: dict[str, Any] = {}
@@ -485,6 +487,7 @@ async def save_studio(
     if (early := await _begin_write(request)) is not None:
         return early
     store = _store(request)
+    assert store is not None  # _begin_write guarantees an available store
     errors: dict[str, str] = {}
     values: dict[str, Any] = {"model": model}
     changes: dict[str, Any] = {}
@@ -511,7 +514,7 @@ async def save_studio(
     try:
         await _apply_fields(store, changes, reset_keys=reset_keys)
     except (EncryptionKeyRequired, StoreUnavailable):
-        if not store.available:
+        if store is None or not store.available:
             return await _render(request)
         return await _render(request, values=values, status_code=409, msg=ENCRYPTION_KEY_MESSAGE)
     _flash(request, "Studio settings saved.", "studio")
@@ -527,6 +530,7 @@ async def save_research(
     if (early := await _begin_write(request)) is not None:
         return early
     store = _store(request)
+    assert store is not None  # _begin_write guarantees an available store
     errors: dict[str, str] = {}
     values = {"research_enabled": research_enabled, "blocked_domains": blocked_domains}
     changes = {
@@ -551,8 +555,10 @@ def _reset_route(section: str):
             return early
         if not key.startswith(f"{section}."):
             raise HTTPException(status_code=422, detail="Unknown setting for this section")
+        reset_store = _store(request)
+        assert reset_store is not None  # _begin_write guarantees an available store
         try:
-            await _store(request).reset(key)
+            await reset_store.reset(key)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         except StoreUnavailable:

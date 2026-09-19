@@ -1,7 +1,7 @@
-import os
 import uuid
 
 import pytest
+from tests.helpers.postgres import pg_url
 
 from cryptography.fernet import Fernet
 
@@ -33,9 +33,9 @@ def test_session_cipher_round_trip_and_wrong_key_rejection():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_postgres_repository_smoke():
-    database_url = os.environ.get("M1_POSTGRES_URL") or os.environ.get("M0_POSTGRES_URL")
+    database_url = pg_url("M1_POSTGRES_URL", "M0_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M1_POSTGRES_URL to run the PostgreSQL repository proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M1_POSTGRES_URL) to run the PostgreSQL repository proof")
     from datetime import datetime, timezone
     from app.postgres_db import PostgresDatabase
 
@@ -93,9 +93,9 @@ async def test_postgres_repository_smoke():
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_sqlite_importer_is_idempotent_and_reports_source_untouched(tmp_path):
-    database_url = os.environ.get("M1_POSTGRES_URL") or os.environ.get("M0_POSTGRES_URL")
+    database_url = pg_url("M1_POSTGRES_URL", "M0_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M1_POSTGRES_URL to run the SQLite importer proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M1_POSTGRES_URL) to run the SQLite importer proof")
     import sqlite3
     from app.db import _SCHEMA
     from app.migration.sqlite_to_postgres import import_sqlite
@@ -127,9 +127,9 @@ async def test_sqlite_importer_is_idempotent_and_reports_source_untouched(tmp_pa
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_postgres_composite_foreign_key_rejects_cross_workspace_post():
-    database_url = os.environ.get("M1_POSTGRES_URL") or os.environ.get("M0_POSTGRES_URL")
+    database_url = pg_url("M1_POSTGRES_URL", "M0_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M1_POSTGRES_URL to run tenant-isolation proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M1_POSTGRES_URL) to run tenant-isolation proof")
     from datetime import datetime, timezone
     from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError

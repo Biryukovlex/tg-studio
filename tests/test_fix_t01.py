@@ -93,7 +93,6 @@ class _SlowAdapter:
 
     async def run_stream(self, **_kwargs):
         # Minimal stream that yields a completion
-        from app.studio.service import _UpstreamRunError
 
         class _E:
             def __init__(self, t, delta=None):

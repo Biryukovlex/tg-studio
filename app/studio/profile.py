@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 import statistics
 from collections import Counter
-from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field

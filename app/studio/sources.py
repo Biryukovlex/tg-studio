@@ -301,7 +301,7 @@ class SafeSourceReader:
                 ips = await resolved if isawaitable(resolved) else resolved
             else:
                 infos = await asyncio.to_thread(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
-                ips = [info[4][0] for info in infos]
+                ips = [str(info[4][0]) for info in infos]
         except (OSError, socket.gaierror) as exc:
             raise SSRFBlockedError("source_dns_failed", "The source host could not be resolved safely.") from exc
         addresses = list(dict.fromkeys(str(ip) for ip in (ips or [])))
@@ -327,7 +327,6 @@ class SafeSourceReader:
         """Return a safe bounded document; policy failures never trigger I/O."""
 
         original = str(url or "").strip()
-        now = _now()
         if not self.enabled:
             return self._blocked_document(original, code="source_reader_disabled", message="Source reading is disabled in this deployment.", status="inaccessible")
         try:

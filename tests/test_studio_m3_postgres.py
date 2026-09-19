@@ -1,7 +1,7 @@
-import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from tests.helpers.postgres import pg_url
 
 from app.config import Settings
 from app.postgres_db import PostgresDatabase
@@ -14,9 +14,9 @@ from app.studio.service import StudioService
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_postgres_m3_profile_context_and_consent_are_workspace_scoped():
-    database_url = os.environ.get("M3_POSTGRES_URL")
+    database_url = pg_url("M3_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M3_POSTGRES_URL to run the M3 PostgreSQL proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M3_POSTGRES_URL) to run the M3 PostgreSQL proof")
     db = PostgresDatabase(database_url)
     try:
         await db.init_db(admin_username="m3-integration-admin")

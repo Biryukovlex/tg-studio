@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     telegram_session_encryption_key: str = ""
     allow_legacy_sqlite: bool = False
     telegram_session_encryption_key_previous: str = ""
+    # Compose-level PostgreSQL credential/binding, mirrored here so packaging
+    # can refuse default credentials on non-loopback interfaces.
+    postgres_password: str = ""
+    postgres_bind_address: str = "127.0.0.1"
 
     @field_validator("api_id", mode="before")
     @classmethod
@@ -110,11 +114,14 @@ class Settings(BaseSettings):
         if needs_admin and not self.admin_password:
             problems.append("ADMIN_PASSWORD empty - required for the web admin panel.")
         # Guard against shipping default credentials on a public interface.
+        loopback_hosts = {"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"}
         if needs_admin and self.admin_password == "change-me":
             host = (self.web_host or "").strip().lower()
-            loopback_hosts = {"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"}
             if host not in loopback_hosts:
                 problems.append("ADMIN_PASSWORD must be changed from 'change-me' when WEB_HOST is not loopback.")
+        bind = (self.postgres_bind_address or "").strip().lower()
+        if self.postgres_password == "change-me" and bind not in loopback_hosts:
+            problems.append("POSTGRES_PASSWORD must be changed from 'change-me' when POSTGRES_BIND_ADDRESS is not loopback.")
         return problems
 
     @property

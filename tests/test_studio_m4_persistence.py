@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 
 import pytest
+from tests.helpers.postgres import pg_url
 
 from app.config import Settings
 from app.postgres_db import PostgresDatabase
-from app.studio.provenance import SourceEvidence
 from app.studio.repository import StudioRepository
 from app.studio.research import ResearchService
 from app.studio.search import SearchQuery, SearchResponse, SearchResult
@@ -41,9 +40,9 @@ class PersistProvider:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_m4_research_bundle_and_provider_activity_survive_reload():
-    database_url = os.environ.get("M4_POSTGRES_URL")
+    database_url = pg_url("M4_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M4_POSTGRES_URL to run the M4 PostgreSQL persistence proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M4_POSTGRES_URL) to run the M4 PostgreSQL persistence proof")
     db = PostgresDatabase(database_url)
     try:
         await db.init_db(admin_username="m4-persistence-admin")

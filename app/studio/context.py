@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .analytics import ChannelAnalytics, EvidencePost, analyze_posts
+from .analytics import ChannelAnalytics, analyze_posts
 from .profile import _strip_markup
 from .sources import _INJECTION_PATTERNS, sanitize_untrusted_text
 
@@ -296,7 +296,7 @@ class ContextAssembler:
         )
         # Build the canonical Markdown profile block (never dropped).
         profile_block = profile_block_from_mapping(raw_profile)
-        base = {
+        base: dict[str, Any] = {
             "context_version": CONTEXT_VERSION,
             "cache_key": key,
             "channel": safe_channel,

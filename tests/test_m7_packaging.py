@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-from app import limits
 from app.config import Settings
 from app.studio.search_health import configured_search_state
 
@@ -63,3 +62,33 @@ def test_search_configuration_is_explicitly_degraded_when_endpoint_is_missing():
     assert state.configured is False
     assert state.degraded is True
     assert state.available is False
+
+
+def test_default_credentials_are_refused_on_non_loopback_interfaces():
+    base = {
+        "api_id": 1,
+        "api_hash": "test-hash",
+        "session_string": "test-session",
+        "channels": "@sample_channel",
+    }
+    loopback_admin = Settings(
+        _env_file=None,
+        admin_password="change-me",
+        web_host="127.0.0.1",
+        postgres_password="change-me",
+        postgres_bind_address="127.0.0.1",
+        **base,
+    )
+    assert loopback_admin.validate_required() == []
+
+    public_admin = Settings(
+        _env_file=None,
+        admin_password="change-me",
+        web_host="0.0.0.0",
+        postgres_password="change-me",
+        postgres_bind_address="0.0.0.0",
+        **base,
+    )
+    problems = public_admin.validate_required()
+    assert any("ADMIN_PASSWORD" in problem for problem in problems)
+    assert any("POSTGRES_PASSWORD" in problem for problem in problems)

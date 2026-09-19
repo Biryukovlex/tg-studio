@@ -213,6 +213,7 @@ def _parse_datetime(value: Any) -> datetime | None:
                 parsed = None
         if parsed is None:
             return None
+    assert parsed is not None
     return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 

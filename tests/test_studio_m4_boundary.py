@@ -3,7 +3,6 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app import limits
 from app.config import Settings
 from app.studio.search_health import check_search_health, configured_search_state
 from app.studio.setup import build_setup_state

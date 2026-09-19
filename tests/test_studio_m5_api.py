@@ -115,7 +115,7 @@ async def test_conversation_draft_reload_returns_active_artifact(client, app, se
 async def test_generated_candidate_is_visible_without_replacing_owner_edit(client, app, settings):
     _, conversation, draft = await _conversation_and_draft(client, app, settings, body="initial")
     repository: MemoryStudioRepository = app.state.studio_repository
-    owner = await repository.save_draft(
+    await repository.save_draft(
         draft_id=uuid.UUID(draft["id"]),
         payload={"body": "owner's visible edit"},
         expected_revision=draft["revision"],

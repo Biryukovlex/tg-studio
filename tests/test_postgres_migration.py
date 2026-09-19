@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.helpers.postgres import pg_url
 
 from app.db import _SCHEMA
 from app.migration.postgres_fixture import import_fixture
@@ -41,9 +42,9 @@ def _seed_fixture(path):
 
 
 def test_alembic_migration_and_fixture_import_reconcile(tmp_path):
-    database_url = os.environ.get("M0_POSTGRES_URL")
+    database_url = pg_url("M0_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M0_POSTGRES_URL to run the isolated PostgreSQL proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M0_POSTGRES_URL) to run the isolated PostgreSQL proof")
 
     fixture_path = tmp_path / "fixture.db"
     _seed_fixture(fixture_path)

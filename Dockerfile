@@ -34,10 +34,12 @@ COPY alembic.ini ./alembic.ini
 COPY --from=frontend-build /app/web/static/studio-dist ./app/web/static/studio-dist
 
 # SQLite db + session secret live here; mount a volume on this path.
-RUN mkdir -p /app/data
+RUN useradd -r -u 10001 appuser && mkdir -p /app/data && chown -R appuser:appuser /app/data
 VOLUME ["/app/data"]
 
 EXPOSE 8080
+
+USER appuser
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)" || exit 1

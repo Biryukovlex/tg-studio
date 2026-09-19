@@ -386,7 +386,7 @@ function StudioSettings({ channelId, channelLabel, onClose }: { channelId: numbe
 
 function renderInlineMarkdown(line: string, key: number) {
   let text = line.replace(/!\[([^\]]*)\]\([^)]*\)/g, "");
-  text = text.replace(/<[a-zA-Z\/][^>]*>/g, "");
+  text = text.replace(/<[a-zA-Z/][^>]*>/g, "");
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|`[^`]+`|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|\[([^\]]+)\]\([^)]+\)|> .+)/g;
@@ -406,7 +406,7 @@ function renderInlineMarkdown(line: string, key: number) {
     else parts.push(<span key={`u-${key}-${idx++}`}>{token}</span>);
     lastIndex = pattern.lastIndex;
   }
-  if (lastIndex < text.length) parts.push(<span key={`t-${key}-${idx++}`}>{text.slice(lastIndex)}</span>);
+  if (lastIndex < text.length) parts.push(<span key={`t-${key}-${idx}`}>{text.slice(lastIndex)}</span>);
   if (parts.length === 0) return <span key={key}>{line}</span>;
   return <span key={key}>{parts}</span>;
 }
@@ -1005,6 +1005,10 @@ function StudioThread({
     [conversation.id],
   );
   const activeRunId = useRef<string | null>(seedRun?.id ?? null);
+  const [, setMessages] = useState<PersistedMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [recoveredRun, setRecoveredRun] = useState<RunSummary | null>(seedRun);
+  const [recoveredEvents, setRecoveredEvents] = useState<RunEvent[]>([]);
   const markRunFailed = useCallback((error: unknown) => {
     const runId = activeRunId.current;
     if (!runId) return;
@@ -1024,10 +1028,6 @@ function StudioThread({
     showThinking: false,
     onError: markRunFailed,
   });
-  const [messages, setMessages] = useState<PersistedMessage[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [recoveredRun, setRecoveredRun] = useState<RunSummary | null>(seedRun);
-  const [recoveredEvents, setRecoveredEvents] = useState<RunEvent[]>([]);
 
   useEffect(() => {
     onRunActivityChange(recoveredRun?.status === "queued" || recoveredRun?.status === "running");

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 
@@ -43,7 +42,7 @@ def test_validators():
     base = Settings(_env_file=None)
     fake_db = MagicMock()
     fake_db.is_postgres = False
-    ws = WorkspaceSettings(fake_db, base, cipher=None)
+    assert WorkspaceSettings(fake_db, base, cipher=None) is not None
     # Use validators directly via SETTINGS
     _, _, validator = SETTINGS["collection.poll_minutes"]
     with pytest.raises(ValueError) as e:

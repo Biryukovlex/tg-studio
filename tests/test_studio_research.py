@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app import limits
 from app.config import Settings
 from app.studio.agent import StudioDeps, build_agent
 from app.studio.research import ResearchService

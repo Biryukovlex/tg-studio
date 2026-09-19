@@ -11,7 +11,7 @@ import hashlib
 import math
 import re
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit
 
@@ -406,8 +406,11 @@ def _channel_evidence(values: Sequence[Mapping[str, Any]] | Sequence[dict[str, A
     for value in values or ():
         if not isinstance(value, Mapping):
             continue
+        raw_post_id = value.get("post_id") or value.get("id")
+        if raw_post_id is None:
+            continue
         try:
-            post_id = int(value.get("post_id") or value.get("id"))
+            post_id = int(raw_post_id)
         except (TypeError, ValueError):
             continue
         record: dict[str, Any] = {"post_id": post_id}

@@ -15,12 +15,6 @@ from .model import build_model
 from .prompts import SYSTEM_INSTRUCTIONS
 from .analytics import analyze_posts, analyze_posts_async
 from .context import ContextAssembler, ContextPack, profile_block_from_mapping
-from .profile import (
-    ChannelProfile,
-    apply_confirmed_topic_change,
-    build_profile,
-    propose_topic_change,
-)
 from .drafts import ClaimSupport, DraftConflictError, DraftValidationError, diff_summary
 from .schemas import ChannelContext
 from .research import ResearchService

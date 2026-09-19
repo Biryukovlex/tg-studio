@@ -199,7 +199,7 @@ Install the development dependencies and run the baseline suite without
 connecting to Telegram:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.lock -r requirements-dev.txt
 python -m pytest
 ```
 

@@ -86,7 +86,11 @@ def _diagnostics(source: dict[str, tuple[list[str], list[dict[str, Any]]]]) -> d
         item: dict[str, Any] = {"count": len(rows)}
         for column in columns:
             if column.endswith("_at") or column.endswith("_date") or column.endswith("_time"):
-                parsed = [_timestamp(row[column]) for row in rows if row.get(column)]
+                parsed = [
+                    moment
+                    for moment in (_timestamp(row[column]) for row in rows if row.get(column))
+                    if moment is not None
+                ]
                 if parsed:
                     item[column] = {
                         "min": min(parsed).isoformat(),
@@ -96,7 +100,7 @@ def _diagnostics(source: dict[str, tuple[list[str], list[dict[str, Any]]]]) -> d
             item["long_text_posts"] = sum(len(str(row.get("text") or "")) > 500 for row in rows)
             item["channel_counts"] = {
                 str(channel_id): sum(row.get("channel_id") == channel_id for row in rows)
-                for channel_id in sorted({row.get("channel_id") for row in rows})
+                for channel_id in sorted({row.get("channel_id") for row in rows}, key=lambda value: str(value))
             }
         output[table] = item
     return output

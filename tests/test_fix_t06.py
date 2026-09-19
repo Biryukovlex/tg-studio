@@ -1,6 +1,5 @@
 """T06 acceptance tests."""
 import asyncio
-import uuid
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -17,9 +16,6 @@ async def test_unknown_source_ids_blocked():
     repo = MemoryStudioRepository()
     conv = await repo.create_conversation(channel_id=1)
     # Create a research bundle with one source
-    from app.studio.research import ResearchService
-    from app.studio.search import SearchResult, SearchQuery, SearchResponse
-    from datetime import datetime, timezone
     # We need to simulate a bundle with known source
     # Use the repository's research bundle via direct insertion? Simplify: mock get_bundle
     settings = Settings(studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test")
@@ -30,17 +26,13 @@ async def test_unknown_source_ids_blocked():
     mock_bundle.selected_source_ids = [known_id]
     mock_bundle.source_ids = [known_id]
     # Patch ResearchService.get_bundle
-    import app.studio.agent as agent_module
-    orig_get_bundle = None
     # Instead test via direct agent tool call with mocked deps
     deps = StudioDeps(repository=repo, workspace_id=repo.workspace_id, conversation_id=conv["id"], channel_id=1, cancel_event=asyncio.Event(), research=MagicMock())
     deps.research.get_bundle = AsyncMock(return_value=mock_bundle)
     # Build agent and try to create draft with unknown source_ids
-    agent = build_agent(settings)
+    assert build_agent(settings) is not None
     # We need to call the create_draft tool directly via agent? Simplify: test normalize directly
-    from app.studio.agent import build_agent as ba
     # Test normalize returns empty for unknown
-    from app.studio.agent import StudioDeps as SD
     # Directly test the tool via run? For now check that our normalize would block
     # We'll call the agent's create_draft tool via the agent's tool execution
     # Use a simple check: if we try to create draft with unknown, it should not be saved or should have warnings
@@ -60,7 +52,6 @@ def test_propose_topic_change_always_proposed():
     # After T14 the agent no longer has a tool that can apply a profile change
     from app.studio.agent import build_agent
     agent = build_agent(Settings(studio_test_mode=True, api_id=1, api_hash="h", session_string="s", channels="@test"))
-    tool_names = set(getattr(agent, "_function_toolset", {}).tools.keys()) if hasattr(agent, "_function_toolset") else set()
     # Fallback check via private API
     try:
         tools = getattr(agent, "_function_toolset", None)

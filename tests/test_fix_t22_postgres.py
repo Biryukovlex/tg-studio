@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import os
-import uuid
 
 import pytest
-import pytest_asyncio
 
 from cryptography.fernet import Fernet
 
@@ -30,7 +28,6 @@ async def test_settings_and_tool_log_migrations_upgrade_and_downgrade():
     url = TEST_URL
     assert url
     # Use DatabaseSessionManager to check current version
-    from app.postgres_db import PostgresDatabase
 
     # Create a fresh DB manager for migration test - use the same URL but with a separate check
     # We will test that 0010 can be applied and reverted via alembic
@@ -88,12 +85,10 @@ async def test_set_reset_roundtrip_and_secret_isolation():
     url = TEST_URL
     assert url
     # Create two workspaces with different slugs to test isolation
-    settings1 = Settings(_env_file=None, database_url=url, telegram_session_encryption_key=_TEST_FERNET_KEY, local_workspace_slug="test-ws1")
     # Use direct PostgresDatabase with custom slug - need to handle via limits? For test, use default and manually set slug
     # Instead, use the same DB but different workspace_id via direct manipulation
     db1 = PostgresDatabase(url, workspace_slug="test-ws1")
     await db1.init_db(admin_username="admin1")
-    from app.session_crypto import build_cipher
 
     cipher1 = build_cipher(_TEST_FERNET_KEY)
     ws1 = WorkspaceSettings(db1, Settings(_env_file=None, poll_minutes=15, track_days=30, backfill_limit=200, openrouter_api_key="", openrouter_model="openai/gpt-4o-mini", studio_search_enabled=False, studio_search_blocked_domains=""), cipher1)
@@ -149,7 +144,6 @@ async def test_add_and_deactivate_channel():
 
     url = TEST_URL
     assert url
-    settings = Settings(_env_file=None, database_url=url, telegram_session_encryption_key=_TEST_FERNET_KEY)
     db = PostgresDatabase(url, workspace_slug="test-channel-ws")
     await db.init_db(admin_username="admin-channel")
     # Ensure clean: deactivate any existing test channels

@@ -45,7 +45,7 @@ function renderInlineMarkdown(line: string, key: number) {
   // Strip images ![alt](url) -> nothing
   let text = line.replace(/!\[([^\]]*)\]\([^)]*\)/g, "");
   // Strip raw HTML
-  text = text.replace(/<[a-zA-Z\/][^>]*>/g, "");
+  text = text.replace(/<[a-zA-Z/][^>]*>/g, "");
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   // Combined regex for bold, italic, strike, code, link
@@ -86,7 +86,7 @@ function renderInlineMarkdown(line: string, key: number) {
     lastIndex = pattern.lastIndex;
   }
   if (lastIndex < text.length) {
-    parts.push(<span key={`t-${key}-${idx++}`}>{text.slice(lastIndex)}</span>);
+    parts.push(<span key={`t-${key}-${idx}`}>{text.slice(lastIndex)}</span>);
   }
   if (parts.length === 0) return <span key={key}>{line}</span>;
   return <span key={key}>{parts}</span>;

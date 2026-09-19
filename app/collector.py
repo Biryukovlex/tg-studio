@@ -13,15 +13,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from telethon import TelegramClient, errors
 
 from . import limits
 from .config import Settings
 from .db import Database, utcnow
+from .postgres_db import PostgresDatabase
+from .workspace_settings import RuntimeSettings
 from .async_compat import maybe_await
 from .telegram_formatting import serialize_entities
 from .web.links import normalize_channel_identifier
@@ -65,12 +66,17 @@ def _sender_details(msg: Any) -> tuple[int | None, str, str]:
 
 
 class Collector:
-    def __init__(self, client: TelegramClient | None, db: Database, settings: Settings) -> None:
+    def __init__(
+        self,
+        client: TelegramClient | None,
+        db: Database | PostgresDatabase,
+        settings: Settings | RuntimeSettings,
+    ) -> None:
         self.client = client
         self.db = db
         self.settings = settings
-        self.workspace_settings = None  # type: ignore[attr-defined]
-        self.on_poll_interval_change = None  # type: ignore[attr-defined]
+        self.workspace_settings: Any = None
+        self.on_poll_interval_change: Callable[[float], None] | None = None
         # The interval currently applied to the process scheduler.  This is
         # deliberately separate from ``settings.poll_minutes``: the runtime
         # settings proxy is refreshed from PostgreSQL in-place, so comparing
@@ -86,6 +92,7 @@ class Collector:
     async def resolve_entity(self, identifier: str) -> Any:
         if identifier in self._entities:
             return self._entities[identifier]
+        assert self.client is not None, "Telegram client is required to resolve channels"
         entity = await self.client.get_entity(identifier)
         self._entities[identifier] = entity
         connection_id = None
@@ -136,8 +143,9 @@ class Collector:
                     pass
             else:
                 for ch in channels:
-                    ident = normalize_channel_identifier(ch.get("identifier"))
-                    if ch.get("chat_id") is None and ident not in idents:
+                    ch_dict = ch if isinstance(ch, dict) else dict(ch)
+                    ident = normalize_channel_identifier(ch_dict.get("identifier"))
+                    if ch_dict.get("chat_id") is None and ident not in idents:
                         idents.append(ident)
         except Exception:
             pass
@@ -170,6 +178,7 @@ class Collector:
 
     async def sync_comments(self, entity: Any, post_id: int, message_id: int) -> tuple[int, int, int]:
         """Collect every current comment for a channel post's discussion thread."""
+        assert self.client is not None, "Telegram client is required to sync comments"
         sync_token = utcnow().isoformat(timespec="microseconds")
         seen = changed = 0
 
@@ -247,6 +256,7 @@ class Collector:
         seen = written = comments_seen = comments_written = comments_deleted = comment_errors = 0
         seen_message_ids: list[int] = []
         last_renew = time.monotonic()
+        assert self.client is not None, "Telegram client is required to poll channels"
         async for msg in self.client.iter_messages(entity, limit=limit):
             if msg.action is not None:
                 continue
@@ -321,9 +331,10 @@ class Collector:
                 await self.workspace_settings.load()  # type: ignore[attr-defined]
                 new = float(self.settings.poll_minutes)
                 applied = self.applied_poll_minutes
-                if applied is not None and new != applied and getattr(self, "on_poll_interval_change", None):
+                interval_callback = getattr(self, "on_poll_interval_change", None)
+                if applied is not None and new != applied and callable(interval_callback):
                     try:
-                        await maybe_await(self.on_poll_interval_change(new))  # type: ignore[attr-defined]
+                        await maybe_await(interval_callback(new))
                     except Exception:
                         log.warning("on_poll_interval_change failed")
             except Exception:
@@ -385,7 +396,7 @@ class Collector:
                     await maybe_await(prune())
                 except Exception:
                     log.warning("collection job pruning failed")
-            summary = {
+            summary: dict[str, Any] = {
                 "reason": reason,
                 "started": started,
                 "finished": utcnow(),

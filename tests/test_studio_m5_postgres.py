@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
+from tests.helpers.postgres import pg_url
 
 from app.postgres_db import PostgresDatabase
 from app.studio.drafts import DraftConflictError, DraftValidationError
@@ -13,9 +13,9 @@ from app.studio.repository import StudioRepository
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_postgres_draft_versions_survive_repository_reload_and_keep_scope():
-    database_url = os.environ.get("M5_POSTGRES_URL")
+    database_url = pg_url("M5_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M5_POSTGRES_URL to run the M5 PostgreSQL persistence proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M5_POSTGRES_URL) to run the M5 PostgreSQL persistence proof")
     db = PostgresDatabase(database_url, workspace_slug="m5-persistence")
     try:
         await db.init_db(admin_username="m5-persistence-admin")
@@ -80,9 +80,9 @@ async def test_postgres_draft_versions_survive_repository_reload_and_keep_scope(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_postgres_draft_rejects_analysis_from_another_channel():
-    database_url = os.environ.get("M5_POSTGRES_URL")
+    database_url = pg_url("M5_POSTGRES_URL")
     if not database_url:
-        pytest.skip("set M5_POSTGRES_URL to run the M5 PostgreSQL scope proof")
+        pytest.skip("set TEST_POSTGRES_URL (or M5_POSTGRES_URL) to run the M5 PostgreSQL scope proof")
     db = PostgresDatabase(database_url, workspace_slug="m5-scope")
     try:
         await db.init_db(admin_username="m5-scope-admin")

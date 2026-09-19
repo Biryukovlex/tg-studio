@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import inspect
-from typing import Awaitable, TypeVar
+from typing import Any
 
 
-T = TypeVar("T")
-
-
-async def maybe_await(value: T | Awaitable[T]) -> T:
+async def maybe_await(value: Any) -> Any:
     return await value if inspect.isawaitable(value) else value

@@ -16,7 +16,6 @@ from .drafts import (
     DraftInput,
     DraftValidationError,
     MAX_DRAFT_CHARS,
-    copy_allowed,
     input_from_row,
     telegram_character_count,
     validate_draft_input,
@@ -71,14 +70,15 @@ def _draft_public(row: dict[str, Any]) -> dict[str, Any]:
     from .markdown import render_markdown_html, render_markdown_plain
 
     data = dict(row)
-    for key, default in (
+    list_defaults: tuple[tuple[str, list[Any]], ...] = (
         ("source_ids", []),
         ("claim_support", []),
         ("assumptions", []),
         ("warnings", []),
         ("channel_evidence", []),
         ("web_evidence", []),
-    ):
+    )
+    for key, default in list_defaults:
         data[key] = _json_value(data.get(key), default)
     data["id"] = str(data["id"])
     if data.get("workspace_id") is not None:
@@ -110,6 +110,8 @@ def _draft_public(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _version_public(row: dict[str, Any]) -> dict[str, Any]:
+    from .markdown import render_markdown_plain
+
     data = dict(row)
     data["id"] = int(data["id"])
     data["draft_id"] = str(data["draft_id"])
@@ -165,22 +167,30 @@ class RunClaimLost(StudioRepositoryError):
 
 
 class StudioRepositoryProtocol(Protocol):
-    workspace_id: Any
+    @property
+    def workspace_id(self) -> Any: ...
 
     async def list_channels(self) -> list[dict[str, Any]]: ...
     async def channel_context(self, channel_id: int) -> dict[str, Any]: ...
     async def performance_rows(self, channel_id: int, limit: int = 2000) -> list[dict[str, Any]]: ...
+    async def get_system_prompt(self, channel_id: int) -> str: ...
+    async def set_system_prompt(self, channel_id: int, value: str) -> str: ...
     async def get_profile(self, channel_id: int) -> dict[str, Any] | None: ...
     async def get_analysis(self, analysis_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def create_analysis(self, payload: dict[str, Any]) -> dict[str, Any]: ...
     async def upsert_profile(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+    async def upsert_profile_text(self, payload: dict[str, Any]) -> dict[str, Any]: ...
     async def create_profile_change(self, payload: dict[str, Any]) -> dict[str, Any]: ...
     async def get_profile_change(self, change_id: uuid.UUID, *, channel_id: int | None = None) -> dict[str, Any] | None: ...
     async def confirm_profile_change(self, change_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def apply_profile_change(self, change_id: uuid.UUID) -> dict[str, Any]: ...
     async def list_conversations(self, *, channel_id: int, include_archived: bool = False) -> list[dict[str, Any]]: ...
     async def get_conversation(self, conversation_id: uuid.UUID) -> dict[str, Any] | None: ...
+    async def create_conversation(self, *, channel_id: int, title: str | None = None) -> dict[str, Any]: ...
+    async def rename_conversation(self, conversation_id: uuid.UUID, *, title: str, only_default: bool = False) -> Any: ...
     async def delete_conversation(self, conversation_id: uuid.UUID) -> bool: ...
+    async def list_messages(self, conversation_id: uuid.UUID) -> list[dict[str, Any]]: ...
+    async def append_message(self, *, conversation_id: uuid.UUID, role: str, content: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]: ...
     async def create_draft(self, *, conversation_id: uuid.UUID, channel_id: int, payload: dict[str, Any], origin: str = "generated", instruction: str = "") -> dict[str, Any]: ...
     async def get_draft(self, draft_id: uuid.UUID, *, conversation_id: uuid.UUID | None = None, channel_id: int | None = None) -> dict[str, Any] | None: ...
     async def get_current_draft(self, *, conversation_id: uuid.UUID, channel_id: int) -> dict[str, Any] | None: ...
@@ -206,6 +216,7 @@ class StudioRepositoryProtocol(Protocol):
     async def renew_run_lease(self, run_id: uuid.UUID, *, worker_id: str, lease_seconds: int = 120) -> dict[str, Any] | None: ...
     async def get_run(self, run_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def get_active_run(self, conversation_id: uuid.UUID) -> dict[str, Any] | None: ...
+    async def get_events(self, run_id: uuid.UUID, *, after: int = 0) -> list[dict[str, Any]]: ...
     async def set_run_status(self, run_id: uuid.UUID, *, status: str, stage: str | None = None, error_code: str | None = None, error_message: str | None = None, actual_model: str | None = None, usage: dict[str, Any] | None = None, worker_id: str | None = None) -> dict[str, Any]: ...
     async def append_event(self, run_id: uuid.UUID, *, event_type: str, safe_payload: dict[str, Any] | None = None, result_content: str | None = None) -> dict[str, Any]: ...
     async def list_tool_result_logs(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
@@ -2006,7 +2017,7 @@ class MemoryStudioRepository:
         self.analyses: dict[uuid.UUID, dict[str, Any]] = {}
         self.profiles: dict[int, dict[str, Any]] = {}
         self.profile_changes: dict[uuid.UUID, dict[str, Any]] = {}
-        self.consents: dict[tuple[str, str], dict[str, Any]] = {}
+        self.consents: dict[tuple[str, str, str | None], dict[str, Any]] = {}
         self.research: dict[uuid.UUID, dict[str, Any]] = {}
         self.drafts: dict[uuid.UUID, dict[str, Any]] = {}
         self.draft_versions: dict[uuid.UUID, list[dict[str, Any]]] = {}
@@ -2053,13 +2064,19 @@ class MemoryStudioRepository:
 
     async def get_analysis_by_hash(self, channel_id: int, input_hash: str) -> dict[str, Any] | None:
         for row in self.analyses.values():
-            if row["channel_id"] == channel_id and row["input_hash"] == input_hash:
+            if (
+                row["channel_id"] == channel_id
+                and row["input_hash"] == input_hash
+                and row.get("workspace_id") == self.workspace_id
+            ):
                 return dict(row)
         return None
 
     async def get_analysis(self, analysis_id: uuid.UUID) -> dict[str, Any] | None:
         row = self.analyses.get(analysis_id)
-        return dict(row) if row else None
+        if not row or row.get("workspace_id") != self.workspace_id:
+            return None
+        return dict(row)
 
     async def create_analysis(self, payload: dict[str, Any]) -> dict[str, Any]:
         existing = await self.get_analysis_by_hash(int(payload["channel_id"]), payload["input_hash"])
@@ -2240,7 +2257,9 @@ class MemoryStudioRepository:
         return dict(profile)
 
     async def get_provider_consent(self, *, provider: str, configuration_fingerprint: str, user_id: Any | None = None) -> dict[str, Any] | None:
-        row = self.consents.get((provider, configuration_fingerprint))
+        row = self.consents.get((provider, configuration_fingerprint, str(user_id) if user_id is not None else None))
+        if row is None and user_id is not None:
+            row = self.consents.get((provider, configuration_fingerprint, None))
         return dict(row) if row else None
 
     async def grant_provider_consent(self, *, user_id: Any, provider: str, configuration_fingerprint: str) -> dict[str, Any]:
@@ -2254,7 +2273,7 @@ class MemoryStudioRepository:
             "granted_at": utcnow(),
             "revoked_at": None,
         }
-        self.consents[(provider, configuration_fingerprint)] = row
+        self.consents[(provider, configuration_fingerprint, str(user_id) if user_id is not None else None)] = row
         return dict(row)
 
     async def revoke_provider_consent(self, *, user_id: Any, provider: str) -> dict[str, Any] | None:
@@ -2774,7 +2793,8 @@ class MemoryStudioRepository:
             return dict(message), dict(run)
 
     async def create_run(self, *, conversation_id: uuid.UUID, user_message_id: int, requested_model: str, provider: str = "openrouter", run_id: uuid.UUID | None = None) -> dict[str, Any]:
-        if conversation_id not in self.conversations:
+        conversation = self.conversations.get(conversation_id)
+        if conversation is None or conversation.get("archived_at") is not None:
             raise ConversationNotFound("conversation is not part of the active workspace")
         if any(row["conversation_id"] == conversation_id and row["status"] in {"queued", "running"} for row in self.runs.values()):
             raise ActiveRunExists("conversation already has an active run")
@@ -2866,7 +2886,8 @@ class MemoryStudioRepository:
         return dict(row)
 
     async def get_events(self, run_id: uuid.UUID, *, after: int = 0) -> list[dict[str, Any]]:
-        if run_id not in self.runs:
+        row = self.runs.get(run_id)
+        if row is None or row.get("workspace_id") != self.workspace_id:
             raise RunNotFound("run is not part of the active workspace")
         return [dict(row) for row in self.events[run_id] if row["sequence"] > after]
 
@@ -2911,7 +2932,9 @@ class MemoryStudioRepository:
 
     async def get_run(self, run_id: uuid.UUID) -> dict[str, Any] | None:
         row = self.runs.get(run_id)
-        return dict(row) if row else None
+        if not row or row.get("workspace_id") != self.workspace_id:
+            return None
+        return dict(row)
 
     async def get_active_run(self, conversation_id: uuid.UUID) -> dict[str, Any] | None:
         conversation = self.conversations.get(conversation_id)

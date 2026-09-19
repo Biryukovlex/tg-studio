@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from .markdown import render_markdown_html, render_markdown_plain, validate_markdown_body
+from .markdown import render_markdown_plain, validate_markdown_body
 
 
 MAX_DRAFT_CHARS = 4096

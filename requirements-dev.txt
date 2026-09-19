@@ -1,6 +1,8 @@
 -r requirements.txt
 
-# Test and local verification tooling
+# Test and local verification tooling. Runtime dependencies come from
+# requirements.lock; this file must not include requirements.txt so CI can
+# prove the lock is consistent with the documented ranges.
 pytest>=8.2,<9
 pytest-asyncio>=0.23,<1
 httpx>=0.27,<1
@@ -10,3 +12,5 @@ alembic>=1.13,<2
 asyncpg>=0.29,<1
 pip-audit>=2.10,<3
 PyYAML>=6,<7
+ruff>=0.8,<1
+mypy>=1.10,<2
