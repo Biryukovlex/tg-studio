@@ -47,10 +47,11 @@ templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
 _ORDER_KEYS = {"date", "views", "reactions", "comments", "shares"}
 
-# Login rate limiting: 5 failures per IP per 15 minutes.
+# Login rate limiting: 5 failures per (client IP, username) per 5 minutes, so
+# one actor's guessing cannot lock the owner out behind a shared address.
 _LOGIN_MAX_ATTEMPTS = 5
-_LOGIN_WINDOW_SECONDS = 15 * 60
-_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+_LOGIN_WINDOW_SECONDS = 5 * 60
+_LOGIN_ATTEMPTS: dict[tuple[str, str], list[float]] = {}
 
 
 def _client_ip(request: Request) -> str:
@@ -59,35 +60,39 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
+def _rate_limit_key(request: Request, username: str) -> tuple[str, str]:
+    return (_client_ip(request), (username or "").lower())
+
+
 def _prune_attempts(now: float) -> None:
     cutoff = now - _LOGIN_WINDOW_SECONDS
-    for ip, stamps in list(_LOGIN_ATTEMPTS.items()):
+    for key, stamps in list(_LOGIN_ATTEMPTS.items()):
         filtered = [t for t in stamps if t > cutoff]
         if filtered:
-            _LOGIN_ATTEMPTS[ip] = filtered
+            _LOGIN_ATTEMPTS[key] = filtered
         else:
-            _LOGIN_ATTEMPTS.pop(ip, None)
+            _LOGIN_ATTEMPTS.pop(key, None)
 
 
-def _is_rate_limited(ip: str) -> tuple[bool, int]:
+def _is_rate_limited(key: tuple[str, str]) -> tuple[bool, int]:
     now = time.monotonic()
     _prune_attempts(now)
-    stamps = _LOGIN_ATTEMPTS.get(ip, [])
+    stamps = _LOGIN_ATTEMPTS.get(key, [])
     if len(stamps) >= _LOGIN_MAX_ATTEMPTS:
         oldest = min(stamps) if stamps else now
-        retry_after = int(max(1, (_LOGIN_WINDOW_SECONDS - (now - oldest))))
+        retry_after = int(max(1, min(_LOGIN_WINDOW_SECONDS, _LOGIN_WINDOW_SECONDS - (now - oldest))))
         return True, retry_after
     return False, 0
 
 
-def _record_failed_attempt(ip: str) -> None:
+def _record_failed_attempt(key: tuple[str, str]) -> None:
     now = time.monotonic()
     _prune_attempts(now)
-    _LOGIN_ATTEMPTS.setdefault(ip, []).append(now)
+    _LOGIN_ATTEMPTS.setdefault(key, []).append(now)
 
 
-def _clear_attempts(ip: str) -> None:
-    _LOGIN_ATTEMPTS.pop(ip, None)
+def _clear_attempts(key: tuple[str, str]) -> None:
+    _LOGIN_ATTEMPTS.pop(key, None)
 
 
 def _sanitize_csv_cell(value: object) -> object:
@@ -336,8 +341,8 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
 
     @app.post("/login")
     async def login(request: Request, username: str = Form(""), password: str = Form("")):
-        ip = _client_ip(request)
-        limited, retry_after = _is_rate_limited(ip)
+        key = _rate_limit_key(request, username)
+        limited, retry_after = _is_rate_limited(key)
         if limited:
             return Response(
                 content="Too many failed login attempts. Try again later.",
@@ -348,10 +353,10 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
         ok_user = secrets.compare_digest(username.encode("utf-8"), settings.admin_username.encode("utf-8"))
         ok_pass = secrets.compare_digest(password.encode("utf-8"), settings.admin_password.encode("utf-8"))
         if not (ok_user and ok_pass):
-            _record_failed_attempt(ip)
-            log.warning("failed admin login from %s", ip)
+            _record_failed_attempt(key)
+            log.warning("failed admin login from %s", key[0])
             return render(request, "login.html", {"error": "Invalid username or password"}, 401)
-        _clear_attempts(ip)
+        _clear_attempts(key)
         request.session["auth"] = True
         if db_context.user_id is not None:
             request.session["user_id"] = str(db_context.user_id)

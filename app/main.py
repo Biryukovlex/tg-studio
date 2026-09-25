@@ -34,6 +34,21 @@ from .web.routes import create_app
 from .workspace_settings import WorkspaceSettings
 
 
+def login_rate_limit_warning(settings) -> str | None:
+    """Warn when the login rate limiter cannot tell clients apart.
+
+    Behind a reverse proxy every visitor shares the server-observed client
+    address unless trusted proxy headers are configured, so one actor's
+    failed logins would throttle the owner too.
+    """
+    host = (getattr(settings, "web_host", "") or "").strip().lower()
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return None
+    if (getattr(settings, "trusted_proxy_ips", "") or "").strip():
+        return None
+    return "Login rate limiting cannot tell clients apart behind a proxy; set TRUSTED_PROXY_IPS"
+
+
 def resolve_telegram_connection(settings, persisted: dict | None = None) -> dict[str, Any]:
     """Prefer the saved workspace connection and fill missing values from .env."""
     saved = persisted or {}
@@ -74,6 +89,9 @@ async def amain() -> None:
     )
     log = logging.getLogger("main")
     log.info("process role: %s", role)
+    proxy_warning = login_rate_limit_warning(settings)
+    if proxy_warning:
+        log.warning(proxy_warning)
 
     if settings.postgres_enabled:
         postgres_problems = settings.validate_postgres()

@@ -925,7 +925,7 @@ class PostgresDatabase:
         row = result.mappings().first()
         return dict(row) if row else {}
 
-    async def claim_collection_job(self, channel_id: int, lease_seconds: int = 900) -> uuid.UUID | None:
+    async def claim_collection_job(self, channel_id: int, lease_seconds: int = 180) -> uuid.UUID | None:
         workspace_id = self._workspace()
         job_id = uuid.uuid4()
         lease_until = datetime.now(timezone.utc) + timedelta(seconds=max(30, lease_seconds))
@@ -990,7 +990,7 @@ class PostgresDatabase:
         )
         return int(result.rowcount or 0)
 
-    async def renew_collection_job(self, job_id: uuid.UUID, lease_seconds: int = 900) -> None:
+    async def renew_collection_job(self, job_id: uuid.UUID, lease_seconds: int = 180) -> None:
         """Refresh lease for a long-running collection job."""
 
         lease_until = datetime.now(timezone.utc) + timedelta(seconds=max(30, lease_seconds))
