@@ -10,7 +10,11 @@ from app.config import Settings
 
 
 def test_web_role_does_not_require_telegram_credentials():
-    settings = Settings(process_role="web", admin_password="web-password")
+    settings = Settings(
+        process_role="web",
+        admin_password="web-password",
+        database_url="postgresql+asyncpg://example/test",
+    )
 
     problems = settings.validate_required()
 
@@ -24,6 +28,7 @@ def test_worker_role_does_not_require_web_admin_password():
         api_hash="hash",
         session_string="session",
         channels="@channel",
+        database_url="postgresql+asyncpg://example/test",
     )
 
     problems = settings.validate_required()

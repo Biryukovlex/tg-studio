@@ -59,17 +59,17 @@ def test_plain_counts_over_limit():
 
 
 @pytest.mark.asyncio
-async def test_copy_endpoint_returns_both(client, app, settings):
+async def test_copy_endpoint_returns_both(client, app, settings, channel_id):
     settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password}, follow_redirects=False)
     import re, uuid
     home = await client.get("/studio")
     token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
-    conv = await client.post("/studio/api/conversations", json={"channel_id": 1}, headers={"x-csrf-token": token})
+    conv = await client.post("/studio/api/conversations", json={"channel_id": channel_id}, headers={"x-csrf-token": token})
     assert conv.status_code == 200
     conv_id = conv.json()["conversation"]["id"]
     bootstrap = await client.get("/studio/api/bootstrap", headers={"x-csrf-token": token})
-    ch_id = bootstrap.json()["selected_channel_id"] or 1
+    ch_id = bootstrap.json()["selected_channel_id"] or channel_id
     body = "**Title**\nText with [link](https://example.com)"
     # Create draft via repository directly (bypassing agent)
     repo = app.state.studio_repository

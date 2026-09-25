@@ -27,7 +27,6 @@ from starlette.middleware.sessions import SessionMiddleware
 from ..collector import Collector
 from ..config import Settings
 from ..workspace_settings import RuntimeSettings
-from ..async_compat import maybe_await
 from ..telegram_formatting import render_telegram_html
 from .dependencies import csrf_token as shared_csrf_token
 from .dependencies import require_auth as shared_require_auth
@@ -35,7 +34,7 @@ from .dependencies import require_csrf as shared_require_csrf
 from .dependencies import WorkspaceContext
 from ..studio.routes import _TEMPLATES as _studio_templates
 from ..studio.routes import build_router as build_studio_router
-from ..studio.repository import MemoryStudioRepository, StudioRepository
+from ..studio.repository import StudioRepository
 from ..studio.service import StudioService
 from .settings_routes import router as settings_router
 from .links import telegram_message_link
@@ -264,7 +263,7 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
     # The combined process replaces this with its APScheduler callback.  A
     # web-only process leaves it unset because its worker owns scheduling.
     app.state.on_poll_interval_change = None
-    studio_repository = StudioRepository(db) if getattr(db, "is_postgres", False) else MemoryStudioRepository()
+    studio_repository = StudioRepository(db)
     app.state.studio_repository = studio_repository
     app.state.studio_service = StudioService(studio_repository, settings)
 
@@ -312,14 +311,14 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
         check = getattr(db, "healthcheck", None)
         if check is not None:
             try:
-                await maybe_await(check())
+                await (check())
             except Exception as exc:  # noqa: BLE001 - health endpoint must be bounded
                 log.warning("database readiness check failed: %s", type(exc).__name__)
-                return Response(content='{"status":"not_ready"}', media_type="application/json", status_code=503)
-        payload: dict[str, object] = {"status": "ok", "last_successful_cycle_at": None}
+                return Response(content='{"status":"not_ready","storage":"postgresql"}', media_type="application/json", status_code=503)
+        payload: dict[str, object] = {"status": "ok", "storage": "postgresql", "last_successful_cycle_at": None}
         try:
             cycle_getter = getattr(db, "last_successful_cycle_at", None)
-            last = await maybe_await(cycle_getter()) if cycle_getter is not None else None
+            last = await (cycle_getter()) if cycle_getter is not None else None
             if last is not None:
                 payload["last_successful_cycle_at"] = last.isoformat() if hasattr(last, "isoformat") else str(last)
                 try:
@@ -384,17 +383,17 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
         window_days, window_value = _history_window(days)
         current_page = _page_number(page)
         page_size = 100
-        channels = await maybe_await(db.get_channels())
-        k = await maybe_await(db.kpis(channel_id))
+        channels = await (db.get_channels())
+        k = await (db.kpis(channel_id))
         total_rows = max(0, int(k.get("posts", 0) or 0))
         total_pages = max(1, (total_rows + page_size - 1) // page_size)
         current_page = min(current_page, total_pages)
         offset = (current_page - 1) * page_size
-        ts = await maybe_await(db.timeseries_totals(days=window_days, channel_id=channel_id))
+        ts = await (db.timeseries_totals(days=window_days, channel_id=channel_id))
         stats_order = order if order in _ORDER_KEYS else "date"
         reader = getattr(db, "latest_stats")
         try:
-            rows = await maybe_await(
+            rows = await (
                 reader(channel_id=channel_id, order=stats_order, limit=page_size, offset=offset)
             )
         except TypeError as exc:
@@ -403,7 +402,7 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
             # rather than making the dashboard fail during an upgrade.
             if "offset" not in str(exc).lower():
                 raise
-            legacy_rows = await maybe_await(
+            legacy_rows = await (
                 reader(channel_id=channel_id, order=stats_order, limit=100_000)
             )
             rows = legacy_rows[offset : offset + page_size]
@@ -444,13 +443,13 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
     @app.get("/post/{post_id}")
     async def post_detail(request: Request, post_id: int):
         require_auth(request)
-        post = await maybe_await(db.post_row(post_id))
+        post = await (db.post_row(post_id))
         if post is None:
             raise HTTPException(status_code=404, detail="Post not found")
-        hist = await maybe_await(db.post_history(post_id))
+        hist = await (db.post_history(post_id))
         comments = [
             dict(comment) | {"link": _comment_link(comment)}
-            for comment in await maybe_await(db.comments_for_post(post_id))
+            for comment in await (db.comments_for_post(post_id))
         ]
         row = dict(post)
         row["link"] = _post_link(row)
@@ -501,7 +500,7 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
     @app.get("/export.csv")
     async def export_csv(request: Request, channel: str = ""):
         require_auth(request)
-        rows = await maybe_await(db.latest_stats(channel_id=_optional_positive_int(channel), limit=100000))
+        rows = await (db.latest_stats(channel_id=_optional_positive_int(channel), limit=100000))
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([
@@ -523,7 +522,7 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
     @app.get("/export-comments.csv")
     async def export_comments_csv(request: Request, channel: str = ""):
         require_auth(request)
-        rows = await maybe_await(db.all_comments(channel_id=_optional_positive_int(channel)))
+        rows = await (db.all_comments(channel_id=_optional_positive_int(channel)))
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([

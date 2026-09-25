@@ -27,7 +27,6 @@ from . import limits
 from .bot import CommandHandlers
 from .collector import Collector
 from .config import load_settings
-from .db import Database
 from .postgres_db import PostgresDatabase
 from .session_crypto import build_cipher
 from .web.routes import create_app
@@ -93,32 +92,19 @@ async def amain() -> None:
     if proxy_warning:
         log.warning(proxy_warning)
 
-    if settings.postgres_enabled:
-        postgres_problems = settings.validate_postgres()
-        if postgres_problems:
-            print("\nPostgreSQL configuration problems found:\n", file=sys.stderr)
-            for problem in postgres_problems:
-                print(f"  - {problem}", file=sys.stderr)
-            sys.exit(1)
-        pg_db = PostgresDatabase.from_settings(settings)
-        await pg_db.init_db(admin_username=settings.admin_username)
-        # Channels can be added later on the settings page, so an empty
-        # CHANNELS seed is only a warning once PostgreSQL holds the workspace.
-        if not settings.channel_list and not await pg_db.get_channels():
-            log.warning("No channels configured yet - add one at /settings after signing in.")
-        db: Database | PostgresDatabase = pg_db
-    else:
-        if not settings.allow_legacy_sqlite:
-            print(
-                "\nConfiguration problem: DATABASE_URL is empty. PostgreSQL is the only runtime; "
-                "set DATABASE_URL and run `alembic upgrade head`, or import a legacy archive with "
-                "`scripts/migrate_sqlite_to_postgres.py`. Local SQLite mode requires ALLOW_LEGACY_SQLITE=1.\n",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        sqlite_db = Database(settings.db_path)
-        sqlite_db.init_db()
-        db = sqlite_db
+    postgres_problems = settings.validate_postgres()
+    if postgres_problems:
+        print("\nPostgreSQL configuration problems found:\n", file=sys.stderr)
+        for problem in postgres_problems:
+            print(f"  - {problem}", file=sys.stderr)
+        sys.exit(1)
+    pg_db = PostgresDatabase.from_settings(settings)
+    await pg_db.init_db(admin_username=settings.admin_username)
+    # Channels can be added later on the settings page, so an empty
+    # CHANNELS seed is only a warning once PostgreSQL holds the workspace.
+    if not settings.channel_list and not await pg_db.get_channels():
+        log.warning("No channels configured yet - add one at /settings after signing in.")
+    db: PostgresDatabase = pg_db
 
     def _uvicorn_config(app) -> uvicorn.Config:
         kwargs: dict = dict(host=settings.web_host, port=settings.web_port, log_level="info")
@@ -129,18 +115,9 @@ async def amain() -> None:
 
     # Build workspace settings accessor
     cipher = build_cipher(settings.telegram_session_encryption_key)
-    if isinstance(db, PostgresDatabase):
-        workspace_settings = WorkspaceSettings(db, settings, cipher)
-        await workspace_settings.load()
-        effective = workspace_settings.effective
-    else:
-        # SQLite mode: no-op accessor
-        workspace_settings = WorkspaceSettings(db, settings, cipher)
-        # Force available=False for SQLite
-        workspace_settings.available = False
-        workspace_settings._rows = {}
-        workspace_settings._loaded = True
-        effective = workspace_settings.effective
+    workspace_settings = WorkspaceSettings(db, settings, cipher)
+    await workspace_settings.load()
+    effective = workspace_settings.effective
 
     async def _serve_web_panel(message: str) -> None:
         collector = Collector(None, db, effective)
@@ -151,8 +128,7 @@ async def amain() -> None:
         try:
             await server.serve()
         finally:
-            if isinstance(db, PostgresDatabase):
-                await db.close()
+            await db.close()
 
     # The web role serves read-only dashboard/Studio requests and deliberately
     # does not acquire a Telegram session. Collection/manual refresh is owned
@@ -162,22 +138,21 @@ async def amain() -> None:
         return
 
     persisted_connection = None
-    if isinstance(db, PostgresDatabase):
-        try:
-            persisted_connection = await db.load_telegram_connection(
-                label=limits.TELEGRAM_CONNECTION_LABEL, cipher=cipher
-            )
-        except ValueError:
-            log.warning("Saved Telegram connection could not be decrypted; use /settings to replace it.")
-        try:
-            await db.expire_stale_collection_jobs()
-        except Exception:
-            log.warning("expire_stale_collection_jobs failed at startup")
+    try:
+        persisted_connection = await db.load_telegram_connection(
+            label=limits.TELEGRAM_CONNECTION_LABEL, cipher=cipher
+        )
+    except ValueError:
+        log.warning("Saved Telegram connection could not be decrypted; use /settings to replace it.")
+    try:
+        await db.expire_stale_collection_jobs()
+    except Exception:
+        log.warning("expire_stale_collection_jobs failed at startup")
 
     connection = resolve_telegram_connection(settings, persisted_connection)
     connection_problems = telegram_connection_problems(connection)
     if connection_problems:
-        if role == "all" and isinstance(db, PostgresDatabase):
+        if role == "all":
             log.warning(
                 "Telegram is not configured; starting the web setup panel. "
                 "Save the connection at /settings and restart the app."
@@ -215,7 +190,7 @@ async def amain() -> None:
             if await client.is_user_authorized():
                 session_string = settings.session_string
                 log.info("session source: environment")
-                if isinstance(db, PostgresDatabase) and cipher is not None:
+                if cipher is not None:
                     await db.persist_telegram_session(
                         label=limits.TELEGRAM_CONNECTION_LABEL,
                         api_id=settings.api_id,
@@ -230,7 +205,7 @@ async def amain() -> None:
             log.error("Session is not authorized - re-run `python scripts/generate_session.py`.")
             return
     else:
-        if isinstance(db, PostgresDatabase) and cipher is not None and session_string != persisted_session:
+        if cipher is not None and session_string != persisted_session:
             try:
                 await db.persist_telegram_session(
                     label=limits.TELEGRAM_CONNECTION_LABEL,
@@ -294,8 +269,7 @@ async def amain() -> None:
             await asyncio.gather(first_cycle, return_exceptions=True)
             scheduler.shutdown(wait=False)
             await client.disconnect()
-            if isinstance(db, PostgresDatabase):
-                await db.close()
+            await db.close()
         return
 
     app = create_app(collector, effective, workspace_settings=workspace_settings)
@@ -327,11 +301,10 @@ async def amain() -> None:
             await client.disconnect()
         except Exception:
             pass
-        if isinstance(db, PostgresDatabase):
-            try:
-                await db.close()
-            except Exception:
-                pass
+        try:
+            await db.close()
+        except Exception:
+            pass
 
 
 def main() -> None:

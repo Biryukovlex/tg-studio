@@ -52,11 +52,9 @@ class Settings(BaseSettings):
 
     # Storage
     data_dir: str = "data"
-    # PostgreSQL is the M1+ runtime store.  Leaving this empty preserves the
-    # pre-M1 local SQLite mode until the operator completes the import.
+    # PostgreSQL is the only runtime store.
     database_url: str = ""
     telegram_session_encryption_key: str = ""
-    allow_legacy_sqlite: bool = False
     telegram_session_encryption_key_previous: str = ""
     # Compose-level PostgreSQL credential/binding, mirrored here so packaging
     # can refuse default credentials on non-loopback interfaces.
@@ -77,10 +75,6 @@ class Settings(BaseSettings):
         p = Path(self.data_dir)
         return p if p.is_absolute() else BASE_DIR / p
 
-    @property
-    def db_path(self) -> Path:
-        return self.data_path / "stats.db"
-
     def validate_required(
         self,
         db_channels: list | None = None,
@@ -91,6 +85,8 @@ class Settings(BaseSettings):
         role = str(self.process_role or "all").strip().lower()
         if role not in {"all", "web", "worker"}:
             problems.append("PROCESS_ROLE must be one of: all, web, worker.")
+        if not self.database_url.strip():
+            problems.append("DATABASE_URL is required (PostgreSQL)")
         needs_telegram = role in {"all", "worker"}
         needs_admin = role in {"all", "web"}
         if needs_telegram and not defer_telegram and (not self.api_id or not self.api_hash):

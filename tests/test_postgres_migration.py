@@ -7,7 +7,7 @@ import sys
 import pytest
 from tests.helpers.postgres import pg_url
 
-from app.db import _SCHEMA
+from app.migration.legacy_schema import _SCHEMA
 from app.migration.postgres_fixture import import_fixture
 
 pytestmark = pytest.mark.integration

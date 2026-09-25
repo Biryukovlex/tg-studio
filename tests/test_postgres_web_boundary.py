@@ -1,44 +1,45 @@
-from datetime import datetime, timezone
+import os
 import uuid
+from datetime import datetime, timezone
 
 import httpx
 import pytest
 
 from app.config import Settings
-from app.db import Database
+from app.postgres_db import PostgresDatabase
 from app.web.routes import create_app
 
 
 class _AsyncFacade:
     def __init__(self, database):
         self._database = database
-        self.workspace_id = uuid.uuid4()
+        self.workspace_id = database.workspace_id
         self.user_id = uuid.uuid4()
-        self.workspace_slug = "community"
+        self.workspace_slug = database.workspace_slug
 
     async def get_channels(self):
-        return self._database.get_channels()
+        return await self._database.get_channels()
 
     async def kpis(self, channel_id=None):
-        return self._database.kpis(channel_id)
+        return await self._database.kpis(channel_id)
 
     async def timeseries_totals(self, days, channel_id=None):
-        return self._database.timeseries_totals(days, channel_id)
+        return await self._database.timeseries_totals(days, channel_id)
 
     async def latest_stats(self, **kwargs):
-        return self._database.latest_stats(**kwargs)
+        return await self._database.latest_stats(**kwargs)
 
     async def post_row(self, post_id):
-        return self._database.post_row(post_id)
+        return await self._database.post_row(post_id)
 
     async def post_history(self, post_id):
-        return self._database.post_history(post_id)
+        return await self._database.post_history(post_id)
 
     async def comments_for_post(self, post_id):
-        return self._database.comments_for_post(post_id)
+        return await self._database.comments_for_post(post_id)
 
     async def all_comments(self, channel_id=None):
-        return self._database.all_comments(channel_id)
+        return await self._database.all_comments(channel_id)
 
 
 class _Collector:
@@ -49,6 +50,7 @@ class _Collector:
         return {"reason": reason, "posts_seen": 0, "snapshots_written": 0}
 
 
+@pytest.mark.skipif(not os.getenv("TEST_POSTGRES_URL"), reason="TEST_POSTGRES_URL is required")
 @pytest.mark.asyncio
 async def test_dashboard_post_comments_and_exports_use_async_db_boundary(tmp_path):
     settings = Settings(
@@ -61,12 +63,12 @@ async def test_dashboard_post_comments_and_exports_use_async_db_boundary(tmp_pat
         admin_password="password",
         session_secret="secret",
     )
-    sqlite_db = Database(settings.db_path)
-    sqlite_db.init_db()
-    channel_id = sqlite_db.upsert_channel("@boundary", "Boundary", 1001)
-    post_id = sqlite_db.upsert_post(channel_id, 5, datetime.now(timezone.utc), "full post")
-    sqlite_db.add_snapshot_if_changed(post_id, 10, 1, 2, 3)
-    facade = _AsyncFacade(sqlite_db)
+    pg_db = PostgresDatabase(os.environ["TEST_POSTGRES_URL"], workspace_slug=f"t-boundary-{uuid.uuid4().hex[:8]}")
+    await pg_db.init_db(admin_username="admin")
+    channel_id = await pg_db.upsert_channel("@boundary", "Boundary", 1001)
+    post_id = await pg_db.upsert_post(channel_id, 5, datetime.now(timezone.utc), "full post")
+    await pg_db.add_snapshot_if_changed(post_id, 10, 1, 2, 3)
+    facade = _AsyncFacade(pg_db)
     app = create_app(_Collector(facade), settings)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

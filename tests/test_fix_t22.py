@@ -8,7 +8,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from app.config import Settings
-from app.workspace_settings import EncryptionKeyRequired, RuntimeSettings, StoreUnavailable, WorkspaceSettings, SETTINGS
+from app.workspace_settings import EncryptionKeyRequired, RuntimeSettings, WorkspaceSettings, SETTINGS
 from app.collector import Collector
 from app.studio.service import StudioService
 from app.studio.repository import MemoryStudioRepository
@@ -142,14 +142,14 @@ async def test_collector_interval_callback():
 
 
 @pytest.mark.asyncio
-async def test_sqlite_mode_noop():
+async def test_store_unavailable_before_workspace_init():
     base = Settings(_env_file=None, poll_minutes=15)
     fake_db = MagicMock()
-    fake_db.is_postgres = False
+    fake_db.workspace_id = None
     ws = WorkspaceSettings(fake_db, base, cipher=None)
-    # In SQLite mode, available should be False
+    # Before init_db assigns a workspace, the store is unavailable.
     assert ws.available is False
-    with pytest.raises(StoreUnavailable):
+    with pytest.raises(RuntimeError):
         await ws.set("collection.poll_minutes", 30)
     # Reads return env values
     assert ws.effective.poll_minutes == 15

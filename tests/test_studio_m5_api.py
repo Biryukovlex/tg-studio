@@ -5,7 +5,6 @@ import uuid
 
 import pytest
 
-from app.studio.repository import MemoryStudioRepository
 
 
 async def _login(client, settings):
@@ -25,17 +24,17 @@ async def _csrf(client) -> str:
     return match.group(1)
 
 
-async def _conversation_and_draft(client, app, settings, *, body: str = "Line one\n\nLine two"):
+async def _conversation_and_draft(client, app, settings, channel_id: int, *, body: str = "Line one\n\nLine two"):
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)
-    created = await client.post("/studio/api/conversations", json={"channel_id": 1}, headers={"x-csrf-token": token})
+    created = await client.post("/studio/api/conversations", json={"channel_id": channel_id}, headers={"x-csrf-token": token})
     assert created.status_code == 200
     conversation = created.json()["conversation"]
-    repository: MemoryStudioRepository = app.state.studio_repository
+    repository = app.state.studio_repository
     draft = await repository.create_draft(
         conversation_id=uuid.UUID(conversation["id"]),
-        channel_id=1,
+        channel_id=channel_id,
         payload={"body": body, "creative": True},
     )
     return token, conversation, draft
@@ -53,8 +52,8 @@ async def test_draft_routes_require_auth_and_csrf(client, settings):
 
 
 @pytest.mark.asyncio
-async def test_draft_get_patch_conflict_versions_and_exact_copy(client, app, settings):
-    token, conversation, draft = await _conversation_and_draft(client, app, settings)
+async def test_draft_get_patch_conflict_versions_and_exact_copy(client, app, settings, channel_id):
+    token, conversation, draft = await _conversation_and_draft(client, app, settings, channel_id)
     fetched = await client.get(f"/studio/api/drafts/{draft['id']}")
     assert fetched.status_code == 200
     assert fetched.json()["draft"]["body"] == "Line one\n\nLine two"
@@ -94,8 +93,8 @@ async def test_draft_get_patch_conflict_versions_and_exact_copy(client, app, set
 
 
 @pytest.mark.asyncio
-async def test_draft_copy_is_blocked_server_side_above_telegram_limit(client, app, settings):
-    token, _, draft = await _conversation_and_draft(client, app, settings, body="x" * 4097)
+async def test_draft_copy_is_blocked_server_side_above_telegram_limit(client, app, settings, channel_id):
+    token, _, draft = await _conversation_and_draft(client, app, settings, channel_id, body="x" * 4097)
     current = await client.get(f"/studio/api/drafts/{draft['id']}")
     assert current.json()["draft"]["over_limit"] is True
     copied = await client.post(f"/studio/api/drafts/{draft['id']}/copied", headers={"x-csrf-token": token})
@@ -104,17 +103,17 @@ async def test_draft_copy_is_blocked_server_side_above_telegram_limit(client, ap
 
 
 @pytest.mark.asyncio
-async def test_conversation_draft_reload_returns_active_artifact(client, app, settings):
-    _, conversation, draft = await _conversation_and_draft(client, app, settings, body="reload me")
+async def test_conversation_draft_reload_returns_active_artifact(client, app, settings, channel_id):
+    _, conversation, draft = await _conversation_and_draft(client, app, settings, channel_id, body="reload me")
     response = await client.get(f"/studio/api/conversations/{conversation['id']}/draft")
     assert response.status_code == 200
     assert response.json()["draft"]["id"] == draft["id"]
 
 
 @pytest.mark.asyncio
-async def test_generated_candidate_is_visible_without_replacing_owner_edit(client, app, settings):
-    _, conversation, draft = await _conversation_and_draft(client, app, settings, body="initial")
-    repository: MemoryStudioRepository = app.state.studio_repository
+async def test_generated_candidate_is_visible_without_replacing_owner_edit(client, app, settings, channel_id):
+    _, conversation, draft = await _conversation_and_draft(client, app, settings, channel_id, body="initial")
+    repository = app.state.studio_repository
     await repository.save_draft(
         draft_id=uuid.UUID(draft["id"]),
         payload={"body": "owner's visible edit"},

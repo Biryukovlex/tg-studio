@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -6,22 +7,29 @@ import httpx
 from fastapi import FastAPI
 
 from app.config import Settings
-from app.db import Database
+from app.postgres_db import PostgresDatabase
 from app.web.routes import create_app, reset_login_rate_limiter
 
 
 class FakeCollector:
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: PostgresDatabase) -> None:
         self.db = db
 
     async def poll_all(self, reason: str = "test") -> dict[str, object]:
         return {"reason": reason, "posts_seen": 0}
 
 
-def _make_app(settings: Settings) -> FastAPI:
-    db = Database(settings.db_path)
-    db.init_db()
-    db.upsert_channel("@sample_channel", title="Sample channel", chat_id=123456)
+def _pg_url() -> str:
+    url = os.environ.get("TEST_POSTGRES_URL", "")
+    if not url:
+        pytest.skip("TEST_POSTGRES_URL is required")
+    return url
+
+
+async def _make_app(settings: Settings) -> FastAPI:
+    db = PostgresDatabase(_pg_url(), workspace_slug=f"t02-{uuid.uuid4().hex[:8]}")
+    await db.init_db(admin_username=settings.admin_username)
+    await db.upsert_channel("@sample_channel", "Sample channel", 123456)
     return create_app(FakeCollector(db), settings)
 
 
@@ -43,7 +51,7 @@ async def test_cyrillic_credentials_succeed_and_fail(tmp_path):
         admin_password="пароль123",
         session_secret="test-secret-cyrillic",
     )
-    app = _make_app(settings)
+    app = await _make_app(settings)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         ok = await client.post(
@@ -74,7 +82,7 @@ async def test_login_rate_limited_after_five_failures(tmp_path):
         admin_password="correct",
         session_secret="test-secret-ratelimit",
     )
-    app = _make_app(settings)
+    app = await _make_app(settings)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         for i in range(5):
@@ -109,7 +117,7 @@ async def test_security_headers_on_login(tmp_path):
         admin_password="b",
         session_secret="s",
     )
-    app = _make_app(settings)
+    app = await _make_app(settings)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/login")
@@ -132,7 +140,7 @@ async def test_secure_cookie_and_hsts_when_behind_tls(tmp_path):
         session_secret="sec",
         behind_tls=True,
     )
-    app = _make_app(settings)
+    app = await _make_app(settings)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/login")
@@ -165,7 +173,7 @@ async def test_unauthenticated_api_returns_401_json(tmp_path):
         session_secret="sec",
         studio_test_mode=True,
     )
-    app = _make_app(settings)
+    app = await _make_app(settings)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         api = await client.get("/studio/api/conversations")
@@ -188,54 +196,57 @@ async def test_unauthenticated_api_returns_401_json(tmp_path):
 
 
 async def test_csv_formula_injection_escaped(tmp_path):
-    db = Database(tmp_path / "stats.db")
-    db.init_db()
-    ch_id = db.upsert_channel("@sample_channel", title="Sample", chat_id=1)
-    post_id = db.upsert_post(ch_id, message_id=1, posted_at=datetime.now(timezone.utc), text="hello")
-    db.add_snapshot_if_changed(post_id, views=1, comments=1, reactions=0, shares=0)
-    db.upsert_comment(
-        post_id=post_id,
-        telegram_message_id=99,
-        discussion_chat_id=-1001234567890,
-        discussion_username="disc",
-        sender_id=1,
-        sender_name="Attacker",
-        sender_username="evil",
-        posted_at=datetime.now(timezone.utc),
-        edited_at=None,
-        text='=HYPERLINK("http://evil")',
-        media_type="",
-        reactions=0,
-        reply_to_message_id=None,
-        sync_token="tok1",
-    )
-    post2 = db.upsert_post(ch_id, message_id=2, posted_at=datetime.now(timezone.utc), text='=HYPERLINK("x2")')
-    db.add_snapshot_if_changed(post2, views=2, comments=0, reactions=0, shares=0)
+    db = PostgresDatabase(_pg_url(), workspace_slug=f"t02-{uuid.uuid4().hex[:8]}")
+    await db.init_db(admin_username="admin")
+    try:
+        ch_id = await db.upsert_channel("@sample_channel", "Sample", 1)
+        post_id = await db.upsert_post(ch_id, message_id=1, posted_at=datetime.now(timezone.utc), text="hello")
+        await db.add_snapshot_if_changed(post_id, views=1, comments=1, reactions=0, shares=0)
+        await db.upsert_comment(
+            post_id=post_id,
+            telegram_message_id=99,
+            discussion_chat_id=-1001234567890,
+            discussion_username="disc",
+            sender_id=1,
+            sender_name="Attacker",
+            sender_username="evil",
+            posted_at=datetime.now(timezone.utc),
+            edited_at=None,
+            text='=HYPERLINK("http://evil")',
+            media_type="",
+            reactions=0,
+            reply_to_message_id=None,
+            sync_token="tok1",
+        )
+        post2 = await db.upsert_post(ch_id, message_id=2, posted_at=datetime.now(timezone.utc), text='=HYPERLINK("x2")')
+        await db.add_snapshot_if_changed(post2, views=2, comments=0, reactions=0, shares=0)
 
-    settings = Settings(data_dir=str(tmp_path), admin_username="admin", admin_password="pw", session_secret="sec")
-    app = create_app(FakeCollector(db), settings)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        await client.post("/login", data={"username": "admin", "password": "pw"})
-        resp = await client.get("/export.csv")
-        assert resp.status_code == 200
-        assert "'=HYPERLINK" in resp.text
+        settings = Settings(data_dir=str(tmp_path), admin_username="admin", admin_password="pw", session_secret="sec")
+        app = create_app(FakeCollector(db), settings)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            await client.post("/login", data={"username": "admin", "password": "pw"})
+            resp = await client.get("/export.csv")
+            assert resp.status_code == 200
+            assert "'=HYPERLINK" in resp.text
 
-        resp2 = await client.get("/export-comments.csv")
-        assert resp2.status_code == 200
-        assert "'=HYPERLINK" in resp2.text
-        # Negative numeric ids are not free text and must not be quoted.
-        assert "-1001234567890" in resp2.text
-        assert "'-1001234567890" not in resp2.text
-        # Operator-configured channel identifiers keep their leading @.
-        assert ",@sample_channel," in resp.text
-        # normal text should still appear in posts export
-        assert "hello" in resp.text
+            resp2 = await client.get("/export-comments.csv")
+            assert resp2.status_code == 200
+            assert "'=HYPERLINK" in resp2.text
+            # Negative numeric ids are not free text and must not be quoted.
+            assert "-1001234567890" in resp2.text
+            assert "'-1001234567890" not in resp2.text
+            # Operator-configured channel identifiers keep their leading @.
+            assert ",@sample_channel," in resp.text
+            # normal text should still appear in posts export
+            assert "hello" in resp.text
+    finally:
+        await db.close()
 
 
 async def test_base_html_has_no_cdn(tmp_path):
     settings = Settings(data_dir=str(tmp_path), admin_username="admin", admin_password="pw", session_secret="sec")
-    app = _make_app(settings)
+    app = await _make_app(settings)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         resp = await client.get("/login")
@@ -256,9 +267,9 @@ async def test_compat_events_filters_allowlist(tmp_path):
         session_secret="sec",
         studio_test_mode=True,
     )
-    db = Database(tmp_path / "stats.db")
-    db.init_db()
-    db.upsert_channel("@sample_channel", title="Sample", chat_id=123)
+    db = PostgresDatabase(_pg_url(), workspace_slug=f"t02-{uuid.uuid4().hex[:8]}")
+    await db.init_db(admin_username="admin")
+    await db.upsert_channel("@sample_channel", "Sample", 123)
     collector = FakeCollector(db)
     app = create_app(collector, settings)
     transport = httpx.ASGITransport(app=app)
@@ -352,7 +363,7 @@ async def test_static_assets_use_content_hash_versions(tmp_path):
     version = static_asset_version()
     assert len(version) == 12 and all(c in "0123456789abcdef" for c in version)
     settings = Settings(data_dir=str(tmp_path), admin_username="admin", admin_password="pw", session_secret="sec")
-    app = _make_app(settings)
+    app = await _make_app(settings)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         login = await client.get("/login")

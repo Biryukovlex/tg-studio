@@ -97,29 +97,29 @@ def test_formatting_facts_bold_and_signature():
 
 
 @pytest.mark.asyncio
-async def test_put_profile_version_and_validation(client, settings):
+async def test_put_profile_version_and_validation(client, settings, channel_id):
     settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password}, follow_redirects=False)
     import re
     home = await client.get("/studio")
     token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
     # Get current
-    get = await client.get("/studio/api/profile?channel_id=1", headers={"x-csrf-token": token})
+    get = await client.get(f"/studio/api/profile?channel_id={channel_id}", headers={"x-csrf-token": token})
     assert get.status_code == 200
     profile = get.json()["profile"]
     version = profile["version"] if profile else 0
     # Put with correct version
-    put = await client.put("/studio/api/profile", json={"channel_id": 1, "expected_version": version, "topics_text": "Topic A", "editorial_text": "Rule", "style_text": "**bold** and [link](https://x)"}, headers={"x-csrf-token": token})
+    put = await client.put("/studio/api/profile", json={"channel_id": channel_id, "expected_version": version, "topics_text": "Topic A", "editorial_text": "Rule", "style_text": "**bold** and [link](https://x)"}, headers={"x-csrf-token": token})
     assert put.status_code == 200
     assert put.json()["profile"]["version"] == version + 1
     assert "**bold**" in put.json()["profile"]["style_text"]
     assert "[link](https://x)" in put.json()["profile"]["style_text"]
     # Wrong version -> 409
-    bad = await client.put("/studio/api/profile", json={"channel_id": 1, "expected_version": version, "topics_text": "x", "editorial_text": "", "style_text": ""}, headers={"x-csrf-token": token})
+    bad = await client.put("/studio/api/profile", json={"channel_id": channel_id, "expected_version": version, "topics_text": "x", "editorial_text": "", "style_text": ""}, headers={"x-csrf-token": token})
     assert bad.status_code == 409
     # Field too long -> 422
     long_text = "a" * 2001
-    bad2 = await client.put("/studio/api/profile", json={"channel_id": 1, "expected_version": version+1, "topics_text": long_text, "editorial_text": "", "style_text": ""}, headers={"x-csrf-token": token})
+    bad2 = await client.put("/studio/api/profile", json={"channel_id": channel_id, "expected_version": version+1, "topics_text": long_text, "editorial_text": "", "style_text": ""}, headers={"x-csrf-token": token})
     assert bad2.status_code == 422
 
 

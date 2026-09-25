@@ -197,6 +197,12 @@ async def test_migration_0013_applies_cleanly_on_postgres():
         assert index == "ix_snapshots_workspace_post_id"
         await connection.execute("DROP INDEX IF EXISTS ix_snapshots_workspace_post_id")
         await connection.execute("ALTER TABLE posts DROP COLUMN IF EXISTS deleted_at")
+        # Restore the migration shape: later tests upsert posts with deleted_at.
+        await connection.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS deleted_at timestamptz")
+        await connection.execute(
+            "CREATE INDEX IF NOT EXISTS ix_snapshots_workspace_post_id "
+            "ON snapshots (workspace_id, post_id, id DESC)"
+        )
     finally:
         await connection.close()
 
@@ -231,14 +237,14 @@ def _health_app(last, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_healthz_degraded_without_storage_field(tmp_path):
+async def test_healthz_reports_postgres_storage(tmp_path):
     app = _health_app(datetime.now(timezone.utc) - timedelta(minutes=60), tmp_path)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get("/healthz")
     assert response.status_code == 200
     payload = response.json()
-    assert "storage" not in payload
+    assert payload["storage"] == "postgresql"
     assert payload["status"] == "degraded"
     assert payload["last_successful_cycle_at"]
 

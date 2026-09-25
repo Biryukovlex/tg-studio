@@ -7,11 +7,11 @@ Telegram channel posts, archives the actual discussion comments under their
 posts, and shows everything in a web admin panel + Telegram commands.
 
 - Collector: Telethon **user session** (the only way Telegram exposes views/share counts)
-- Current panel: FastAPI + PostgreSQL (with a read-only SQLite import/rollback archive),
+- Current panel: FastAPI + PostgreSQL (an old `stats.db` file remains only a read-only import source),
   login-protected, charts via Chart.js
 - Commands in Telegram: `/stats`, `/top`, `/last`, `/refresh` — send them to yourself in **Saved Messages**
 - Community release is self-hostable with `.env` plus a persistent PostgreSQL volume;
-  keep the legacy `data/` archive until migration reconciliation is complete.
+  keep an old `data/stats.db` file only as a read-only import source until migration reconciliation is complete.
 
 ## What is included
 
@@ -61,9 +61,9 @@ channels, agent tools, jobs, and Studio records so a future SaaS edition does
 not require a schema rewrite. Redis, Celery, billing, and team management are
 not part of this release.
 
-The legacy SQLite path is read-only and is used only for migration or rollback.
-The importer is idempotent and reconciles row counts plus one-way hashes. Keep
-the SQLite file as a rollback archive until the report is `all_match: true`.
+PostgreSQL is the only runtime. An old `stats.db` file is a read-only
+import source for one more release (see "Importing an old `stats.db`" below).
+The importer is idempotent and reconciles row counts plus one-way hashes.
 
 The release is covered by automated tests, dependency audits, a production
 Docker build, and continuous integration.
@@ -159,7 +159,7 @@ python -m app.main
   comments immediately, then polls every `POLL_MINUTES`.
 - Stats are only written when values change, so the DB stays small.
 
-### 1.5 PostgreSQL mode (M1)
+### 1.5 PostgreSQL runtime
 
 Start PostgreSQL locally with Docker, copy the connection settings from
 `.env.example`, and run the explicit migration service before starting the app:
@@ -175,9 +175,8 @@ python scripts/migrate_sqlite_to_postgres.py \
 Set `TELEGRAM_SESSION_ENCRYPTION_KEY` (generate one with
 `python scripts/generate_session_key.py`) before using PostgreSQL session
 persistence.  The key stays outside PostgreSQL and is never sent to the
-browser.  Set `DATABASE_URL` in `.env` only after the reconciliation report is
-successful; the application then uses PostgreSQL for collection, dashboard,
-commands, exports, and Studio foundation records.
+browser.  `DATABASE_URL` is required; the application uses PostgreSQL for
+collection, dashboard, commands, exports, and Studio foundation records.
 
 After switching to the PostgreSQL runtime, restore bodies that were truncated
 by the pre-M1 SQLite release:
@@ -203,10 +202,10 @@ python -m pip install -r requirements.lock -r requirements-dev.txt
 python -m pytest
 ```
 
-### 1.7 Inspect the SQLite archive before migration
+### 1.7 Importing an old `stats.db`
 
-Create a deterministic, read-only inventory of the current archive before any
-database migration work:
+PostgreSQL is the only runtime. To bring history from an old `stats.db`
+archive, inventory it read-only first, then import:
 
 ```bash
 python scripts/inventory_sqlite.py \\
@@ -301,8 +300,8 @@ length (never the key, prompt, or provider response).
 
 ## 3. Moving the community release to a server
 
-The release is PostgreSQL-first. Follow [`docs/deployment.md`](docs/deployment.md)
-for the complete Docker setup, explicit migration, SQLite reconciliation,
+The release is PostgreSQL-only. Follow [`docs/deployment.md`](docs/deployment.md)
+for the complete Docker setup, explicit migration, SQLite import,
 backup/restore, split-process topology, privacy, and troubleshooting runbook.
 The abbreviated SSH-tunnel pattern below is useful after the database and
 secrets have been prepared on the server.
@@ -351,7 +350,7 @@ journalctl -u tg-studio -f
 - UFW: allow `OpenSSH`; only expose 80/443 if you add a reverse proxy
 - Keep `SESSION_STRING` private — it grants access to your Telegram account
 - Back up PostgreSQL with the custom `pg_dump` command in `docs/deployment.md`;
-  keep the SQLite file only as a read-only rollback archive.
+  keep an old `stats.db` file only as a read-only import source.
 
 ## 4. Troubleshooting
 

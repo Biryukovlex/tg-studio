@@ -18,12 +18,12 @@ async def _login(client, settings) -> str:
 
 
 @pytest.mark.asyncio
-async def test_reload_discovers_active_run_and_returns_durable_snapshot(client, app, settings):
+async def test_reload_discovers_active_run_and_returns_durable_snapshot(client, app, settings, channel_id):
     settings.studio_test_mode = True
     token = await _login(client, settings)
     created = await client.post(
         "/studio/api/conversations",
-        json={"channel_id": 1, "title": "Durable work"},
+        json={"channel_id": channel_id, "title": "Durable work"},
         headers={"x-csrf-token": token},
     )
     conversation_id = uuid.UUID(created.json()["conversation"]["id"])

@@ -97,7 +97,7 @@ async def test_sqlite_importer_is_idempotent_and_reports_source_untouched(tmp_pa
     if not database_url:
         pytest.skip("set TEST_POSTGRES_URL (or M1_POSTGRES_URL) to run the SQLite importer proof")
     import sqlite3
-    from app.db import _SCHEMA
+    from app.migration.legacy_schema import _SCHEMA
     from app.migration.sqlite_to_postgres import import_sqlite
 
     source = tmp_path / "archive.db"

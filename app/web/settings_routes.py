@@ -18,11 +18,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import limits
-from ..async_compat import maybe_await
 from ..session_crypto import build_cipher
 from ..studio.search_health import configured_search_state
 from ..studio.setup import build_setup_state
-from ..workspace_settings import SETTINGS, EncryptionKeyRequired, StoreUnavailable, WorkspaceSettings, format_timestamp
+from ..workspace_settings import SETTINGS, EncryptionKeyRequired, WorkspaceSettings, format_timestamp
 from .dependencies import require_auth
 from .links import normalize_channel_identifier
 
@@ -135,14 +134,14 @@ async def _page_context(
     channel_reader = getattr(db, "get_channels_for_settings", None) or getattr(db, "get_channels", None)
     if channel_reader is not None:
         try:
-            channels = [dict(row) for row in await maybe_await(channel_reader())]
+            channels = [dict(row) for row in await (channel_reader())]
         except Exception:  # noqa: BLE001 - render the page even when the channel query fails
             channels = []
     summaries: dict[int, dict[str, int]] = {}
     summary_reader = getattr(db, "channel_data_summaries", None)
     if summary_reader is not None:
         try:
-            summaries = dict(await maybe_await(summary_reader()))
+            summaries = dict(await (summary_reader()))
         except Exception:  # noqa: BLE001 - counts are explanatory, not required for setup
             log.exception("Could not load channel archive counts for Settings")
     for channel in channels:
@@ -288,7 +287,7 @@ async def deactivate_channel(request: Request, channel_id: int):
     db = request.app.state.db
     label = f"#{channel_id}"
     try:
-        for row in await maybe_await(db.get_channels()):
+        for row in await (db.get_channels()):
             if int(row["id"]) == channel_id:
                 label = row["identifier"]
                 break
@@ -309,7 +308,7 @@ async def delete_channel(request: Request, channel_id: int, confirmation: str = 
     if delete is None:
         raise HTTPException(status_code=501, detail="Channel deletion is unavailable")
     try:
-        deleted = await maybe_await(delete(channel_id, confirmation=confirmation))
+        deleted = await (delete(channel_id, confirmation=confirmation))
     except ValueError as exc:
         return await _render(
             request,
@@ -445,21 +444,18 @@ async def save_collection(
     errors: dict[str, str] = {}
     values = {"poll_minutes": poll_minutes, "track_days": track_days, "backfill_limit": backfill_limit}
     changes: dict[str, Any] = {}
-    try:
-        for field, key, raw, cast in (
-            ("poll_minutes", "collection.poll_minutes", poll_minutes, float),
-            ("track_days", "collection.track_days", track_days, int),
-            ("backfill_limit", "collection.backfill_limit", backfill_limit, int),
-        ):
-            try:
-                typed = cast(raw.strip())
-            except ValueError:
-                errors[field] = _FRIENDLY_ERRORS[field]
-                continue
-            _validate_field(store, key, field, typed, errors)
-            changes[key] = typed
-    except StoreUnavailable:
-        return await _render(request)
+    for field, key, raw, cast in (
+        ("poll_minutes", "collection.poll_minutes", poll_minutes, float),
+        ("track_days", "collection.track_days", track_days, int),
+        ("backfill_limit", "collection.backfill_limit", backfill_limit, int),
+    ):
+        try:
+            typed = cast(raw.strip())
+        except ValueError:
+            errors[field] = _FRIENDLY_ERRORS[field]
+            continue
+        _validate_field(store, key, field, typed, errors)
+        changes[key] = typed
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
     await _apply_fields(store, changes)
@@ -470,7 +466,7 @@ async def save_collection(
         callback = getattr(request.app.state, "on_poll_interval_change", None)
         if callable(callback):
             try:
-                await maybe_await(callback(float(changes["collection.poll_minutes"])))
+                await (callback(float(changes["collection.poll_minutes"])))
             except Exception as exc:  # noqa: BLE001 - settings save must still succeed
                 log.warning("poll interval callback failed (%s)", type(exc).__name__)
     _flash(request, "Collection settings saved.", "collection")
@@ -507,15 +503,11 @@ async def save_studio(
             errors["model"] = "Model is required."
     except EncryptionKeyRequired:
         return await _render(request, values=values, status_code=409, msg=ENCRYPTION_KEY_MESSAGE)
-    except StoreUnavailable:
-        return await _render(request)
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
     try:
         await _apply_fields(store, changes, reset_keys=reset_keys)
-    except (EncryptionKeyRequired, StoreUnavailable):
-        if store is None or not store.available:
-            return await _render(request)
+    except EncryptionKeyRequired:
         return await _render(request, values=values, status_code=409, msg=ENCRYPTION_KEY_MESSAGE)
     _flash(request, "Studio settings saved.", "studio")
     return _redirect("studio")
@@ -537,11 +529,8 @@ async def save_research(
         "research.enabled": research_enabled == "1",
         "research.blocked_domains": blocked_domains,
     }
-    try:
-        _validate_field(store, "research.enabled", "research_enabled", changes["research.enabled"], errors)
-        _validate_field(store, "research.blocked_domains", "blocked_domains", changes["research.blocked_domains"], errors)
-    except StoreUnavailable:
-        return await _render(request)
+    _validate_field(store, "research.enabled", "research_enabled", changes["research.enabled"], errors)
+    _validate_field(store, "research.blocked_domains", "blocked_domains", changes["research.blocked_domains"], errors)
     if errors:
         return await _render(request, errors=errors, values=values, status_code=422)
     await _apply_fields(store, changes)
@@ -561,8 +550,6 @@ def _reset_route(section: str):
             await reset_store.reset(key)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
-        except StoreUnavailable:
-            return await _render(request)
         _flash(request, "Setting reset to the .env value.", section)
         return _redirect(section)
 

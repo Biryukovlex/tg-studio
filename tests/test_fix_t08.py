@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.config import Settings
-from app.db import _SCHEMA, fmt_ts
+from app.migration.legacy_schema import _SCHEMA, fmt_ts
 
 
 def _make_archive(path: Path) -> None:
@@ -204,19 +204,20 @@ def test_import_remaps_ids_and_rejects_same_count_changed_archive(tmp_path):
     asyncio.run(prove())
 
 
-def test_diagnostic_read_only_does_not_init(tmp_path, monkeypatch):
+def test_diagnostic_read_only_does_not_init(tmp_path):
     import scripts.restore_history as restore
     from app.config import Settings as S
 
-    archive = tmp_path / "archive.db"
+    archive = tmp_path / "stats.db"
     _make_archive(archive)
     connection = sqlite3.connect(archive)
     before_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
     connection.close()
     before = archive.stat()
     before_bytes = archive.read_bytes()
-    monkeypatch.setattr(S, "db_path", property(lambda self: archive))
     settings = S(
+        _env_file=None,
+        data_dir=str(tmp_path),
         database_url="",
         api_id=1,
         api_hash="h",
@@ -236,29 +237,19 @@ def test_diagnostic_read_only_does_not_init(tmp_path, monkeypatch):
 
 
 def test_main_exits_without_database_url(monkeypatch):
+    from app.config import Settings
+
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("ALLOW_LEGACY_SQLITE", raising=False)
     monkeypatch.setenv("API_ID", "1")
     monkeypatch.setenv("API_HASH", "hash")
     monkeypatch.setenv("SESSION_STRING", "session")
     monkeypatch.setenv("CHANNELS", "@a")
     monkeypatch.setenv("ADMIN_PASSWORD", "strong-password")
-    settings = Settings()
+    settings = Settings(_env_file=None)
     assert not settings.postgres_enabled
-    assert not settings.allow_legacy_sqlite
-    with pytest.raises(SystemExit) as exc:
-        asyncio.run(_run_amain_db_branch(settings))
-    assert exc.value.code == 1
-
-
-async def _run_amain_db_branch(settings):
-    import sys
-
-    if settings.postgres_enabled:
-        return
-    if not settings.allow_legacy_sqlite:
-        print("Configuration problem: DATABASE_URL is empty.", file=sys.stderr)
-        raise SystemExit(1)
+    assert "allow_legacy_sqlite" not in Settings.model_fields
+    problems = settings.validate_required()
+    assert any("DATABASE_URL is required (PostgreSQL)" in p for p in problems)
 
 
 def test_fmt_ts_naive_is_utc_independent_of_tz(monkeypatch):

@@ -20,7 +20,6 @@ from datetime import datetime
 from .collector import Collector
 from .config import Settings
 from .workspace_settings import RuntimeSettings
-from .async_compat import maybe_await
 from .web.links import normalize_channel_identifier, telegram_message_link
 
 log = logging.getLogger("commands")
@@ -80,7 +79,7 @@ class CommandHandlers:
 
     async def _find_channel_id(self, arg: str):
         ident = normalize_channel_identifier(arg).lstrip("@").lower()
-        for ch in await maybe_await(self.db.get_channels()):
+        for ch in await (self.db.get_channels()):
             stored = normalize_channel_identifier(ch["identifier"]).lstrip("@").lower()
             if stored == ident:
                 return ch["id"]
@@ -125,13 +124,13 @@ class CommandHandlers:
         if cmd == "stats" and arg:
             channel_id = await self._find_channel_id(arg)
             if channel_id is None:
-                known_channels = await maybe_await(self.db.get_channels())
+                known_channels = await (self.db.get_channels())
                 known = ", ".join(c["identifier"] for c in known_channels) or "(none)"
                 await event.reply(f"Unknown channel. Tracked: {known}")
                 return
 
         if cmd == "stats":
-            k = await maybe_await(self.db.kpis(channel_id))
+            k = await (self.db.kpis(channel_id))
             scope = arg if arg else "all channels"
             raw_last = k.get("last_poll")
             if isinstance(raw_last, datetime):
@@ -149,11 +148,11 @@ class CommandHandlers:
             )
         elif cmd == "top":
             n = int(arg.split()[0]) if arg and arg.split()[0].isdigit() else 5
-            rows = await maybe_await(self.db.latest_stats(limit=n, order="views"))
+            rows = await (self.db.latest_stats(limit=n, order="views"))
             body = "\n".join(_fmt_row(r, with_channel=True) for r in rows) or "nothing tracked yet"
             await event.reply(f"Top {len(rows)} by views\n\n{body}")
         elif cmd == "last":
             n = int(arg.split()[0]) if arg and arg.split()[0].isdigit() else 5
-            rows = await maybe_await(self.db.latest_stats(limit=n, order="date"))
+            rows = await (self.db.latest_stats(limit=n, order="date"))
             body = "\n".join(_fmt_row(r, with_channel=True) for r in rows) or "nothing tracked yet"
             await event.reply(f"Last {len(rows)} posts\n\n{body}")

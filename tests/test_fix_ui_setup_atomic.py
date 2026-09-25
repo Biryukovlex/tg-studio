@@ -13,8 +13,8 @@ import pytest
 from cryptography.fernet import Fernet
 
 from app.config import Settings
-from app.db import Database
 from app.main import resolve_telegram_connection, telegram_connection_problems
+from app.postgres_db import PostgresDatabase
 from app.session_crypto import build_cipher
 from app.web.routes import create_app
 from app.workspace_settings import WorkspaceSettings
@@ -172,10 +172,11 @@ async def test_any_telegram_connection_change_requires_restart(tmp_path) -> None
     assert store.telegram_restart_required is True
 
 
+@pytest.mark.skipif(not TEST_POSTGRES_URL, reason="TEST_POSTGRES_URL is required")
 @pytest.mark.asyncio
 async def test_refresh_redirects_to_settings_while_telegram_is_unconfigured(tmp_path) -> None:
-    db = Database(tmp_path / "setup-mode.sqlite3")
-    db.init_db()
+    db = PostgresDatabase(TEST_POSTGRES_URL, workspace_slug=f"t36-setup-{uuid.uuid4().hex[:8]}")
+    await db.init_db(admin_username="admin")
 
     class SetupCollector:
         client = None

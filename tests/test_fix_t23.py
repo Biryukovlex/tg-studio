@@ -523,18 +523,18 @@ async def test_reset_and_source_tags(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_sqlite_mode_warn_and_no_forms(tmp_path):
+async def test_settings_page_has_no_readonly_mode(tmp_path):
     app, ws, db = _make_app_with_fake(tmp_path, role="owner", available=False)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         await client.post("/login", data={"username": "admin", "password": "pw"})
         page = await client.get("/settings")
-        assert "Settings are read from .env until PostgreSQL is configured" in page.text
-        # Count forms - should be zero (the logout link is an anchor, not counted)
+        assert page.status_code == 200
+        assert "Settings are read from .env until PostgreSQL is configured" not in page.text
+        # PostgreSQL is the only runtime: the page always renders its forms.
         import re
 
-        forms = re.findall(r"<form", page.text)
-        assert len(forms) == 0
+        assert re.findall(r"<form", page.text)
 
 
 @pytest.mark.asyncio

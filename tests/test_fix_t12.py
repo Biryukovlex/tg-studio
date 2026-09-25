@@ -70,7 +70,10 @@ def test_ci_runs_postgres_integration():
     text = CI.read_text(encoding="utf-8")
     assert "postgres" in text
     assert "TEST_POSTGRES_URL" in text
-    assert "-m postgres" in text
+    assert "alembic upgrade head" in text
+    # The PostgreSQL job runs the whole suite so web tests execute against
+    # the disposable database instead of being skipped.
+    assert "python -m pytest -q" in text
 
 
 def test_ci_runs_csrf_sweep_via_test_suite():

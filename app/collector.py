@@ -20,14 +20,16 @@ from telethon import TelegramClient, errors
 
 from . import limits
 from .config import Settings
-from .db import Database, utcnow
 from .postgres_db import PostgresDatabase
 from .workspace_settings import RuntimeSettings
-from .async_compat import maybe_await
 from .telegram_formatting import serialize_entities
 from .web.links import normalize_channel_identifier
 
 log = logging.getLogger("collector")
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def extract_metrics(msg: Any) -> tuple[int, int, int, int]:
@@ -69,7 +71,7 @@ class Collector:
     def __init__(
         self,
         client: TelegramClient | None,
-        db: Database | PostgresDatabase,
+        db: PostgresDatabase,
         settings: Settings | RuntimeSettings,
     ) -> None:
         self.client = client
@@ -99,7 +101,7 @@ class Collector:
         connection_getter = getattr(self.db, "active_connection_id", None)
         if connection_getter is not None:
             try:
-                connection_id = await maybe_await(connection_getter())
+                connection_id = await (connection_getter())
             except Exception:
                 connection_id = None
         title = getattr(entity, "title", "") or ""
@@ -107,13 +109,13 @@ class Collector:
         upsert = getattr(self.db, "upsert_channel")
         try:
             if connection_id is not None:
-                await maybe_await(
+                await (
                     upsert(identifier, title=title, chat_id=chat_id, connection_id=connection_id)
                 )
             else:
-                await maybe_await(upsert(identifier, title=title, chat_id=chat_id))
+                await (upsert(identifier, title=title, chat_id=chat_id))
         except TypeError:
-            await maybe_await(upsert(identifier, title=title, chat_id=chat_id))
+            await (upsert(identifier, title=title, chat_id=chat_id))
         return entity
 
     async def sync_channels(self) -> list[str]:
@@ -126,7 +128,7 @@ class Collector:
         # Also include DB rows with chat_id IS NULL (not yet resolved)
         try:
             # Fetch all channels and filter those with chat_id is None and not already in idents
-            channels = await maybe_await(self.db.get_channels())
+            channels = await (self.db.get_channels())
             # get_channels only returns active=true, but we need to include those with chat_id NULL even if active?
             # For Postgres, we can query directly for chat_id IS NULL
             # Use _execute if available to get all with chat_id NULL
@@ -193,7 +195,7 @@ class Collector:
             media = getattr(comment, "media", None)
             reactions = extract_metrics(comment)[2]
 
-            if await maybe_await(self.db.upsert_comment(
+            if await (self.db.upsert_comment(
                 post_id=post_id,
                 telegram_message_id=int(comment.id),
                 discussion_chat_id=int(getattr(comment, "chat_id", 0) or 0),
@@ -211,7 +213,7 @@ class Collector:
             )):
                 changed += 1
 
-        deleted = await maybe_await(self.db.mark_unseen_comments_deleted(post_id, sync_token))
+        deleted = await (self.db.mark_unseen_comments_deleted(post_id, sync_token))
         return seen, changed, deleted
 
     async def poll_channel(self, ch: Any, job_id: Any = None) -> tuple[int, int, int, int, int, int]:
@@ -243,16 +245,13 @@ class Collector:
                 cutoff = utcnow() - timedelta(minutes=recent_minutes)
                 limit = self.settings.backfill_limit if self.settings.backfill_limit > 0 else None
 
-        # has_comments optimization: fetch post IDs with comments in one query
-        # per channel before the loop. The per-post fallback only runs when the
-        # repository has no bulk getter (legacy SQLite path), never when the
-        # channel simply has zero commented posts.
+        # Fetch comment-bearing post IDs in one query before scanning.
         commented_ids: set[int] = set()
         has_bulk_comments = False
         getter = getattr(self.db, "post_ids_with_comments", None)
         if getter is not None:
             try:
-                commented_ids = set(await maybe_await(getter(ch["id"])))
+                commented_ids = set(await (getter(ch["id"])))
                 has_bulk_comments = True
             except Exception:
                 commented_ids = set()
@@ -279,11 +278,11 @@ class Collector:
                 renew = getattr(self.db, "renew_collection_job", None)
                 if renew is not None:
                     try:
-                        await maybe_await(renew(job_id))
+                        await (renew(job_id))
                     except Exception:
                         pass
                 last_renew = time.monotonic()
-            post_id = await maybe_await(self.db.upsert_post(
+            post_id = await (self.db.upsert_post(
                 ch["id"],
                 msg.id,
                 msg.date,
@@ -291,7 +290,7 @@ class Collector:
                 formatting_entities=serialize_entities(getattr(msg, "entities", None)),
             ))
             views, comments, reactions, shares = extract_metrics(msg)
-            if await maybe_await(self.db.add_snapshot_if_changed(post_id, views, comments, reactions, shares)):
+            if await (self.db.add_snapshot_if_changed(post_id, views, comments, reactions, shares)):
                 written += 1
             should_fetch = False
             if comments > 0:
@@ -301,7 +300,7 @@ class Collector:
             else:
                 # fallback per-post check (repositories without a bulk getter)
                 try:
-                    should_fetch = bool(await maybe_await(self.db.has_comments(post_id)))
+                    should_fetch = bool(await (self.db.has_comments(post_id)))
                 except Exception:
                     should_fetch = False
             if should_fetch:
@@ -331,16 +330,12 @@ class Collector:
             retire = getattr(self.db, "mark_unseen_posts_deleted", None)
             if retire is not None:
                 try:
-                    await maybe_await(
-                        retire(
-                            ch["id"],
-                            seen_message_ids,
-                            since=cutoff,
-                            min_message_id=min(seen_message_ids),
-                        )
+                    await retire(
+                        ch["id"],
+                        seen_message_ids,
+                        since=cutoff,
+                        min_message_id=min(seen_message_ids),
                     )
-                except TypeError:
-                    await maybe_await(retire(ch["id"], seen_message_ids))
                 except Exception:
                     log.warning("post retirement failed for channel %s", ch["identifier"])
         return seen, written, comments_seen, comments_written, comments_deleted, comment_errors
@@ -355,7 +350,7 @@ class Collector:
                 interval_callback = getattr(self, "on_poll_interval_change", None)
                 if applied is not None and new != applied and callable(interval_callback):
                     try:
-                        await maybe_await(interval_callback(new))
+                        await (interval_callback(new))
                     except Exception:
                         log.warning("on_poll_interval_change failed")
             except Exception:
@@ -365,7 +360,7 @@ class Collector:
             total_seen = total_new = 0
             total_comments = total_comments_changed = total_comments_deleted = total_comment_errors = 0
             err_count = 0
-            channels = await maybe_await(self.db.get_channels())
+            channels = await (self.db.get_channels())
             for ch in channels:
                 if time.monotonic() < self._next_allowed_at:
                     log.info("skipping channel %s due to active FloodWait", ch["identifier"])
@@ -375,7 +370,7 @@ class Collector:
                 failure_code = None
                 claim = getattr(self.db, "claim_collection_job", None)
                 if claim is not None:
-                    job_id = await maybe_await(claim(ch["id"]))
+                    job_id = await (claim(ch["id"]))
                     if job_id is None:
                         log.info("collection already running for channel %s; skipping overlap", ch["identifier"])
                         continue
@@ -404,7 +399,7 @@ class Collector:
                 finally:
                     finish = getattr(self.db, "finish_collection_job", None)
                     if finish is not None and job_id is not None:
-                        await maybe_await(
+                        await (
                             finish(
                                 job_id,
                                 status="failed" if channel_failed else "succeeded",
@@ -414,7 +409,7 @@ class Collector:
             prune = getattr(self.db, "prune_collection_jobs", None)
             if prune is not None:
                 try:
-                    await maybe_await(prune())
+                    await (prune())
                 except Exception:
                     log.warning("collection job pruning failed")
             summary: dict[str, Any] = {

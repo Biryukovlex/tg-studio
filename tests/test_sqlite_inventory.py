@@ -1,7 +1,7 @@
 import json
 import sqlite3
 
-from app.db import _SCHEMA
+from app.migration.legacy_schema import _SCHEMA
 from app.migration.sqlite_inventory import build_inventory, main
 
 

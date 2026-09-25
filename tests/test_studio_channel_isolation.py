@@ -49,14 +49,14 @@ async def test_repository_separates_prompts_conversations_and_message_memory():
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_and_settings_are_selected_channel_only(client, settings, app):
+async def test_bootstrap_and_settings_are_selected_channel_only(client, settings, app, channel_id):
     settings.studio_test_mode = True
     token = await _login_and_csrf(client, settings)
     repository = app.state.studio_repository
-    _second_channel(repository)
+    second_id = await repository.db.upsert_channel("@second_channel", "Second channel", 7002)
 
-    first = await repository.create_conversation(channel_id=1, title="First conversation")
-    second = await repository.create_conversation(channel_id=2, title="Second conversation")
+    first = await repository.create_conversation(channel_id=channel_id, title="First conversation")
+    second = await repository.create_conversation(channel_id=second_id, title="Second conversation")
     await repository.append_message(
         conversation_id=first["id"], role="user", content="First-channel memory"
     )
@@ -65,7 +65,7 @@ async def test_bootstrap_and_settings_are_selected_channel_only(client, settings
     )
     await repository.upsert_profile_text(
         {
-            "channel_id": 1,
+            "channel_id": channel_id,
             "expected_version": 0,
             "topics_text": "First topic",
             "editorial_text": "",
@@ -74,36 +74,36 @@ async def test_bootstrap_and_settings_are_selected_channel_only(client, settings
     )
     await repository.upsert_profile_text(
         {
-            "channel_id": 2,
+            "channel_id": second_id,
             "expected_version": 0,
             "topics_text": "Second topic",
             "editorial_text": "",
             "style_text": "",
         }
     )
-    await repository.set_system_prompt(1, "First prompt")
-    await repository.set_system_prompt(2, "Second prompt")
+    await repository.set_system_prompt(channel_id, "First prompt")
+    await repository.set_system_prompt(second_id, "Second prompt")
 
-    response = await client.get("/studio/api/bootstrap?channel_id=2")
+    response = await client.get(f"/studio/api/bootstrap?channel_id={second_id}")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["selected_channel_id"] == 2
+    assert payload["selected_channel_id"] == second_id
     assert [item["id"] for item in payload["conversations"]] == [str(second["id"])]
-    assert payload["current_conversation"]["channel_id"] == 2
+    assert payload["current_conversation"]["channel_id"] == second_id
     assert payload["profile"]["topics_text"] == "Second topic"
     assert "First topic" not in str(payload)
     assert "First-channel memory" not in str(payload)
 
-    prompt = await client.get("/studio/api/settings?channel_id=2")
-    assert prompt.json() == {"channel_id": 2, "system_prompt": "Second prompt"}
+    prompt = await client.get(f"/studio/api/settings?channel_id={second_id}")
+    assert prompt.json() == {"channel_id": second_id, "system_prompt": "Second prompt"}
     changed = await client.patch(
         "/studio/api/settings",
         headers={"x-csrf-token": token},
-        json={"channel_id": 2, "system_prompt": "Updated second prompt"},
+        json={"channel_id": second_id, "system_prompt": "Updated second prompt"},
     )
     assert changed.status_code == 200
-    assert await repository.get_system_prompt(1) == "First prompt"
-    assert await repository.get_system_prompt(2) == "Updated second prompt"
+    assert await repository.get_system_prompt(channel_id) == "First prompt"
+    assert await repository.get_system_prompt(second_id) == "Updated second prompt"
 
 
 def test_studio_ui_exposes_channel_selector_and_channel_scoped_prompt_copy():

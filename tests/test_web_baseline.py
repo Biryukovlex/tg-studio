@@ -50,13 +50,12 @@ async def test_valid_login_renders_seeded_dashboard(client):
     assert "120" in dashboard.text
 
 
-async def test_post_detail_renders_the_complete_stored_body(client, app):
+async def test_post_detail_renders_the_complete_stored_body(client, app, channel_id):
     db = app.state.db
-    channel = db.get_channels()[0]
     body = "Opening line\n\n" + ("Full history body. " * 25) + "END-OF-FULL-BODY"
     assert len(body) > 180
-    post_id = db.upsert_post(
-        int(channel["id"]),
+    post_id = await db.upsert_post(
+        channel_id,
         message_id=99,
         posted_at=datetime.now(timezone.utc),
         text=body,
@@ -72,11 +71,10 @@ async def test_post_detail_renders_the_complete_stored_body(client, app):
     assert body in response.text
 
 
-async def test_post_detail_renders_telegram_entities_as_safe_html(client, app):
+async def test_post_detail_renders_telegram_entities_as_safe_html(client, app, channel_id):
     db = app.state.db
-    channel = db.get_channels()[0]
-    post_id = db.upsert_post(
-        int(channel["id"]),
+    post_id = await db.upsert_post(
+        channel_id,
         message_id=100,
         posted_at=datetime.now(timezone.utc),
         text="Bold <tag>",

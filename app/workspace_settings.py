@@ -24,9 +24,6 @@ def format_timestamp(value: Any) -> str | None:
 class EncryptionKeyRequired(RuntimeError):
     """Raised when a secret is saved without a cipher."""
 
-class StoreUnavailable(RuntimeError):
-    """Raised when the store is unavailable (SQLite mode)."""
-
 
 # Registry of 7 workspace-scoped keys
 # Each entry: key -> (type_name, env_attr, validator)
@@ -184,28 +181,17 @@ class WorkspaceSettings:
         self._rows: dict[str, dict[str, Any]] = {}
         self._loaded = False
         self.telegram_restart_required = False
-        # Determine availability: postgres with workspace_id vs sqlite
-        self.available = bool(getattr(db, "is_postgres", False) and getattr(db, "workspace_id", None) is not None)
-        # For SQLite mode, available is False; for postgres, True after init
-        # If db is postgres but workspace_id not yet set (before init_db), we treat as available after load will check
+        # Determine availability: the PostgreSQL store is available once the
+        # workspace exists.
+        self.available = bool(getattr(db, "workspace_id", None) is not None)
 
     async def load(self) -> None:
         """Load all rows for this workspace into memory."""
-        # Check if db is postgres and has workspace
-        is_pg = bool(getattr(self._db, "is_postgres", False))
-        if not is_pg:
-            self.available = False
-            self._rows = {}
-            self._loaded = True
-            return
         # If workspace_id is None, try to ensure workspace (for tests, db may not have init yet)
         ws_id = getattr(self._db, "workspace_id", None)
         if ws_id is None:
-            # Try to call ensure_workspace or init_db? For tests, they may have not called init_db yet.
-            # We treat as not available until init, but for T22 tests with memory db, they may use a fake db that doesn't have workspace.
-            # In that case, we treat as available=False? But spec says SQLite mode is no-op, postgres mode is available.
-            # For memory tests, db may be a fake with no postgres flag, so available False.
-            # For postgres tests, workspace_id will be set after init_db.
+            # The workspace does not exist yet; the store becomes available
+            # after init_db assigns it.
             self.available = False
             self._rows = {}
             self._loaded = True
@@ -269,7 +255,7 @@ class WorkspaceSettings:
     def validate(self, key: str, value: Any) -> Any:
         """Validate one value without changing memory or persistent state."""
         if not self.available:
-            raise StoreUnavailable("Settings store is not available in SQLite mode")
+            raise RuntimeError("Settings store is not available")
         if key not in SETTINGS:
             raise ValueError(f"unknown settings key: {key}")
         typ, _env_attr, validator = SETTINGS[key]
@@ -299,7 +285,7 @@ class WorkspaceSettings:
     async def set_many(self, changes: dict[str, Any], *, reset_keys: tuple[str, ...] = ()) -> None:
         """Validate and apply one form submission as a single PostgreSQL transaction."""
         if not self.available:
-            raise StoreUnavailable("Settings store is not available in SQLite mode")
+            raise RuntimeError("Settings store is not available")
 
         resets = tuple(dict.fromkeys(reset_keys))
         for key in resets:

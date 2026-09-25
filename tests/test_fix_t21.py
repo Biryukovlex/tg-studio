@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
+import uuid
 
 import httpx
+import pytest
 
 from app import limits
 from app.config import Settings
+from app.postgres_db import PostgresDatabase
 from app.studio.consent import configuration_fingerprint
 from app.studio.search import SearXNGSearchProvider
 from app.studio.service import StudioService
 from app.studio.repository import MemoryStudioRepository
+
+TEST_POSTGRES_URL = os.getenv("TEST_POSTGRES_URL", "")
 from app.bot import CommandHandlers
 from app.collector import Collector
 from unittest.mock import AsyncMock, MagicMock
@@ -195,13 +201,14 @@ def test_studio_always_on_and_sidebar_and_env_clean():
     assert "admin_tg_ids" not in Settings.model_fields
 
     # GET /studio with test mode returns 200, never 404
-    from app.db import Database
     from app.collector import Collector
     from app.web.routes import create_app
     import tempfile
 
+    if not TEST_POSTGRES_URL:
+        pytest.skip("TEST_POSTGRES_URL is required")
+
     with tempfile.TemporaryDirectory() as tmp:
-        # Use Database with tmp path for isolated test
         from pathlib import Path
 
         settings = Settings(
@@ -211,38 +218,37 @@ def test_studio_always_on_and_sidebar_and_env_clean():
             admin_password="pw",
             session_secret="sec",
             data_dir=tmp,
-            database_url="",
+            database_url=TEST_POSTGRES_URL,
             api_id=1,
             api_hash="h",
             session_string="s",
             channels="@test",
         )
-        # Need to create a Database and Collector
-        db_path = Path(tmp) / "stats.db"
-        from app.db import Database
-
-        db = Database(db_path)
-        db.init_db()
-        collector = Collector(None, db, settings)
-        app = create_app(collector, settings)
-        # Use httpx to test
-        import asyncio
+        db = PostgresDatabase(TEST_POSTGRES_URL, workspace_slug=f"t21-{uuid.uuid4().hex[:8]}")
 
         async def _check():
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                # Login
-                await client.post("/login", data={"username": "admin", "password": "pw"})
-                # After login, GET /studio should be 200
-                # Need to follow redirect and keep session
-                # Use client with cookies automatically
-                studio_resp = await client.get("/studio")
-                assert studio_resp.status_code == 200, f"/studio returned {studio_resp.status_code}"
-                # Check that GET / contains studio link
-                dash_resp = await client.get("/")
-                assert dash_resp.status_code == 200
-                assert 'href="/studio"' in dash_resp.text
-                assert "Studio</span>" in dash_resp.text
+            await db.init_db(admin_username="admin")
+            try:
+                collector = Collector(None, db, settings)
+                app = create_app(collector, settings)
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                    # Login
+                    await client.post("/login", data={"username": "admin", "password": "pw"})
+                    # After login, GET /studio should be 200
+                    # Need to follow redirect and keep session
+                    # Use client with cookies automatically
+                    studio_resp = await client.get("/studio")
+                    assert studio_resp.status_code == 200, f"/studio returned {studio_resp.status_code}"
+                    # Check that GET / contains studio link
+                    dash_resp = await client.get("/")
+                    assert dash_resp.status_code == 200
+                    assert 'href="/studio"' in dash_resp.text
+                    assert "Studio</span>" in dash_resp.text
+            finally:
+                await db.close()
+
+        import asyncio
 
         asyncio.run(_check())
 

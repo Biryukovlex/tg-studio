@@ -43,7 +43,7 @@ def _events(stream: str) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_studio_bootstrap_create_stream_and_reload(client, settings):
+async def test_studio_bootstrap_create_stream_and_reload(client, channel_id, settings):
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)
@@ -53,12 +53,12 @@ async def test_studio_bootstrap_create_stream_and_reload(client, settings):
     body = bootstrap.json()
     assert body["setup"]["ready"] is True
     assert body["provider"]["configured"] is True
-    assert body["selected_channel_id"] == 1
+    assert body["selected_channel_id"] == channel_id
     assert "api_key" not in json.dumps(body)
 
     created = await client.post(
         "/studio/api/conversations",
-        json={"channel_id": 1, "title": "A focused thread"},
+        json={"channel_id": channel_id, "title": "A focused thread"},
         headers={"x-csrf-token": token},
     )
     assert created.status_code == 200
@@ -90,11 +90,11 @@ async def test_studio_bootstrap_create_stream_and_reload(client, settings):
 
 
 @pytest.mark.asyncio
-async def test_studio_rejects_cross_workspace_or_missing_csrf_ids(client, settings):
+async def test_studio_rejects_cross_workspace_or_missing_csrf_ids(client, channel_id, settings):
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)
-    missing_csrf = await client.post("/studio/api/conversations", json={"channel_id": 1})
+    missing_csrf = await client.post("/studio/api/conversations", json={"channel_id": channel_id})
     assert missing_csrf.status_code == 403
 
     unknown = str(uuid.uuid4())
@@ -111,7 +111,7 @@ async def test_studio_rejects_cross_workspace_or_missing_csrf_ids(client, settin
 
 
 @pytest.mark.asyncio
-async def test_studio_api_contract_rejects_invalid_requests_and_paginates_events(client, settings):
+async def test_studio_api_contract_rejects_invalid_requests_and_paginates_events(client, channel_id, settings):
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)
@@ -160,7 +160,7 @@ async def test_studio_api_contract_rejects_invalid_requests_and_paginates_events
 
     created = await client.post(
         "/studio/api/conversations",
-        json={"channel_id": 1},
+        json={"channel_id": channel_id},
         headers={"x-csrf-token": token},
     )
     assert created.status_code == 200
@@ -184,12 +184,12 @@ async def test_studio_api_contract_rejects_invalid_requests_and_paginates_events
 
 
 @pytest.mark.asyncio
-async def test_studio_mutations_all_require_csrf(client, settings):
+async def test_studio_mutations_all_require_csrf(client, channel_id, settings):
     settings.studio_test_mode = True
     await _login(client, settings)
 
     setup_validation = await client.post("/studio/api/setup/validate")
-    conversation = await client.post("/studio/api/conversations", json={"channel_id": 1})
+    conversation = await client.post("/studio/api/conversations", json={"channel_id": channel_id})
     agent = await client.post(
         "/studio/api/agent",
         json=_payload(str(uuid.uuid4()), str(uuid.uuid4())),
@@ -204,13 +204,13 @@ async def test_studio_mutations_all_require_csrf(client, settings):
 
 
 @pytest.mark.asyncio
-async def test_agent_uses_persisted_conversation_and_authorized_channel_context(client, app, settings):
+async def test_agent_uses_persisted_conversation_and_authorized_channel_context(client, channel_id, app, settings):
     settings.studio_test_mode = True
     await _login(client, settings)
     token = await _csrf(client)
     created = await client.post(
         "/studio/api/conversations",
-        json={"channel_id": 1, "title": "Authorized context"},
+        json={"channel_id": channel_id, "title": "Authorized context"},
         headers={"x-csrf-token": token},
     )
     assert created.status_code == 200
@@ -239,7 +239,7 @@ async def test_agent_uses_persisted_conversation_and_authorized_channel_context(
         headers={"accept": "text/event-stream", "x-csrf-token": token},
     )
     assert streamed.status_code == 200
-    assert calls == [1]
+    assert calls == [channel_id]
 
     messages = await client.get(f"/studio/api/conversations/{conversation_id}/messages")
     assert messages.status_code == 200

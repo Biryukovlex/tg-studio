@@ -60,15 +60,15 @@ async def test_choose_moves_pointer_without_new_version_and_agent_revision_becom
 
 
 @pytest.mark.asyncio
-async def test_patch_route_choose_and_save_modes(client, app, settings):
+async def test_patch_route_choose_and_save_modes(client, app, settings, channel_id):
     settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password}, follow_redirects=False)
     home = await client.get("/studio")
     token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
     headers = {"x-csrf-token": token, "content-type": "application/json"}
     repo = app.state.studio_repository
-    conversation = await repo.create_conversation(channel_id=1)
-    draft = await repo.create_draft(conversation_id=uuid.UUID(str(conversation["id"])), channel_id=1, payload={"body": "agent v1", "creative": True})
+    conversation = await repo.create_conversation(channel_id=channel_id)
+    draft = await repo.create_draft(conversation_id=uuid.UUID(str(conversation["id"])), channel_id=channel_id, payload={"body": "agent v1", "creative": True})
     did = draft["id"]
 
     saved = await client.patch(f"/studio/api/drafts/{did}", json={"expected_revision": draft["revision"], "body": "owner edit", "working_title": "T"}, headers=headers)

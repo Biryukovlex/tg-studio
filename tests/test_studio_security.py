@@ -28,10 +28,10 @@ async def test_openrouter_smoke_is_skipped_without_a_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_public_health_check_reports_legacy_storage_without_auth(client):
+async def test_public_health_check_reports_postgres_storage_without_auth(client):
     response = await client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "last_successful_cycle_at": None}
+    assert response.json() == {"status": "ok", "storage": "postgresql", "last_successful_cycle_at": None}
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,7 @@ def test_default_credentials_are_refused_on_non_loopback_interfaces():
         web_host="127.0.0.1",
         postgres_password="change-me",
         postgres_bind_address="127.0.0.1",
+        database_url="postgresql+asyncpg://example/test",
         **base,
     )
     assert loopback_admin.validate_required() == []
@@ -87,6 +88,7 @@ def test_default_credentials_are_refused_on_non_loopback_interfaces():
         web_host="0.0.0.0",
         postgres_password="change-me",
         postgres_bind_address="0.0.0.0",
+        database_url="postgresql+asyncpg://example/test",
         **base,
     )
     problems = public_admin.validate_required()

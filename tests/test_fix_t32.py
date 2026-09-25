@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from sqlalchemy import text
 
 from app.config import Settings
-from app.db import Database
+from app.postgres_db import PostgresDatabase
 from app.web.links import normalize_channel_identifier, telegram_message_link
 from app.web.routes import create_app
+
+
+def _pg_url() -> str:
+    url = os.environ.get("TEST_POSTGRES_URL", "")
+    if not url:
+        pytest.skip("TEST_POSTGRES_URL is required")
+    return url
 
 
 def test_channel_identifiers_and_message_links_are_canonical():
@@ -46,18 +56,18 @@ async def test_dashboard_paginates_posts_and_uses_supervised_refresh(tmp_path):
         admin_password="pw",
         session_secret="secret",
     )
-    db = Database(settings.db_path)
-    db.init_db()
-    channel_id = db.upsert_channel("@page_channel", "Page channel", 12345)
+    db = PostgresDatabase(_pg_url(), workspace_slug=f"t32-{uuid.uuid4().hex[:8]}")
+    await db.init_db(admin_username="admin")
+    channel_id = await db.upsert_channel("@page_channel", "Page channel", 12345)
     now = datetime.now(timezone.utc)
     for index in range(250):
-        post_id = db.upsert_post(
+        post_id = await db.upsert_post(
             channel_id,
             index + 1,
             now - timedelta(minutes=index),
             f"page post {index + 1}",
         )
-        db.add_snapshot_if_changed(post_id, views=index + 1, comments=0, reactions=0, shares=0)
+        await db.add_snapshot_if_changed(post_id, views=index + 1, comments=0, reactions=0, shares=0)
     collector = _RefreshCollector(db)
     app = create_app(collector, settings)
 
@@ -104,11 +114,11 @@ async def test_csv_channel_cells_are_formula_safe(tmp_path):
         admin_password="pw",
         session_secret="secret",
     )
-    db = Database(settings.db_path)
-    db.init_db()
-    channel_id = db.upsert_channel("=HYPERLINK(\"https://evil.test\")", "Formula", 42)
-    post_id = db.upsert_post(channel_id, 1, datetime.now(timezone.utc), "safe")
-    db.add_snapshot_if_changed(post_id, 1, 0, 0, 0)
+    db = PostgresDatabase(_pg_url(), workspace_slug=f"t32-{uuid.uuid4().hex[:8]}")
+    await db.init_db(admin_username="admin")
+    channel_id = await db.upsert_channel("=HYPERLINK(\"https://evil.test\")", "Formula", 42)
+    post_id = await db.upsert_post(channel_id, 1, datetime.now(timezone.utc), "safe")
+    await db.add_snapshot_if_changed(post_id, 1, 0, 0, 0)
     app = create_app(_RefreshCollector(db), settings)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -118,22 +128,23 @@ async def test_csv_channel_cells_are_formula_safe(tmp_path):
     assert "'=HYPERLINK" in response.text
 
 
-def test_overview_chart_uses_post_dates_instead_of_sync_dates(tmp_path):
-    db = Database(tmp_path / "post-dates.sqlite")
-    db.init_db()
-    channel_id = db.upsert_channel("@dated_channel", "Dated channel", 98765)
+@pytest.mark.asyncio
+async def test_overview_chart_uses_post_dates_instead_of_sync_dates(tmp_path):
+    db = PostgresDatabase(_pg_url(), workspace_slug=f"t32-{uuid.uuid4().hex[:8]}")
+    await db.init_db(admin_username="admin")
+    channel_id = await db.upsert_channel("@dated_channel", "Dated channel", 98765)
     today = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
     older_day = today - timedelta(days=3)
     newer_day = today - timedelta(days=1)
-    older_post = db.upsert_post(channel_id, 1, older_day, "older post")
-    newer_post = db.upsert_post(channel_id, 2, newer_day, "newer post")
+    older_post = await db.upsert_post(channel_id, 1, older_day, "older post")
+    newer_post = await db.upsert_post(channel_id, 2, newer_day, "newer post")
 
     # Both snapshots are collected now. Their sync date must not move either
     # post's metrics away from its publication date on the chart.
-    db.add_snapshot_if_changed(older_post, views=10, comments=1, reactions=2, shares=3)
-    db.add_snapshot_if_changed(newer_post, views=20, comments=4, reactions=5, shares=6)
+    await db.add_snapshot_if_changed(older_post, views=10, comments=1, reactions=2, shares=3)
+    await db.add_snapshot_if_changed(newer_post, views=20, comments=4, reactions=5, shares=6)
 
-    series = db.timeseries_totals(days=None, channel_id=channel_id)
+    series = await db.timeseries_totals(days=None, channel_id=channel_id)
     older_index = series["days"].index(older_day.strftime("%Y-%m-%d"))
     newer_index = series["days"].index(newer_day.strftime("%Y-%m-%d"))
     assert series["views"][older_index] == 10

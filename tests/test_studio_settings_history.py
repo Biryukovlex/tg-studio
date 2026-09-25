@@ -35,25 +35,25 @@ def test_system_prompt_control_is_channel_local_inside_studio():
 
 
 @pytest.mark.asyncio
-async def test_settings_authenticated_csrf_validated_and_channel_scoped(client, settings, app):
+async def test_settings_authenticated_csrf_validated_and_channel_scoped(client, settings, app, channel_id):
     settings.studio_test_mode = True
     await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password})
     home = await client.get("/studio")
     token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
     repository = app.state.studio_repository
-    repository.channels.append({"id": 2, "identifier": "@other_channel", "title": "Other", "active": True})
-    assert (await client.get("/studio/api/settings?channel_id=1")).json() == {"channel_id": 1, "system_prompt": ""}
-    assert (await client.patch("/studio/api/settings", json={"channel_id": 1, "system_prompt": "x"})).status_code == 403
+    other_id = await repository.db.upsert_channel("@other_channel", "Other", 7004)
+    assert (await client.get(f"/studio/api/settings?channel_id={channel_id}")).json() == {"channel_id": channel_id, "system_prompt": ""}
+    assert (await client.patch("/studio/api/settings", json={"channel_id": channel_id, "system_prompt": "x"})).status_code == 403
     headers = {"x-csrf-token": token}
     for invalid in [None, 42, "x" * 12001]:
-        assert (await client.patch("/studio/api/settings", headers=headers, json={"channel_id": 1, "system_prompt": invalid})).status_code == 422
+        assert (await client.patch("/studio/api/settings", headers=headers, json={"channel_id": channel_id, "system_prompt": invalid})).status_code == 422
     prompt = "Пиши коротко. Без служебных комментариев в постах."
-    assert (await client.patch("/studio/api/settings", headers=headers, json={"channel_id": 1, "system_prompt": prompt})).status_code == 200
-    assert (await client.get("/studio/api/settings?channel_id=1")).json()["system_prompt"] == prompt
-    assert (await client.get("/studio/api/settings?channel_id=2")).json()["system_prompt"] == ""
+    assert (await client.patch("/studio/api/settings", headers=headers, json={"channel_id": channel_id, "system_prompt": prompt})).status_code == 200
+    assert (await client.get(f"/studio/api/settings?channel_id={channel_id}")).json()["system_prompt"] == prompt
+    assert (await client.get(f"/studio/api/settings?channel_id={other_id}")).json()["system_prompt"] == ""
     other = MemoryStudioRepository(workspace_id="other-workspace")
     assert await other.get_system_prompt(1) == ""
-    assert (await client.patch("/studio/api/settings", headers=headers, json={"channel_id": 1, "system_prompt": ""})).status_code == 200
+    assert (await client.patch("/studio/api/settings", headers=headers, json={"channel_id": channel_id, "system_prompt": ""})).status_code == 200
 
 
 @pytest.mark.asyncio

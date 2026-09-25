@@ -64,18 +64,18 @@ async def test_memory_delete_is_scoped_cascades_studio_records_and_blocks_active
 
 
 @pytest.mark.asyncio
-async def test_delete_route_requires_csrf_blocks_active_runs_and_removes_history(client, app, settings):
+async def test_delete_route_requires_csrf_blocks_active_runs_and_removes_history(client, app, settings, channel_id):
     settings.studio_test_mode = True
     token = await _login(client, settings)
 
     target_response = await client.post(
         "/studio/api/conversations",
-        json={"channel_id": 1, "title": "Remove this thread"},
+        json={"channel_id": channel_id, "title": "Remove this thread"},
         headers={"x-csrf-token": token},
     )
     active_response = await client.post(
         "/studio/api/conversations",
-        json={"channel_id": 1, "title": "Keep this thread"},
+        json={"channel_id": channel_id, "title": "Keep this thread"},
         headers={"x-csrf-token": token},
     )
     assert target_response.status_code == active_response.status_code == 200
@@ -85,7 +85,7 @@ async def test_delete_route_requires_csrf_blocks_active_runs_and_removes_history
 
     target_draft = await repository.create_draft(
         conversation_id=uuid.UUID(target_id),
-        channel_id=1,
+        channel_id=channel_id,
         payload={"body": "Delete this Studio artifact", "creative": True},
     )
     message = await repository.append_message(

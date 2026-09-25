@@ -1,9 +1,9 @@
 """Diagnose or run a complete Telegram post/comment history refresh.
 
-The command never modifies the SQLite source in diagnostic mode.  In run mode
-it uses the configured runtime repository and forces ``TRACK_DAYS=0`` and an
-unbounded message iterator; the existing archive remains untouched when the
-PostgreSQL importer was used as the cutover source.
+PostgreSQL is the only runtime.  The command never modifies the SQLite
+archive: diagnostic mode inspects it read-only through
+``app.migration.sqlite_inventory`` and run mode refreshes the PostgreSQL
+archive from Telegram with ``TRACK_DAYS=0`` and an unbounded iterator.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from telethon.sessions import StringSession
 
 from app.collector import Collector
 from app.config import Settings, load_settings
-from app.db import Database
 from app.migration.sqlite_inventory import _read_only_connection
 from app.postgres_db import PostgresDatabase
 from app.session_crypto import build_cipher
@@ -32,7 +31,7 @@ from app.session_crypto import build_cipher
 def _diagnostic(settings: Settings) -> dict:
     if settings.postgres_enabled:
         return {"message": "use --run for PostgreSQL diagnostics after startup", "storage": "postgresql"}
-    archive = settings.db_path
+    archive = Path(settings.data_dir) / "stats.db"
     with _read_only_connection(archive) as connection:
         posts = connection.execute("SELECT COUNT(*) AS n FROM posts").fetchone()["n"]
         oldest = connection.execute("SELECT MIN(posted_at) AS v FROM posts").fetchone()["v"]
@@ -50,17 +49,14 @@ def _diagnostic(settings: Settings) -> dict:
 
 async def _run(settings: Settings) -> dict:
     runtime_settings = settings.model_copy(update={"track_days": 0, "backfill_limit": 0})
-    if runtime_settings.postgres_enabled:
-        db = PostgresDatabase.from_settings(runtime_settings)
-        await db.init_db(admin_username=runtime_settings.admin_username)
-        cipher = build_cipher(runtime_settings.telegram_session_encryption_key)
-        session_string = await db.load_telegram_session(
-            label=runtime_settings.telegram_connection_label, cipher=cipher
-        ) or runtime_settings.session_string
-    else:
-        db = Database(runtime_settings.db_path)
-        db.init_db()
-        session_string = runtime_settings.session_string
+    if not runtime_settings.postgres_enabled:
+        raise RuntimeError("DATABASE_URL is required (PostgreSQL); the SQLite runtime was removed")
+    db = PostgresDatabase.from_settings(runtime_settings)
+    await db.init_db(admin_username=runtime_settings.admin_username)
+    cipher = build_cipher(runtime_settings.telegram_session_encryption_key)
+    session_string = await db.load_telegram_session(
+        label=runtime_settings.telegram_connection_label, cipher=cipher
+    ) or runtime_settings.session_string
     if not session_string:
         raise RuntimeError("no Telegram session available; set SESSION_STRING or persist an encrypted connection")
     client = TelegramClient(StringSession(session_string), runtime_settings.api_id, runtime_settings.api_hash)
@@ -76,8 +72,7 @@ async def _run(settings: Settings) -> dict:
         return summary
     finally:
         await client.disconnect()
-        if isinstance(db, PostgresDatabase):
-            await db.close()
+        await db.close()
 
 
 def main() -> None:

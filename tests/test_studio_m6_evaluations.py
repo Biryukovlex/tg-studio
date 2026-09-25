@@ -21,7 +21,7 @@ import pytest
 from pydantic_ai.ui.ag_ui import AGUIAdapter as RealAGUIAdapter
 
 from app.config import Settings
-from app.db import _SCHEMA
+from app.migration.legacy_schema import _SCHEMA
 from app.migration.sqlite_to_postgres import import_sqlite
 from app.studio.analytics import analyze_posts
 from app.studio.context import ContextAssembler, context_contains_comment_bodies

@@ -102,7 +102,7 @@ def test_structured_observation_contains_only_allowlisted_metadata(caplog):
 
 
 @pytest.mark.asyncio
-async def test_run_details_is_quiet_scoped_and_filters_unknown_event_fields(client, settings, app):
+async def test_run_details_is_quiet_scoped_and_filters_unknown_event_fields(client, settings, app, channel_id):
     settings.studio_test_mode = True
     login = await client.post(
         "/login",
@@ -114,7 +114,7 @@ async def test_run_details_is_quiet_scoped_and_filters_unknown_event_fields(clie
     token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', page.text).group(1)
     created = await client.post(
         "/studio/api/conversations",
-        json={"channel_id": 1},
+        json={"channel_id": channel_id},
         headers={"x-csrf-token": token},
     )
     conversation_id = uuid.UUID(created.json()["conversation"]["id"])

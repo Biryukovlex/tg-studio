@@ -30,12 +30,6 @@
   <span class="save-confirmation-progress" aria-hidden="true"></span>
 </aside>
 {% endif %}
-{% if not available %}
-<div class="banner warn" role="status">
-  <i class="mgc mgc-alert-core-regular" aria-hidden="true"></i>
-  <span>Settings are read from .env until PostgreSQL is configured. Set DATABASE_URL and run the migration to edit them here.</span>
-</div>
-{% else %}
 <section class="settings-intro" data-reveal>
   <p>Values saved here are stored in the workspace database and override <strong>.env</strong>. Tags under each field show where the current value comes from.</p>
   <nav class="section-tabs" aria-label="Settings sections">
@@ -45,7 +39,6 @@
     <a href="#research">Research</a>
   </nav>
 </section>
-{% endif %}
 
 <div class="settings-stack">
   <!-- Telegram -->
@@ -58,7 +51,6 @@
       </div>
       <span class="row-count">{{ channels|length }} channel{% if channels|length != 1 %}s{% endif %}</span>
     </div>
-    {% if available %}
     <div class="table-scroll">
       <table class="tbl settings-table">
         <colgroup><col><col><col><col><col><col class="col-actions"></colgroup>
@@ -123,36 +115,6 @@
       {% if errors.identifier %}<p class="field-error">{{ errors.identifier }}</p>{% endif %}
       <button type="submit" class="btn small">Add channel</button>
     </form>
-    {% else %}
-    <div class="table-scroll">
-      <table class="tbl settings-table">
-        <colgroup><col><col><col><col><col><col class="col-actions"></colgroup>
-        <thead>
-          <tr><th>Channel</th><th>Title</th><th>Chat id</th><th>Stored data</th><th>Status</th><th class="actions-col">Action</th></tr>
-        </thead>
-        <tbody>
-          {% for c in channels %}
-          <tr>
-            <td class="channel-id">{{ c.identifier }}</td>
-            <td>{% if c.title %}{{ c.title }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
-            <td class="number-cell">{% if c.chat_id %}{{ c.chat_id }}{% else %}<span class="muted-cell">—</span>{% endif %}</td>
-            <td class="channel-data-summary"><strong>{{ c.data_summary.posts }}</strong> posts · {{ c.data_summary.comments }} comments<br><span>{{ c.data_summary.conversations }} conversations · {{ c.data_summary.drafts }} drafts</span></td>
-            <td>
-              {% if not c.active %}
-              <span class="pill"><i class="mgc mgc-pause-circle-core-regular" aria-hidden="true"></i>Deactivated</span>
-              {% elif c.chat_id %}
-              <span class="pill ok"><i class="mgc mgc-check-circle-core-regular" aria-hidden="true"></i>Collecting</span>
-              {% else %}
-              <span class="pill pending"><i class="mgc mgc-time-core-regular" aria-hidden="true"></i>Resolves on next sync</span>
-              {% endif %}
-            </td>
-            <td class="actions-col"><span class="muted-cell">—</span></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
 
     <div class="subsection-heading">
       <div>
@@ -171,7 +133,6 @@
         {% endif %}
       </p>
     </div>
-    {% if available %}
     <form method="post" action="/settings/telegram-connection" class="settings-form" autocomplete="off">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <div class="field {% if errors.api_id %}has-error{% endif %}">
@@ -209,19 +170,6 @@
         <button type="submit" class="btn small">Save connection</button>
       </div>
     </form>
-    {% else %}
-    <div class="settings-form">
-      <div class="field">
-        <div class="field-label">
-          <label class="field-name">API ID</label>
-          <p class="field-help">From my.telegram.org → API development tools.</p>
-        </div>
-        <div class="field-control">
-          <input type="text" value="{{ connection_status.api_id if connection_status.api_id else '' }}" disabled>
-        </div>
-      </div>
-    </div>
-    {% endif %}
   </section>
 
   <!-- Collection -->
@@ -234,7 +182,6 @@
         <p class="panel-note collection-archive-note"><strong>These limits control future Telegram reads; they do not delete posts already stored.</strong> Use Delete data in the Telegram section to remove a channel archive.</p>
       </div>
     </div>
-    {% if available %}
     <form method="post" action="/settings/collection" class="settings-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <div class="field {% if errors.poll_minutes %}has-error{% endif %}">
@@ -301,22 +248,6 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <input type="hidden" name="key" value="collection.backfill_limit">
     </form>
-    {% else %}
-    <div class="settings-form">
-      <div class="field">
-        <div class="field-label"><label class="field-name">Poll interval</label><p class="field-help">Minutes between syncs. 1 to 1440.</p></div>
-        <div class="field-control"><input type="number" value="{{ ws_dict['collection.poll_minutes'].value if ws_dict['collection.poll_minutes'] is defined else '15' }}" disabled><p class="field-source"><span class="source-tag">from .env</span></p></div>
-      </div>
-      <div class="field">
-        <div class="field-label"><label class="field-name">History window</label><p class="field-help">Age of posts eligible for future syncs. Existing older posts stay archived. 0 = any age.</p></div>
-        <div class="field-control"><input type="number" value="{{ ws_dict['collection.track_days'].value if ws_dict['collection.track_days'] is defined else '30' }}" disabled><p class="field-source"><span class="source-tag">from .env</span></p></div>
-      </div>
-      <div class="field">
-        <div class="field-label"><label class="field-name">Backfill limit</label><p class="field-help">Maximum Telegram messages inspected per channel per sync. This is not a stored-post cap. 0 = unlimited.</p></div>
-        <div class="field-control"><input type="number" value="{{ ws_dict['collection.backfill_limit'].value if ws_dict['collection.backfill_limit'] is defined else '200' }}" disabled><p class="field-source"><span class="source-tag">from .env</span></p></div>
-      </div>
-    </div>
-    {% endif %}
   </section>
 
   <!-- Studio -->
@@ -333,7 +264,6 @@
       <span class="pill">{{ setup_state.blockers[0].message if setup_state.blockers else 'Not ready' }}</span>
       {% endif %}
     </div>
-    {% if available %}
     <form method="post" action="/settings/studio" class="settings-form" autocomplete="off">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <div class="field {% if errors.openrouter_api_key %}has-error{% endif %}">
@@ -388,18 +318,6 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <input type="hidden" name="key" value="studio.model">
     </form>
-    {% else %}
-    <div class="settings-form">
-      <div class="field">
-        <div class="field-label"><label class="field-name">OpenRouter API key</label><p class="field-help">Server-side only; never sent to the browser.</p></div>
-        <div class="field-control"><p class="status-line"><span class="pill">Not set</span></p><input type="password" value="" disabled></div>
-      </div>
-      <div class="field">
-        <div class="field-label"><label class="field-name">Model</label><p class="field-help">OpenRouter model id.</p></div>
-        <div class="field-control"><input type="text" value="{{ ws_dict['studio.model'].value if ws_dict['studio.model'] is defined else 'nex-agi/nex-n2.5-pro:free' }}" disabled></div>
-      </div>
-    </div>
-    {% endif %}
   </section>
 
   <!-- Research -->
@@ -420,7 +338,6 @@
         <a href="/studio/api/research/health" target="_blank" rel="noopener">Check health <i class="mgc mgc-external-link-core-regular" aria-hidden="true"></i></a>
       </p>
     </div>
-    {% if available %}
     <form method="post" action="/settings/research" class="settings-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <div class="field">
@@ -470,18 +387,6 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <input type="hidden" name="key" value="research.blocked_domains">
     </form>
-    {% else %}
-    <div class="settings-form">
-      <div class="field">
-        <div class="field-label"><span class="field-name">Web research</span><p class="field-help">Lets the agent search the web and read sources for current stories.</p></div>
-        <div class="field-control"><label class="switch"><input type="checkbox" disabled><span class="switch-track"></span><span class="switch-text">Disabled</span></label><p class="field-source"><span class="source-tag">from .env</span></p></div>
-      </div>
-      <div class="field">
-        <div class="field-label"><label class="field-name">Blocked domains</label><p class="field-help">Comma separated hostnames the agent must never cite.</p></div>
-        <div class="field-control"><textarea rows="2" disabled></textarea><p class="field-source"><span class="source-tag">default</span></p></div>
-      </div>
-    </div>
-    {% endif %}
   </section>
 </div>
 {% endblock %}

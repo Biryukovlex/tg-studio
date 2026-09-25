@@ -20,6 +20,4 @@ async def test_studio_is_feature_flagged_and_exposes_setup_state(client, setting
     setup = await client.get("/studio/api/setup")
     assert setup.status_code == 200
     assert setup.json()["ready"] is False
-    assert {item["code"] for item in setup.json()["blockers"]} >= {
-        "openrouter_key_missing", "postgres_required"
-    }
+    assert {item["code"] for item in setup.json()["blockers"]} == {"openrouter_key_missing"}

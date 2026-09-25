@@ -1,9 +1,7 @@
 """Workspace-scoped PostgreSQL repository used by the collector and web app.
 
-The repository deliberately exposes the same high-level operations as the
-legacy SQLite ``Database`` class.  Its methods are asynchronous and return
-mapping-like rows, which lets the existing templates and command formatter
-continue to work while the I/O path moves to SQLAlchemy/asyncpg.
+PostgreSQL is the only TG Studio runtime.  Methods are asynchronous and
+return mapping-like rows for the templates and command formatter.
 """
 
 from __future__ import annotations
@@ -37,8 +35,6 @@ def _iso(value: datetime | None) -> str | None:
 
 class PostgresDatabase:
     """Async PostgreSQL repository with an explicit workspace boundary."""
-
-    is_postgres = True
 
     def __init__(
         self,

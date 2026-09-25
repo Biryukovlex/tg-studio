@@ -1,5 +1,5 @@
-# PostgreSQL-first local deployment. SQLite remains available only as the
-# read-only migration source or when DATABASE_URL is intentionally blank.
+# PostgreSQL-only local deployment. An old stats.db remains only a
+# read-only migration source for one more release.
 
 name: tg-studio
 

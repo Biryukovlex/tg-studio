@@ -1,13 +1,25 @@
+import uuid
 from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
 import httpx
 from fastapi import FastAPI
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import Settings
-from app.db import Database
+from app.postgres_db import PostgresDatabase
 from app.web.routes import create_app
+
+
+def _pg_url() -> str:
+    import os
+
+    url = os.environ.get("TEST_POSTGRES_URL", "")
+    if not url:
+        pytest.skip("TEST_POSTGRES_URL is required")
+    return url
 
 
 def pytest_collection_modifyitems(items):
@@ -64,7 +76,7 @@ def isolate_tests_from_operator_env(monkeypatch):
 class FakeCollector:
     """Small application boundary used by web tests; it never connects to Telegram."""
 
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: PostgresDatabase) -> None:
         self.db = db
 
     async def poll_all(self, reason: str = "test") -> dict[str, object]:
@@ -74,6 +86,7 @@ class FakeCollector:
 @pytest.fixture
 def settings(tmp_path) -> Settings:
     return Settings(
+        _env_file=None,
         api_id=1,
         api_hash="test-api-hash",
         session_string="test-session",
@@ -82,24 +95,48 @@ def settings(tmp_path) -> Settings:
         admin_username="test-admin",
         admin_password="test-password",
         session_secret="test-session-secret",
+        # PostgreSQL is the only runtime; Studio persistence needs the key.
+        telegram_session_encryption_key="Wl0-cvos82PSFL7U0PbD7SrvsEJRKq6I1Y_APkFy3iM=",
     )
 
 
-@pytest.fixture
-def app(settings: Settings) -> FastAPI:
-    db = Database(settings.db_path)
-    db.init_db()
-    channel_id = db.upsert_channel(
-        "@sample_channel", title="Sample channel", chat_id=123456
-    )
-    post_id = db.upsert_post(
+@pytest_asyncio.fixture
+async def app(settings: Settings) -> FastAPI:
+    """Web app on a per-test PostgreSQL workspace; the workspace is removed
+    afterwards (cascades to channels, posts, snapshots, and Studio rows)."""
+    url = _pg_url()
+    # Assign in place (not model_copy): tests mutate this same object after
+    # the app is built and the app must observe those changes.
+    settings.database_url = url
+    slug = f"t-{uuid.uuid4().hex[:12]}"
+    db = PostgresDatabase(url, workspace_slug=slug)
+    await db.init_db(admin_username=settings.admin_username)
+    channel_id = await db.upsert_channel("@sample_channel", "Sample channel", 123456)
+    post_id = await db.upsert_post(
         channel_id,
         message_id=42,
         posted_at=datetime(2024, 1, 2, 12, 30, tzinfo=timezone.utc),
         text="A representative collected post",
     )
-    db.add_snapshot_if_changed(post_id, views=120, comments=4, reactions=8, shares=2)
-    return create_app(FakeCollector(db), settings)
+    await db.add_snapshot_if_changed(post_id, views=120, comments=4, reactions=8, shares=2)
+    app = create_app(FakeCollector(db), settings)
+    app.state.test_channel_id = channel_id
+    try:
+        yield app
+    finally:
+        engine = create_async_engine(url)
+        try:
+            async with engine.connect() as conn:
+                workspace_id = await conn.execute(
+                    text("SELECT id FROM workspaces WHERE slug=:slug"), {"slug": slug}
+                )
+                row = workspace_id.first()
+                if row is not None:
+                    await conn.execute(text("DELETE FROM workspaces WHERE id=:id"), {"id": row[0]})
+                    await conn.commit()
+        finally:
+            await engine.dispose()
+        await db.close()
 
 
 @pytest_asyncio.fixture
@@ -109,3 +146,9 @@ async def client(app: FastAPI):
         transport=transport, base_url="http://testserver"
     ) as test_client:
         yield test_client
+
+
+@pytest_asyncio.fixture
+async def channel_id(app: FastAPI) -> int:
+    """Database id of the seeded @sample_channel (PG ids are not 1)."""
+    return int(app.state.test_channel_id)

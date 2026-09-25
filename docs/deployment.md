@@ -1,9 +1,9 @@
 # Deployment and release runbook
 
 This runbook describes the M7 community deployment and the process topology
-used by a future hosted installation. PostgreSQL is the runtime database of
-record. The SQLite file is a read-only migration source or a rollback archive;
-the application never dual-writes both stores.
+used by a future hosted installation. PostgreSQL is the only runtime
+database. An old `stats.db` file is a read-only import source for one more
+release.
 
 ## Prerequisites
 
@@ -169,7 +169,7 @@ cp -p data/stats.db "backups/stats-sqlite-$(date -u +%Y%m%dT%H%M%SZ).db"
 docker compose up -d
 ```
 
-## SQLite import and rollback rehearsal
+## SQLite import rehearsal
 
 Inventory the source first. The report contains counts, ranges, and one-way
 hashes, never message/comment bodies:
@@ -197,10 +197,8 @@ DATABASE_URL="$HOST_DATABASE_URL" .venv/bin/python -m alembic upgrade head
 Proceed only when the JSON result says `all_match: true`, `source_read_only:
 true`, and `source_untouched: true`. Keep the original SQLite file unchanged
 until the PostgreSQL dashboard, comments, exports, commands, and Studio have
-been verified. If the cutover fails before PostgreSQL becomes authoritative,
-stop the new process and return to the untouched SQLite archive. After the
-cutover, rollback is a PostgreSQL restore plus the previous image; do not
-merge divergent SQLite and PostgreSQL writes.
+been verified. After the cutover, recovery is a PostgreSQL restore plus the
+previous image.
 
 After importing, restore complete Telegram bodies and rich formatting:
 

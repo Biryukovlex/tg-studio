@@ -18,9 +18,9 @@ async def _login(client, settings) -> None:
 
 
 @pytest.mark.asyncio
-async def test_complete_tool_result_is_private_and_visible_in_owner_logs(client, app, settings):
+async def test_complete_tool_result_is_private_and_visible_in_owner_logs(client, app, settings, channel_id):
     repository = app.state.studio_repository
-    conversation = await repository.create_conversation(channel_id=1, title="Private research")
+    conversation = await repository.create_conversation(channel_id=channel_id, title="Private research")
     message = await repository.append_message(
         conversation_id=conversation["id"],
         role="user",

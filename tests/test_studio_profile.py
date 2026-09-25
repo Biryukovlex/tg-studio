@@ -107,7 +107,7 @@ async def test_profile_change_api_requires_csrf_and_confirmation(client, setting
 
 
 @pytest.mark.asyncio
-async def test_openrouter_consent_is_explicit_and_precedes_agent_use(client, settings, app):
+async def test_openrouter_consent_is_explicit_and_precedes_agent_use(client, settings, app, channel_id):
     settings.studio_test_mode = False
     settings.openrouter_api_key = "router-test-key"
     settings.telegram_session_encryption_key = "a" * 48
@@ -138,7 +138,7 @@ async def test_openrouter_consent_is_explicit_and_precedes_agent_use(client, set
     assert revoked.status_code == 200
     assert revoked.json()["consent"]["granted"] is False
     import uuid
-    conversation = await client.post("/studio/api/conversations", json={"channel_id": 1}, headers={"x-csrf-token": token})
+    conversation = await client.post("/studio/api/conversations", json={"channel_id": channel_id}, headers={"x-csrf-token": token})
     assert conversation.status_code == 200
     blocked = await client.post(
         "/studio/api/agent",
