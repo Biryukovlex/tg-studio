@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from sqlalchemy import text
 
 from app.config import Settings
 from app.postgres_db import PostgresDatabase

@@ -3,22 +3,12 @@ from __future__ import annotations
 
 import inspect
 
-import httpx
 import pytest
 
 from app.config import Settings
-from app.db import Database
 from app.main import login_rate_limit_warning
 from app.postgres_db import PostgresDatabase
-from app.web.routes import create_app, reset_login_rate_limiter
-
-
-class FakeCollector:
-    def __init__(self, db: Database) -> None:
-        self.db = db
-
-    async def poll_all(self, reason: str = "test") -> dict[str, object]:
-        return {"reason": reason}
+from app.web.routes import reset_login_rate_limiter
 
 
 @pytest.fixture(autouse=True)
@@ -43,28 +33,20 @@ def _settings(tmp_path, **overrides) -> Settings:
     return Settings(**base)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_failed_logins_for_one_user_do_not_block_another(tmp_path):
-    app = create_app(FakeCollector(_db(tmp_path)), _settings(tmp_path))
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
-        for _ in range(5):
-            resp = await client.post("/login", data={"username": "a", "password": "wrong"}, follow_redirects=False)
-            assert resp.status_code == 401
-        # The owner logs in from the same address while user `a` is throttled.
-        ok = await client.post("/login", data={"username": "owner", "password": "correct"}, follow_redirects=False)
-        assert ok.status_code == 303
+async def test_failed_logins_for_one_user_do_not_block_another(client, settings):
+    for _ in range(5):
+        resp = await client.post("/login", data={"username": "a", "password": "wrong"}, follow_redirects=False)
+        assert resp.status_code == 401
+    # The owner logs in from the same address while user `a` is throttled.
+    ok = await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password}, follow_redirects=False)
+    assert ok.status_code == 303
 
-        sixth = await client.post("/login", data={"username": "a", "password": "wrong"}, follow_redirects=False)
-        assert sixth.status_code == 429
-        retry_after = int(sixth.headers["Retry-After"])
-        assert 0 < retry_after <= 300
-
-
-def _db(tmp_path) -> Database:
-    db = Database(tmp_path / "t35.sqlite")
-    db.init_db()
-    db.upsert_channel("@sample_channel", title="Sample channel", chat_id=123456)
-    return db
+    sixth = await client.post("/login", data={"username": "a", "password": "wrong"}, follow_redirects=False)
+    assert sixth.status_code == 429
+    retry_after = int(sixth.headers["Retry-After"])
+    assert 0 < retry_after <= 300
 
 
 def test_collection_lease_defaults_to_three_minutes():

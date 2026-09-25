@@ -24,7 +24,6 @@ async def test_settings_and_tool_log_migrations_upgrade_and_downgrade():
     # subprocess: its fileConfig logging would otherwise disable the "studio"
     # logger for the rest of the pytest session.
     import subprocess
-    import sys
     from pathlib import Path
 
     from sqlalchemy import text

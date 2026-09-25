@@ -19,6 +19,28 @@ def _url() -> str:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_retired_post_stays_accessible_with_deleted_badge(app, client, settings, channel_id):
+    db = app.state.db
+    post_id = await db.upsert_post(
+        channel_id, 43, datetime.now(timezone.utc), "A post removed later in Telegram"
+    )
+    await db.add_snapshot_if_changed(post_id, 5, 0, 0, 0)
+    await db.mark_unseen_posts_deleted(channel_id, [42], min_message_id=42)
+
+    login = await client.post(
+        "/login",
+        data={"username": settings.admin_username, "password": settings.admin_password},
+    )
+    assert login.status_code == 303
+    detail = await client.get(f"/post/{post_id}")
+    assert detail.status_code == 200
+    assert "Deleted in Telegram" in detail.text
+    assert "A post removed later in Telegram" in detail.text
+    assert (await db.kpis(channel_id))["posts"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_postgres_tombstone_bounds_filters_and_undelete():
     base = _url()
     slug = f"t33-{uuid.uuid4().hex[:8]}"

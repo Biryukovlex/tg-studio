@@ -78,7 +78,7 @@ function renderInlineMarkdown(line: string, key: number) {
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   // Combined regex for bold, italic, strike, code, link
-  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|`[^`]+`|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|\[([^\]]+)\]\([^)]+\)|> .+)/g;
+  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|`[^`]+`|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|\[([^\]]+)\]\([^)]+\))/g;
   let match: RegExpExecArray | null;
   let idx = 0;
   while ((match = pattern.exec(text)) !== null) {
@@ -107,8 +107,6 @@ function renderInlineMarkdown(line: string, key: number) {
       parts.push(<span key={`l-${key}-${idx++}`}>{match[4]}</span>);
     } else if (token.startsWith("*") && !token.startsWith("**")) {
       parts.push(<em key={`i-${key}-${idx++}`}>{token.slice(1, -1)}</em>);
-    } else if (token.startsWith("> ")) {
-      parts.push(<blockquote key={`q-${key}-${idx++}`}><span>{token.slice(2)}</span></blockquote>);
     } else {
       parts.push(<span key={`u-${key}-${idx++}`}>{token}</span>);
     }
@@ -122,17 +120,14 @@ function renderInlineMarkdown(line: string, key: number) {
 }
 
 export function PreviewMarkdown({ text }: { text: string }) {
-  if (!text.trim()) return <p />;
+  if (!text.trim()) return <div />;
   const lines = text.split("\n");
   return (
-    <p>
-      {lines.map((line, i) => (
-        <span key={i}>
-          {renderInlineMarkdown(line, i)}
-          {i < lines.length - 1 && <br />}
-        </span>
-      ))}
-    </p>
+    <div>
+      {lines.map((line, i) => line.trimStart().startsWith("> ")
+        ? <blockquote key={i}>{renderInlineMarkdown(line.trimStart().slice(2), i)}</blockquote>
+        : <p key={i}>{renderInlineMarkdown(line, i)}</p>)}
+    </div>
   );
 }
 

@@ -39,11 +39,12 @@ async def test_postgres_repository_smoke():
     from datetime import datetime, timezone
     from app.postgres_db import PostgresDatabase
 
-    db = PostgresDatabase(database_url)
+    slug = f"m1-smoke-{uuid.uuid4().hex[:8]}"
+    db = PostgresDatabase(database_url, workspace_slug=slug)
     try:
         await db.init_db(admin_username="m1-test-admin")
         context = await db.workspace_context(username="m1-test-admin")
-        assert context["workspace_slug"] == "community" and context["role"] == "owner"
+        assert context["workspace_slug"] == slug and context["role"] == "owner"
         from app.session_crypto import SessionCipher
         cipher = SessionCipher(Fernet.generate_key().decode("ascii"))
         await db.persist_telegram_session(

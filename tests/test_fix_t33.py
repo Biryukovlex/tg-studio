@@ -1,16 +1,14 @@
-"""T33 collector-deleted-posts acceptance tests (SQLite + fake Telethon client)."""
+"""T33 collector retirement guards with a fake asynchronous repository."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-import httpx
 import pytest
 
 from app.collector import Collector
 from app.config import Settings
-from app.db import Database
-from app.web.routes import create_app
+from tests.test_fix_t09 import FakeDB
 
 
 class FakeMsg:
@@ -27,8 +25,6 @@ class FakeMsg:
 
 
 class FakeClient:
-    """Yield messages newest-first and honour the collector's message cap."""
-
     def __init__(self, messages: list[FakeMsg]):
         self._messages = list(messages)
 
@@ -46,133 +42,65 @@ class FakeClient:
 
 
 def _settings(**overrides) -> Settings:
-    base = dict(
-        _env_file=None,
-        api_id=1,
-        api_hash="hash",
-        session_string="session",
-        channels="@t33",
-        admin_username="admin",
-        admin_password="pw",
-        session_secret="secret",
-        track_days=0,
-        backfill_limit=0,
-        poll_minutes=15,
+    values = dict(
+        _env_file=None, api_id=1, api_hash="hash", session_string="session",
+        channels="@t33", admin_password="pw", track_days=0,
+        backfill_limit=0, poll_minutes=15,
     )
-    base.update(overrides)
-    return Settings(**base)
+    values.update(overrides)
+    return Settings(**values)
 
 
-def _seed(db: Database, channel_id: int, now: datetime) -> dict[int, int]:
-    ids = {}
+async def _seed(db: FakeDB, now: datetime) -> None:
     for mid in (1, 2, 3):
-        post_id = db.upsert_post(channel_id, mid, now, f"post {mid}")
-        db.add_snapshot_if_changed(post_id, views=mid * 10, comments=0, reactions=0, shares=0)
-        ids[mid] = post_id
-    return ids
+        await db.upsert_post(1, mid, now, f"post {mid}")
 
 
 @pytest.mark.asyncio
-async def test_deleted_post_retired_hidden_and_badged(tmp_path):
-    db = Database(tmp_path / "t33.sqlite")
-    db.init_db()
-    channel_id = db.upsert_channel("@t33", "T33")
+async def test_collector_retires_missing_post_and_restores_reseen_post():
+    db = FakeDB()
     now = datetime.now(timezone.utc)
-    ids = _seed(db, channel_id, now)
-
-    collector = Collector(FakeClient([FakeMsg(1, now), FakeMsg(3, now)]), db, _settings())
-    seen, *_ = await collector.poll_channel({"id": channel_id, "identifier": "@t33"})
+    await _seed(db, now)
+    collector = Collector(FakeClient([FakeMsg(3, now), FakeMsg(1, now)]), db, _settings())
+    seen, *_ = await collector.poll_channel({"id": 1, "identifier": "@t33"})
     assert seen == 2
+    assert [row["message_id"] for row in db.posts.values() if row["is_deleted"]] == [2]
 
-    with db.conn() as conn:
-        flag = conn.execute("SELECT is_deleted FROM posts WHERE id=?", (ids[2],)).fetchone()
-        assert flag["is_deleted"] == 1
-
-    assert db.kpis()["posts"] == 2
-    assert db.kpis()["views"] == 40
-    assert sorted(r["message_id"] for r in db.latest_stats()) == [1, 3]
-    assert len(db.all_comments()) == 0
-    series = db.timeseries_totals(days=None)
-    assert series["views"][-1] == 40
-    assert series["posts_per_day"][-1] == 2
-
-    settings = _settings(data_dir=str(tmp_path))
-    app = create_app(SimpleNamespace(db=db, client=object()), settings)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
-        assert login.status_code == 303
-        deleted = await client.get(f"/post/{ids[2]}")
-        assert deleted.status_code == 200
-        assert "Deleted in Telegram" in deleted.text
-        live = await client.get(f"/post/{ids[1]}")
-        assert live.status_code == 200
-        assert "Deleted in Telegram" not in live.text
+    collector.client = FakeClient([FakeMsg(3, now), FakeMsg(2, now), FakeMsg(1, now)])
+    await collector.poll_channel({"id": 1, "identifier": "@t33"})
+    assert all(not row["is_deleted"] for row in db.posts.values())
 
 
 @pytest.mark.asyncio
-async def test_reseen_post_clears_deleted_flag(tmp_path):
-    db = Database(tmp_path / "t33.sqlite")
-    db.init_db()
-    channel_id = db.upsert_channel("@t33", "T33")
+async def test_capped_scan_does_not_retire_unreached_old_posts():
+    db = FakeDB()
     now = datetime.now(timezone.utc)
-    _seed(db, channel_id, now)
-
-    collector = Collector(FakeClient([FakeMsg(1, now), FakeMsg(3, now)]), db, _settings())
-    await collector.poll_channel({"id": channel_id, "identifier": "@t33"})
-    assert db.kpis()["posts"] == 2
-
-    collector.client = FakeClient([FakeMsg(1, now), FakeMsg(2, now), FakeMsg(3, now)])
-    await collector.poll_channel({"id": channel_id, "identifier": "@t33"})
-    with db.conn() as conn:
-        flags = [r["is_deleted"] for r in conn.execute("SELECT is_deleted FROM posts").fetchall()]
-        assert flags == [0, 0, 0]
-    assert db.kpis()["posts"] == 3
-
-
-@pytest.mark.asyncio
-async def test_capped_scan_does_not_retire_unreached_old_post(tmp_path):
-    db = Database(tmp_path / "t33.sqlite")
-    db.init_db()
-    channel_id = db.upsert_channel("@t33", "T33")
-    now = datetime.now(timezone.utc)
-    _seed(db, channel_id, now)
-
-    settings = _settings(backfill_limit=1)
+    await _seed(db, now)
     collector = Collector(
         FakeClient([FakeMsg(3, now), FakeMsg(2, now), FakeMsg(1, now)]),
-        db,
-        settings,
+        db, _settings(backfill_limit=1),
     )
-    seen, *_ = await collector.poll_channel({"id": channel_id, "identifier": "@t33"})
+    seen, *_ = await collector.poll_channel({"id": 1, "identifier": "@t33"})
     assert seen == 1
-    with db.conn() as conn:
-        flags = [r["is_deleted"] for r in conn.execute("SELECT is_deleted FROM posts ORDER BY message_id").fetchall()]
-        assert flags == [0, 0, 0]
-    assert db.kpis()["posts"] == 3
+    assert all(not row["is_deleted"] for row in db.posts.values())
 
 
 @pytest.mark.asyncio
-async def test_aborted_and_empty_scans_skip_retirement(tmp_path):
-    db = Database(tmp_path / "t33.sqlite")
-    db.init_db()
-    channel_id = db.upsert_channel("@t33", "T33")
+async def test_aborted_and_empty_scans_skip_retirement():
+    db = FakeDB()
     now = datetime.now(timezone.utc)
-    _seed(db, channel_id, now)
-
+    await _seed(db, now)
+    channel = {"id": 1, "identifier": "@t33"}
     collector = Collector(FakeClient([]), db, _settings())
-    seen, *_ = await collector.poll_channel({"id": channel_id, "identifier": "@t33"})
+    seen, *_ = await collector.poll_channel(channel)
     assert seen == 0
-    with db.conn() as conn:
-        flags = [r["is_deleted"] for r in conn.execute("SELECT is_deleted FROM posts").fetchall()]
-        assert flags == [0, 0, 0]
+    assert all(not row["is_deleted"] for row in db.posts.values())
 
-    class _BoomClient(FakeClient):
+    class BoomClient(FakeClient):
         def iter_messages(self, entity, limit=None):
             raise RuntimeError("boom")
 
-    collector = Collector(_BoomClient([]), db, _settings())
+    collector.client = BoomClient([])
     with pytest.raises(RuntimeError):
-        await collector.poll_channel({"id": channel_id, "identifier": "@t33"})
-    with db.conn() as conn:
-        flags = [r["is_deleted"] for r in conn.execute("SELECT is_deleted FROM posts").fetchall()]
-        assert flags == [0, 0, 0]
+        await collector.poll_channel(channel)
+    assert all(not row["is_deleted"] for row in db.posts.values())

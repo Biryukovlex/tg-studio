@@ -209,8 +209,6 @@ def test_studio_always_on_and_sidebar_and_env_clean():
         pytest.skip("TEST_POSTGRES_URL is required")
 
     with tempfile.TemporaryDirectory() as tmp:
-        from pathlib import Path
-
         settings = Settings(
             _env_file=None,
             studio_test_mode=True,

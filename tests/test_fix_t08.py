@@ -237,8 +237,6 @@ def test_diagnostic_read_only_does_not_init(tmp_path):
 
 
 def test_main_exits_without_database_url(monkeypatch):
-    from app.config import Settings
-
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("API_ID", "1")
     monkeypatch.setenv("API_HASH", "hash")

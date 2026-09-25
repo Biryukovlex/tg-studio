@@ -5,16 +5,13 @@ import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-import httpx
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
 from app.config import Settings
-from app.db import Database
 from app.studio.analytics import analyze_posts
 from app.studio.profile import _build_draft_from_analytics, _is_template_line
 from app.studio.service import _safe_event_payload
-from app.web.routes import create_app
 
 
 def _settings(tmp_path, **overrides) -> Settings:
@@ -48,12 +45,10 @@ def _rows(n: int):
     return rows
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_profile_build_maps_provider_error_to_safe_code(tmp_path):
-    settings = _settings(tmp_path)
-    db = Database(tmp_path / "t34.sqlite")
-    db.init_db()
-    app = create_app(SimpleNamespace(db=db, client=object()), settings)
+async def test_profile_build_maps_provider_error_to_safe_code(app, client, settings, channel_id):
+    settings.studio_test_mode = True
     service = app.state.studio_service
 
     async def _rows5(channel_id: int, limit: int = 2000):
@@ -71,23 +66,22 @@ async def test_profile_build_maps_provider_error_to_safe_code(tmp_path):
     service.repository.performance_rows = _rows5  # type: ignore[method-assign]
     service.build_profile_draft = _boom  # type: ignore[method-assign]
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        login = await client.post("/login", data={"username": "admin", "password": "pw"})
-        assert login.status_code == 303
-        home = await client.get("/studio")
-        import re
+    login = await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password})
+    assert login.status_code == 303
+    home = await client.get("/studio")
+    import re
 
-        token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
-        response = await client.post(
-            "/studio/api/profile/build",
-            json={"channel_id": 1},
-            headers={"x-csrf-token": token, "content-type": "application/json"},
-        )
-        assert response.status_code == 502, response.text
-        error = response.json()["error"]
-        assert error["code"] == "provider_payment_required"
-        assert "http" not in error["message"].lower()
-        assert "https://private.example" not in response.text
+    token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
+    response = await client.post(
+        "/studio/api/profile/build",
+        json={"channel_id": channel_id},
+        headers={"x-csrf-token": token, "content-type": "application/json"},
+    )
+    assert response.status_code == 502, response.text
+    error = response.json()["error"]
+    assert error["code"] == "provider_payment_required"
+    assert "http" not in error["message"].lower()
+    assert "https://private.example" not in response.text
 
 
 def test_heuristic_topics_are_deduplicated():

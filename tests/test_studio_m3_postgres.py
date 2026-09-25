@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import uuid
 
 import pytest
 from tests.helpers.postgres import pg_url
@@ -17,7 +18,7 @@ async def test_postgres_m3_profile_context_and_consent_are_workspace_scoped():
     database_url = pg_url("M3_POSTGRES_URL")
     if not database_url:
         pytest.skip("set TEST_POSTGRES_URL (or M3_POSTGRES_URL) to run the M3 PostgreSQL proof")
-    db = PostgresDatabase(database_url)
+    db = PostgresDatabase(database_url, workspace_slug=f"m3-{uuid.uuid4().hex[:8]}")
     try:
         await db.init_db(admin_username="m3-integration-admin")
         channel_id = await db.upsert_channel("@m3-integration", "M3 Integration", 4004)
