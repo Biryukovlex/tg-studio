@@ -24,7 +24,7 @@ from .schemas import ConversationCreate, DraftPatchRequest, ProviderConsentReque
 from .service import StudioService
 from .setup import build_setup_state
 from .search_health import check_search_health
-from .observability import duration_ms, normalize_usage, safe_error_for_code
+from .observability import duration_ms, normalize_usage, safe_error, safe_error_for_code
 from .run_ids import resolve_run_id
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "web" / "templates"))
@@ -603,12 +603,8 @@ def build_router() -> APIRouter:
             if "too few" in str(exc).lower():
                 return _safe_error("too_few_posts", str(exc), status_code=409)
             log.exception("Channel profile build failed for channel_id=%s", payload.channel_id)
-            return _safe_error(
-                "profile_build_failed",
-                "Profile build failed before a draft could be created. Your previous profile is unchanged. Retry shortly.",
-                status_code=502,
-                retryable=True,
-            )
+            code, message, retryable = safe_error(exc)
+            return _safe_error(code, message, status_code=502, retryable=retryable)
         return {"draft": result}
 
     @router.get("/api/conversations")

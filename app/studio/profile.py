@@ -447,7 +447,6 @@ def _is_template_line(line: str) -> bool:
     low = line.strip().lower()
     return bool(
         re.search(r"^(start|begin|open) with", low)
-        or re.search(r"\bthen\b", low)
         or re.search(r"^(end|close|finish) with", low)
         or "always use the format" in low
         or re.match(r"^\d+\.\s", line.strip())
@@ -466,12 +465,18 @@ def _sanitize_line(line: str, *, limit: int) -> str:
 
 def _build_draft_from_analytics(analytics: ChannelAnalytics, rows: list[dict[str, Any]]) -> ProfileDraft:
     # Deterministic build for test mode – every line is a rule/tendency, never a layout.
-    # Topics: derive from top tokens; ensure 5-8 when evidence >=5
+    # Topics: derive from top tokens; ensure 5-8 when evidence >=5.
+    # The same token can top several posts, so de-duplicate case-insensitively
+    # and skip stubs that carry no meaning.
     topics: list[str] = []
+    seen_topics: set[str] = set()
     for post in analytics.top_posts[:8]:
         tokens = [t for t in _tokens([post]) if t not in _STOPWORDS]
         if tokens:
             cand = tokens[0].title()
+            if len(tokens[0]) < 3 or cand.lower() in seen_topics:
+                continue
+            seen_topics.add(cand.lower())
             topics.append(f"{cand} — appears in successful posts")
     if not topics and analytics.evidence_posts:
         topics = ["General editorial — appears in posts"]

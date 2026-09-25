@@ -240,9 +240,14 @@ def _safe_event_payload(event: Any) -> dict[str, Any]:
                 if not isinstance(nested, dict):
                     continue
                 for key in ("analysis_id", "story_cluster_id", "draft_id", "id"):
-                    if key not in nested or isinstance(nested[key], (dict, list)):
+                    if key not in nested or nested[key] is None or isinstance(nested[key], (dict, list)):
                         continue
-                    mapped = "story_cluster_id" if nested_key == "proposal" and key == "id" else key
+                    if nested_key == "proposal" and key == "id":
+                        mapped = "story_cluster_id"
+                    elif nested_key == "draft" and key == "id":
+                        mapped = "draft_id"
+                    else:
+                        mapped = key
                     payload.setdefault(mapped, str(nested[key])[:160])
     return payload
 
