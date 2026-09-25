@@ -261,6 +261,9 @@ class Collector:
         seen_message_ids: list[int] = []
         last_renew = time.monotonic()
         assert self.client is not None, "Telegram client is required to poll channels"
+        # Note: an exception escaping the loop below (e.g. FloodWaitError)
+        # skips the retirement step by construction, and an empty scan is
+        # skipped by the seen_message_ids guard.
         async for msg in self.client.iter_messages(entity, limit=limit):
             if msg.action is not None:
                 continue
@@ -320,9 +323,23 @@ class Collector:
                     continue
         if is_full_scan:
             self._last_full_scan[ch["id"]] = datetime.now(timezone.utc)
+        if seen_message_ids:
+            # Reconcile deletions within the proven scan window only: posts at
+            # or after the cutoff date and at or above the smallest seen
+            # message id.  A capped read therefore never retires an older
+            # archived post it could not have reached.
             retire = getattr(self.db, "mark_unseen_posts_deleted", None)
             if retire is not None:
                 try:
+                    await maybe_await(
+                        retire(
+                            ch["id"],
+                            seen_message_ids,
+                            since=cutoff,
+                            min_message_id=min(seen_message_ids),
+                        )
+                    )
+                except TypeError:
                     await maybe_await(retire(ch["id"], seen_message_ids))
                 except Exception:
                     log.warning("post retirement failed for channel %s", ch["identifier"])

@@ -67,14 +67,22 @@ class FakeDB:
     async def has_comments(self, post_id):
         return False
 
-    async def mark_unseen_posts_deleted(self, channel_id, seen_message_ids):
+    async def mark_unseen_posts_deleted(self, channel_id, seen_message_ids, since=None, min_message_id=None):
         seen = set(seen_message_ids or [])
         retired = 0
         for row in self.posts.values():
-            if row["message_id"] not in seen and not row["is_deleted"]:
-                row["is_deleted"] = True
-                row["deleted_at"] = datetime.now(timezone.utc)
-                retired += 1
+            if row["message_id"] in seen:
+                if row["is_deleted"]:
+                    row["is_deleted"] = False
+                    row["deleted_at"] = None
+                continue
+            if row["is_deleted"]:
+                continue
+            if min_message_id is not None and row["message_id"] < min_message_id:
+                continue
+            row["is_deleted"] = True
+            row["deleted_at"] = datetime.now(timezone.utc)
+            retired += 1
         return retired
 
     async def latest_stats(self, channel_id=None, **kwargs):
@@ -125,15 +133,18 @@ async def test_deleted_post_retired_and_hidden_from_latest_stats():
 async def test_capped_whole_history_scan_does_not_retire_older_posts():
     db = FakeDB()
     now = datetime.now(timezone.utc)
-    db.posts[1] = {"message_id": 1, "is_deleted": False, "deleted_at": None}
-    db.posts[2] = {"message_id": 2, "is_deleted": False, "deleted_at": None}
+    # The archived post below the scan window has a smaller message id than
+    # anything the capped scan could reach (T33 bounds retire only
+    # message_id >= min(seen)).
+    db.posts[1] = {"message_id": 0, "is_deleted": False, "deleted_at": None}
+    db.posts[2] = {"message_id": 1, "is_deleted": False, "deleted_at": None}
     db._next_post_id = 3
     settings = _collector_settings().model_copy(update={"backfill_limit": 1})
     collector = Collector(FakeClient([FakeMsg(1, now)]), db, settings)
 
     await collector.poll_channel({"id": 1, "identifier": "@a"})
 
-    assert not db.posts[2]["is_deleted"]
+    assert not db.posts[1]["is_deleted"]
     assert 1 not in collector._last_full_scan
 
 

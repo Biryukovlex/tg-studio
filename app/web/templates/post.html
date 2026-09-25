@@ -21,6 +21,7 @@
 <section class="detail-summary" data-reveal>
   <div>
     <div class="detail-post-body" role="article">{% if row.formatted_html %}{{ row.formatted_html|safe }}{% else %}(media post){% endif %}</div>
+    {% if row.is_deleted %}<p><span class="deleted-label">Deleted in Telegram</span></p>{% endif %}
     <p class="detail-meta">
       Posted {{ row.posted_at|dt }} UTC
       {% if row.link != '#' %} · <a href="{{ row.link }}" target="_blank" rel="noopener">View source</a>{% endif %}

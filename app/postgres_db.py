@@ -533,23 +533,46 @@ class PostgresDatabase:
         assert row is not None
         return int(row[0])
 
-    async def mark_unseen_posts_deleted(self, channel_id: int, seen_message_ids: list[int] | set[int]) -> int:
-        """Retire posts absent from a successful full-history scan."""
+    async def mark_unseen_posts_deleted(
+        self,
+        channel_id: int,
+        seen_message_ids: list[int] | set[int],
+        since: datetime | None = None,
+        min_message_id: int | None = None,
+    ) -> int:
+        """Retire posts absent from a successful scan, bounded by the scan window.
+
+        Only posts inside the proven window are retired: ``posted_at >= since``
+        when a cutoff is given and ``message_id >= min_message_id`` when the
+        scan may have stopped early at a message cap.  Posts seen in this scan
+        have any stale deleted flag cleared (the per-post upsert already does
+        this; the explicit update keeps repositories without that behaviour
+        consistent).
+        """
         seen = list(seen_message_ids or [])
-        if seen:
-            result = await self._execute(
-                """UPDATE posts SET is_deleted=true, deleted_at=now()
-                    WHERE workspace_id=:workspace_id AND channel_id=:channel_id
-                      AND is_deleted=false AND NOT (message_id = ANY(:seen))""",
-                {"channel_id": channel_id, "seen": seen},
-            )
-        else:
-            result = await self._execute(
-                """UPDATE posts SET is_deleted=true, deleted_at=now()
-                    WHERE workspace_id=:workspace_id AND channel_id=:channel_id
-                      AND is_deleted=false""",
-                {"channel_id": channel_id},
-            )
+        await self._execute(
+            """UPDATE posts SET is_deleted=false, deleted_at=NULL
+                WHERE workspace_id=:workspace_id AND channel_id=:channel_id
+                  AND is_deleted=true AND message_id = ANY(:seen)""",
+            {"channel_id": channel_id, "seen": seen},
+        )
+        clauses = [
+            "workspace_id=:workspace_id",
+            "channel_id=:channel_id",
+            "is_deleted=false",
+            "NOT (message_id = ANY(:seen))",
+        ]
+        params: dict[str, Any] = {"channel_id": channel_id, "seen": seen}
+        if since is not None:
+            clauses.append("posted_at >= :since")
+            params["since"] = _aware(since)
+        if min_message_id is not None:
+            clauses.append("message_id >= :min_message_id")
+            params["min_message_id"] = int(min_message_id)
+        result = await self._execute(
+            "UPDATE posts SET is_deleted=true, deleted_at=now() WHERE " + " AND ".join(clauses),
+            params,
+        )
         return int(result.rowcount or 0)
 
     async def last_snapshot(self, post_id: int) -> dict[str, Any] | None:
@@ -697,10 +720,11 @@ class PostgresDatabase:
                       ch.identifier AS channel_identifier
                FROM comments cm JOIN posts p ON p.id=cm.post_id AND p.workspace_id=cm.workspace_id
                JOIN channels ch ON ch.id=p.channel_id AND ch.workspace_id=p.workspace_id
-               WHERE cm.workspace_id=:workspace_id
-                 AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
-                 AND (CAST(:channel_id AS bigint) IS NOT NULL OR ch.active=true)
-               ORDER BY cm.posted_at DESC, cm.id DESC""",
+                WHERE cm.workspace_id=:workspace_id
+                  AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
+                  AND (CAST(:channel_id AS bigint) IS NOT NULL OR ch.active=true)
+                  AND cm.is_deleted=false AND p.is_deleted=false
+                ORDER BY cm.posted_at DESC, cm.id DESC""",
             {"channel_id": channel_id},
         )
         return [dict(row) for row in result.mappings().all()]

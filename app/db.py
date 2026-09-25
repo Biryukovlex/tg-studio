@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS posts (
     posted_at   TEXT NOT NULL,
     text        TEXT NOT NULL DEFAULT '',
     formatting_entities TEXT NOT NULL DEFAULT '[]',
+    is_deleted  INTEGER NOT NULL DEFAULT 0,
     UNIQUE (channel_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_posts_channel_date ON posts(channel_id, posted_at);
@@ -128,6 +129,10 @@ class Database:
                 c.execute(
                     "ALTER TABLE posts ADD COLUMN formatting_entities TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "is_deleted" not in columns:
+                c.execute(
+                    "ALTER TABLE posts ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"
+                )
 
     # ---------- channels ----------
 
@@ -170,7 +175,8 @@ class Database:
                    ON CONFLICT(channel_id, message_id) DO UPDATE SET
                        posted_at=excluded.posted_at,
                        text=excluded.text,
-                       formatting_entities=excluded.formatting_entities""",
+                       formatting_entities=excluded.formatting_entities,
+                       is_deleted=0""",
                 # Keep the complete Telegram body.  Older releases wrote only
                 # the first 500 characters; the history restoration command
                 # re-fetches those rows after this cap is removed.
@@ -300,6 +306,42 @@ class Database:
             )
             return int(cur.rowcount)
 
+    def mark_unseen_posts_deleted(
+        self,
+        channel_id: int,
+        seen_message_ids: list[int] | set[int] | None = None,
+        since: datetime | None = None,
+        min_message_id: int | None = None,
+    ) -> int:
+        """Retire posts absent from a successful scan, bounded by the scan window.
+
+        Only posts inside the proven window are retired: ``posted_at >= since``
+        when a cutoff is given and ``message_id >= min_message_id`` when the
+        scan may have stopped early at a message cap.  Seen posts have any
+        stale deleted flag cleared.
+        """
+        seen = list(seen_message_ids or [])
+        clauses = ["channel_id=?", "is_deleted=0", "message_id NOT IN (%s)" % ",".join("?" * len(seen)) if seen else "1=1"]
+        params: list[Any] = [channel_id, *seen]
+        if since is not None:
+            clauses.append("posted_at>=?")
+            params.append(fmt_ts(since))
+        if min_message_id is not None:
+            clauses.append("message_id>=?")
+            params.append(int(min_message_id))
+        with self.conn() as c:
+            if seen:
+                c.execute(
+                    "UPDATE posts SET is_deleted=0 WHERE channel_id=? AND is_deleted<>0 AND message_id IN (%s)"
+                    % ",".join("?" * len(seen)),
+                    (channel_id, *seen),
+                )
+            cur = c.execute(
+                "UPDATE posts SET is_deleted=1 WHERE " + " AND ".join(clauses),
+                tuple(params),
+            )
+            return int(cur.rowcount)
+
     def has_comments(self, post_id: int) -> bool:
         with self.conn() as c:
             row = c.execute(
@@ -326,6 +368,7 @@ class Database:
                     JOIN channels ch ON ch.id=p.channel_id
                     WHERE (? IS NULL OR p.channel_id=?)
                       AND (? IS NOT NULL OR ch.active=1)
+                      AND cm.is_deleted=0 AND p.is_deleted=0
                     ORDER BY cm.posted_at DESC, cm.id DESC""",
                 (channel_id, channel_id, channel_id),
             ).fetchall()
@@ -341,7 +384,8 @@ class Database:
     }
 
     def latest_stats(
-        self, channel_id: int | None = None, limit: int = 500, order: str = "date", offset: int = 0
+        self, channel_id: int | None = None, limit: int = 500, order: str = "date", offset: int = 0,
+        include_deleted: bool = False,
     ) -> list[sqlite3.Row]:
         sql = _LATEST_CTE + f"""
         SELECT p.id, p.message_id, p.posted_at, p.text, p.channel_id,
@@ -359,16 +403,17 @@ class Database:
         LEFT JOIN firstsnap f ON f.post_id = p.id
         WHERE (? IS NULL OR p.channel_id = ?)
           AND (? IS NOT NULL OR c.active=1)
+          AND (? OR p.is_deleted=0)
         ORDER BY {self._ORDER_SQL.get(order, 'p.posted_at DESC')}
         LIMIT ? OFFSET ?
         """
         with self.conn() as c:
             return c.execute(
                 sql,
-                (channel_id, channel_id, channel_id, limit, max(0, int(offset))),
+                (channel_id, channel_id, channel_id, int(bool(include_deleted)), limit, max(0, int(offset))),
             ).fetchall()
 
-    def kpis(self, channel_id: int | None = None) -> dict[str, Any]:
+    def kpis(self, channel_id: int | None = None, include_deleted: bool = False) -> dict[str, Any]:
         sql = _LATEST_CTE + """
         SELECT COUNT(*) AS posts,
                COALESCE(SUM(l.views),0) AS views,
@@ -378,24 +423,25 @@ class Database:
                (SELECT COUNT(*) FROM comments cm
                   JOIN posts cp ON cp.id=cm.post_id
                   JOIN channels ccp ON ccp.id=cp.channel_id
-                 WHERE cm.is_deleted=0 AND (? IS NULL OR cp.channel_id=?)
+                 WHERE cm.is_deleted=0 AND cp.is_deleted=0 AND (? IS NULL OR cp.channel_id=?)
                    AND (? IS NOT NULL OR ccp.active=1)) AS collected_comments,
                (SELECT MAX(s.taken_at) FROM snapshots s
                   JOIN posts pp ON pp.id = s.post_id
                   JOIN channels cpp ON cpp.id=pp.channel_id
                  WHERE (? IS NULL OR pp.channel_id = ?)
-                   AND (? IS NOT NULL OR cpp.active=1)) AS last_poll
+                   AND (? IS NOT NULL OR cpp.active=1) AND pp.is_deleted=0) AS last_poll
         FROM posts p
         JOIN channels c ON c.id=p.channel_id
         LEFT JOIN latest l ON l.post_id = p.id
         WHERE (? IS NULL OR p.channel_id = ?)
           AND (? IS NOT NULL OR c.active=1)
+          AND (? OR p.is_deleted=0)
         """
         with self.conn() as c:
             r = c.execute(
                 sql,
                 (channel_id, channel_id, channel_id, channel_id, channel_id, channel_id,
-                 channel_id, channel_id, channel_id),
+                 channel_id, channel_id, channel_id, int(bool(include_deleted))),
             ).fetchone()
             return dict(r) if r else {}
 
@@ -478,6 +524,7 @@ class Database:
                   LEFT JOIN latest l ON l.post_id=p.id
                  WHERE (? IS NULL OR p.channel_id = ?)
                    AND (? IS NOT NULL OR c.active=1)
+                   AND p.is_deleted=0
                  GROUP BY day
                  ORDER BY day
                 """,
