@@ -7,6 +7,35 @@ type Props = {
   onSaved?: (profile: ChannelProfile) => void;
 };
 
+export type ProfileTextState = { topics: string; editorial: string; style: string };
+export type ProfileInitialState = ProfileTextState & { version: number };
+
+export function isProfileDirty(
+  initial: ProfileInitialState | null,
+  current: ProfileTextState,
+): boolean {
+  if (!initial) return current.topics !== "" || current.editorial !== "" || current.style !== "";
+  return (
+    current.topics !== initial.topics ||
+    current.editorial !== initial.editorial ||
+    current.style !== initial.style
+  );
+}
+
+export function needsBuildConfirm(topics: string, editorial: string, style: string): boolean {
+  return Boolean(topics.trim() || editorial.trim() || style.trim());
+}
+
+export function isProfileConflictError(error: unknown): boolean {
+  return error instanceof StudioApiError && error.status === 409;
+}
+
+export function extractConflictProfile(error: unknown): ChannelProfile | null {
+  if (!(error instanceof StudioApiError)) return null;
+  const server = (error.payload as unknown as { server_profile?: ChannelProfile }).server_profile;
+  return server ?? null;
+}
+
 function formatMeta(profile: ChannelProfile | null): string {
   if (!profile || (!profile.topics_text && !profile.editorial_text && !profile.style_text)) {
     return "Not built yet. Build the guidelines from your posts or write them yourself. Rules, not a template.";
@@ -88,11 +117,11 @@ function renderInlineMarkdown(line: string, key: number) {
   if (lastIndex < text.length) {
     parts.push(<span key={`t-${key}-${idx}`}>{text.slice(lastIndex)}</span>);
   }
-  if (parts.length === 0) return <span key={key}>{line}</span>;
+  if (parts.length === 0) return <span key={key}>{text}</span>;
   return <span key={key}>{parts}</span>;
 }
 
-function PreviewMarkdown({ text }: { text: string }) {
+export function PreviewMarkdown({ text }: { text: string }) {
   if (!text.trim()) return <p />;
   const lines = text.split("\n");
   return (
@@ -123,7 +152,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
   const [statusIsError, setStatusIsError] = useState(false);
   const [conflictProfile, setConflictProfile] = useState<ChannelProfile | null>(null);
 
-  const dirty = initial ? (topics !== initial.topics || editorial !== initial.editorial || style !== initial.style) : (topics !== "" || editorial !== "" || style !== "");
+  const dirty = isProfileDirty(initial, { topics, editorial, style });
   const overLimit = topics.length > 2000 || editorial.length > 2000 || style.length > 2000;
 
   useEffect(() => {
@@ -168,7 +197,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
 
   const handleBuild = async () => {
     if (!canBuild) return;
-    if ((topics.trim() || editorial.trim() || style.trim()) && !window.confirm("Replace the text in all three fields with a fresh analysis? Nothing is saved until you press Save.")) {
+    if (needsBuildConfirm(topics, editorial, style) && !window.confirm("Replace the text in all three fields with a fresh analysis? Nothing is saved until you press Save.")) {
       return;
     }
     setBuilding(true);
@@ -231,8 +260,8 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
       setStatusIsError(false);
       onSaved?.(p);
     } catch (e) {
-      if (e instanceof StudioApiError && e.status === 409 && e.payload) {
-        const server = (e.payload as unknown as { server_profile: ChannelProfile }).server_profile;
+      if (isProfileConflictError(e) && e instanceof StudioApiError && e.payload) {
+        const server = extractConflictProfile(e);
         if (server) {
           setConflictProfile(server);
           setStatusIsError(true);

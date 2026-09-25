@@ -6,13 +6,20 @@ NotNullViolation that broke every real save. Run with a disposable database:
     TEST_POSTGRES_URL=postgresql+asyncpg://user:pw@127.0.0.1:55432/tg_studio_test \
         .venv/bin/python -m pytest -q tests/test_fix_t18_postgres.py
 """
+import json
 import os
 import re
+import subprocess
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import Settings
 from app.postgres_db import PostgresDatabase
@@ -135,3 +142,122 @@ async def test_profile_dialog_flow_saves_through_the_http_api(tmp_path):
             assert bootstrap.json()["profile_status"] == "ready"
     finally:
         await db.close()
+
+
+def _replace_database(url: str, database: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, f"/{database}", parts.query, parts.fragment))
+
+
+def _run_alembic(database_url: str, *args: str) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
+    env.pop("M0_POSTGRES_URL", None)
+    migration = subprocess.run(
+        [sys.executable, "-m", "alembic", *args],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert migration.returncode == 0, migration.stderr + migration.stdout
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_migration_0009_upgrades_legacy_topics_and_downgrades_cleanly():
+    """T14 acceptance 7: legacy topics JSON migrates to topics_text; downgrade drops the columns."""
+    base_url = _url()
+    tmp_db = f"t18_{uuid.uuid4().hex[:8]}"
+    tmp_url = _replace_database(base_url, tmp_db)
+
+    admin_engine = create_async_engine(base_url, isolation_level="AUTOCOMMIT")
+    try:
+        async with admin_engine.connect() as conn:
+            await conn.execute(text(f'CREATE DATABASE "{tmp_db}"'))
+    finally:
+        await admin_engine.dispose()
+
+    try:
+        _run_alembic(tmp_url, "upgrade", "0008_studio_instructions")
+
+        workspace_id = uuid.uuid4()
+        profile_id = uuid.uuid4()
+        topics = json.dumps([{"name": "Budget", "scope": "votes"}, {"name": "Procurement", "scope": ""}])
+        engine = create_async_engine(tmp_url)
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(
+                    text("INSERT INTO workspaces(id, slug, name) VALUES (:id, :slug, :name)"),
+                    {"id": workspace_id, "slug": f"t18-{uuid.uuid4().hex[:8]}", "name": "T18 migration"},
+                )
+                channel_id = (await conn.execute(
+                    text(
+                        "INSERT INTO channels(workspace_id, identifier, title, chat_id, active, created_at)"
+                        " VALUES (:ws, :identifier, :title, :chat_id, true, now()) RETURNING id"
+                    ),
+                    {"ws": workspace_id, "identifier": f"@t18_{uuid.uuid4().hex[:6]}", "title": "T18", "chat_id": 7003},
+                )).scalar_one()
+                await conn.execute(
+                    text(
+                        "INSERT INTO studio_profiles(id, workspace_id, channel_id, topics, version)"
+                        " VALUES (:id, :ws, :channel_id, CAST(:topics AS jsonb), 1)"
+                    ),
+                    {"id": profile_id, "ws": workspace_id, "channel_id": channel_id, "topics": topics},
+                )
+                await conn.commit()
+        finally:
+            await engine.dispose()
+
+        _run_alembic(tmp_url, "upgrade", "0009_profile_text")
+
+        check = create_async_engine(tmp_url)
+        try:
+            async with check.connect() as conn:
+                migrated = (await conn.execute(
+                    text("SELECT topics_text, editorial_text, style_text, built_from_posts FROM studio_profiles WHERE id=:id"),
+                    {"id": profile_id},
+                )).mappings().one()
+                assert migrated["topics_text"] == "Budget — votes\nProcurement — "
+                assert migrated["editorial_text"] == ""
+                assert migrated["style_text"] == ""
+                assert migrated["built_from_posts"] == 0
+                columns = (await conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns"
+                        " WHERE table_name='studio_profiles' AND column_name IN"
+                        " ('topics_text','editorial_text','style_text','built_at','built_from_posts')"
+                    )
+                )).scalars().all()
+                assert set(columns) == {"topics_text", "editorial_text", "style_text", "built_at", "built_from_posts"}
+        finally:
+            await check.dispose()
+
+        _run_alembic(tmp_url, "downgrade", "0008_studio_instructions")
+
+        back = create_async_engine(tmp_url)
+        try:
+            async with back.connect() as conn:
+                columns = (await conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns"
+                        " WHERE table_name='studio_profiles' AND column_name IN"
+                        " ('topics_text','editorial_text','style_text','built_at','built_from_posts')"
+                    )
+                )).scalars().all()
+                assert columns == []
+                legacy = (await conn.execute(
+                    text("SELECT topics FROM studio_profiles WHERE id=:id"),
+                    {"id": profile_id},
+                )).scalar_one()
+                assert legacy[0]["name"] == "Budget"
+        finally:
+            await back.dispose()
+    finally:
+        drop_engine = create_async_engine(base_url, isolation_level="AUTOCOMMIT")
+        try:
+            async with drop_engine.connect() as conn:
+                await conn.execute(text(f'DROP DATABASE IF EXISTS "{tmp_db}" WITH (FORCE)'))
+        finally:
+            await drop_engine.dispose()
