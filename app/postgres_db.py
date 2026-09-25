@@ -915,13 +915,16 @@ class PostgresDatabase:
                     ),
                     {"workspace_id": workspace_id, "channel_id": channel_id},
                 )
-                await session.execute(
+                created = await session.execute(
                     text(
                         """INSERT INTO collection_jobs(id, workspace_id, channel_id, status, lease_until)
-                           VALUES (:id, :workspace_id, :channel_id, 'running', :lease_until)"""
+                           SELECT :id, :workspace_id, :channel_id, 'running', :lease_until
+                             FROM channels WHERE workspace_id=:workspace_id AND id=:channel_id"""
                     ),
                     {"id": job_id, "workspace_id": workspace_id, "channel_id": channel_id, "lease_until": lease_until},
                 )
+                if not created.rowcount:
+                    return None
                 await session.commit()
                 return job_id
         except IntegrityError as exc:

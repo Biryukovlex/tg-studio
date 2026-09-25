@@ -1,10 +1,8 @@
 """T09 acceptance tests: collection data integrity."""
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -121,6 +119,22 @@ async def test_deleted_post_retired_and_hidden_from_latest_stats():
     assert retired[0]["deleted_at"] is not None
     visible = await db.latest_stats(channel_id=1)
     assert [row["message_id"] for row in visible] == [1]
+
+
+@pytest.mark.asyncio
+async def test_capped_whole_history_scan_does_not_retire_older_posts():
+    db = FakeDB()
+    now = datetime.now(timezone.utc)
+    db.posts[1] = {"message_id": 1, "is_deleted": False, "deleted_at": None}
+    db.posts[2] = {"message_id": 2, "is_deleted": False, "deleted_at": None}
+    db._next_post_id = 3
+    settings = _collector_settings().model_copy(update={"backfill_limit": 1})
+    collector = Collector(FakeClient([FakeMsg(1, now)]), db, settings)
+
+    await collector.poll_channel({"id": 1, "identifier": "@a"})
+
+    assert not db.posts[2]["is_deleted"]
+    assert 1 not in collector._last_full_scan
 
 
 def test_migration_0013_has_expected_shape():

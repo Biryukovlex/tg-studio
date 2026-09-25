@@ -168,7 +168,6 @@ async def test_concurrent_tool_calls_keep_all_sources():
     from app.studio.research import ResearchService
     from app.config import Settings
 
-    repository = MemoryStudioRepository()
     service = ResearchService(Settings(_env_file=None, studio_search_enabled=False), repository=None)
     service.repository = None
 

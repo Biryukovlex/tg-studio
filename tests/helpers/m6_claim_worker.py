@@ -15,7 +15,7 @@ from app.studio.repository import StudioRepository
 async def _main() -> int:
     if len(sys.argv) != 4 or sys.argv[1] not in {"run", "collection"}:
         return 2
-    database_url = os.environ.get("M6_POSTGRES_URL", "")
+    database_url = os.environ.get("TEST_POSTGRES_URL") or os.environ.get("M6_POSTGRES_URL", "")
     workspace_slug = os.environ.get("M6_WORKSPACE_SLUG", "")
     if not database_url or not workspace_slug:
         return 2

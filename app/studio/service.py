@@ -29,7 +29,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 
 from .agent import StudioDeps, build_agent, is_revision_request, is_short_continuation_request, workflow_tool_sequence
 from .. import limits
-from .analytics import analyze_posts, analyze_posts_async
+from .analytics import analyze_posts_async
 from .profile import build_profile
 from .semantic_profile import build_semantic_profile
 from .research import ResearchService
@@ -489,7 +489,7 @@ class StudioService:
         try:
             combined = getattr(self.repository, "append_user_message_and_create_run", None)
             if combined is not None:
-                user_row, run = await combined(
+                user_row, _ = await combined(
                     conversation_id=conversation_id,
                     content=content,
                     requested_model=model_name(self.settings),
@@ -498,7 +498,7 @@ class StudioService:
                 )
             else:
                 user_row = await self.repository.append_message(conversation_id=conversation_id, role="user", content=content)
-                run = await self.repository.create_run(
+                await self.repository.create_run(
                     conversation_id=conversation_id,
                     user_message_id=int(user_row["id"]),
                     requested_model=model_name(self.settings),

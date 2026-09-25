@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .sqlite_to_postgres import import_sqlite
 
@@ -20,4 +21,6 @@ IMPORT_TABLES = ("channels", "posts", "snapshots", "comments")
 async def import_fixture(
     sqlite_path: str | Path, database_url: str
 ) -> dict[str, Any]:
-    return await import_sqlite(sqlite_path, database_url)
+    # M0's synthetic fixture must not claim the live/default workspace when
+    # the whole PostgreSQL test suite shares a disposable database.
+    return await import_sqlite(sqlite_path, database_url, workspace_slug=f"m0-fixture-{uuid4().hex}")

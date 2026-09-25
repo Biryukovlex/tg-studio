@@ -1,9 +1,9 @@
 """Restartable, read-only SQLite archive importer for the M1 cutover.
 
-The source is opened with SQLite's ``mode=ro`` URI.  Rows are upserted in
-dependency order and the report compares counts and canonical hashes, so a
-restart after an interruption is safe and a mismatch never gets silently
-finalized.
+The source is opened with SQLite's ``mode=ro`` URI. Rows are imported in
+dependency order with destination-owned IDs and the report compares canonical
+content, so a restart after an interruption is safe and a mismatch never
+gets silently finalized.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -55,17 +56,36 @@ def _legacy_value(value: Any, column: str) -> Any:
     return value
 
 
-def _digest(columns: list[str], rows: list[tuple[Any, ...]]) -> str:
-    digest = hashlib.sha256()
+def _canonical_records(
+    table: str,
+    columns: list[str],
+    rows: list[dict[str, Any]],
+    channel_keys: dict[Any, str],
+    post_keys: dict[Any, tuple[str, int]],
+) -> Counter[str]:
+    """Compare archive content without database-local surrogate IDs."""
+    records: Counter[str] = Counter()
     for row in rows:
-        encoded = json.dumps(
-            [_stable_value(_legacy_value(value, column)) for column, value in zip(columns, row)],
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-        digest.update(encoded)
-        digest.update(b"\n")
+        values = []
+        for column in columns:
+            if column == "id":
+                continue
+            value = row[column]
+            if column == "channel_id" and table == "posts":
+                value = channel_keys[value]
+            elif column == "post_id" and table in {"snapshots", "comments"}:
+                value = post_keys[value]
+            values.append(_stable_value(_legacy_value(value, column)))
+        records[json.dumps(values, ensure_ascii=False, separators=(",", ":"), allow_nan=False)] += 1
+    return records
+
+
+def _records_digest(records: Counter[str]) -> str:
+    digest = hashlib.sha256()
+    for record, count in sorted(records.items()):
+        for _ in range(count):
+            digest.update(record.encode("utf-8"))
+            digest.update(b"\n")
     return digest.hexdigest()
 
 
@@ -108,6 +128,9 @@ def _diagnostics(source: dict[str, tuple[list[str], list[dict[str, Any]]]]) -> d
 
 def _row_values(table: str, source: dict[str, Any], workspace_id: uuid.UUID) -> dict[str, Any]:
     values = dict(source)
+    # A SQLite primary key is local to its archive. PostgreSQL sequences own
+    # the destination IDs, including when another workspace was imported first.
+    values.pop("id", None)
     values["workspace_id"] = workspace_id
     if table == "channels":
         values["active"] = bool(values.get("active", 1))
@@ -128,6 +151,66 @@ def _row_values(table: str, source: dict[str, Any], workspace_id: uuid.UUID) -> 
             values[column] = _timestamp(values.get(column))
         values["is_deleted"] = bool(values.get("is_deleted", 0))
     return values
+
+
+async def _target_records(
+    session: Any,
+    workspace_id: uuid.UUID,
+    source: dict[str, tuple[list[str], list[dict[str, Any]]]],
+) -> dict[str, Counter[str]]:
+    target: dict[str, list[dict[str, Any]]] = {}
+    for table, (columns, _) in source.items():
+        selected = ", ".join('"' + column.replace('"', '""') + '"' for column in columns)
+        result = await session.execute(
+            text(f'SELECT {selected} FROM "{table}" WHERE workspace_id=:workspace_id'),
+            {"workspace_id": workspace_id},
+        )
+        target[table] = [dict(zip(columns, row)) for row in result]
+    channel_keys = {row["id"]: row["identifier"] for row in target["channels"]}
+    post_keys = {
+        row["id"]: (channel_keys[row["channel_id"]], row["message_id"])
+        for row in target["posts"]
+    }
+    return {
+        table: _canonical_records(table, columns, target[table], channel_keys, post_keys)
+        for table, (columns, _) in source.items()
+    }
+
+
+def _source_records(
+    source: dict[str, tuple[list[str], list[dict[str, Any]]]],
+) -> dict[str, Counter[str]]:
+    channels = {row["id"]: row["identifier"] for row in source["channels"][1]}
+    posts = {
+        row["id"]: (channels[row["channel_id"]], row["message_id"])
+        for row in source["posts"][1]
+    }
+    return {
+        table: _canonical_records(table, columns, rows, channels, posts)
+        for table, (columns, rows) in source.items()
+    }
+
+
+def _report(
+    source: dict[str, tuple[list[str], list[dict[str, Any]]]],
+    source_records: dict[str, Counter[str]],
+    target_records: dict[str, Counter[str]],
+    *,
+    allow_extra: bool = False,
+) -> list[dict[str, Any]]:
+    reports = []
+    for table in IMPORT_TABLES:
+        left, right = source_records[table], target_records[table]
+        matched = not (left - right) if allow_extra else left == right
+        reports.append({
+            "name": table,
+            "sqlite_count": len(source[table][1]),
+            "postgres_count": sum(right.values()),
+            "sqlite_sha256": _records_digest(left),
+            "postgres_sha256": _records_digest(right),
+            "match": matched,
+        })
+    return reports
 
 
 async def import_sqlite(
@@ -159,6 +242,7 @@ async def import_sqlite(
 
     manager = DatabaseSessionManager(normalize_database_url(database_url), pool_size=2, max_overflow=1)
     reports: list[dict[str, Any]] = []
+    source_records = _source_records(source)
     try:
         async with manager.session() as session:
             schema = await session.execute(text("SELECT to_regclass('public.workspaces')"))
@@ -176,19 +260,10 @@ async def import_sqlite(
                 )
                 existing_counts[table] = int(count_result.scalar_one())
             if any(existing_counts.values()) and not force:
-                identical = True
-                for table in IMPORT_TABLES:
-                    columns, rows = source[table]
-                    if len(rows) != existing_counts[table]:
-                        identical = False
-                        break
-                if identical:
+                target_records = await _target_records(session, workspace_id, source)
+                if all(source_records[table] == target_records[table] for table in IMPORT_TABLES):
                     return {
-                        "tables": [
-                            {"name": table, "sqlite_count": len(source[table][1]),
-                             "postgres_count": existing_counts[table], "match": True}
-                            for table in IMPORT_TABLES
-                        ],
+                        "tables": _report(source, source_records, target_records),
                         "diagnostics": _diagnostics(source),
                         "all_match": True,
                         "workspace_id": str(workspace_id),
@@ -214,24 +289,35 @@ async def import_sqlite(
             # instead of mis-attaching posts to live channels.
             channel_id_map: dict[Any, Any] = {}
             post_id_map: dict[Any, Any] = {}
+            # Force may merge with existing rows, but never overwrites a row
+            # merely because its unrelated SQLite archive reused its ID.
+            existing_snapshot_counts: Counter[tuple[Any, ...]] = Counter()
+            if force:
+                snapshot_result = await session.execute(
+                    text("SELECT post_id, taken_at, views, comments, reactions, shares "
+                         "FROM snapshots WHERE workspace_id=:workspace_id"),
+                    {"workspace_id": workspace_id},
+                )
+                existing_snapshot_counts.update(tuple(row) for row in snapshot_result)
+            seen_snapshot_counts: Counter[tuple[Any, ...]] = Counter()
             try:
                 for table in IMPORT_TABLES:
                     columns, rows = source[table]
                     if table == "channels":
                         sql = text(
-                            """INSERT INTO channels(id, workspace_id, identifier, title, chat_id, active, created_at)
-                               VALUES (:id, :workspace_id, :identifier, :title, :chat_id, :active, :created_at)
+                            """INSERT INTO channels(workspace_id, identifier, title, chat_id, active, created_at)
+                               VALUES (:workspace_id, :identifier, :title, :chat_id, :active, :created_at)
                                ON CONFLICT (workspace_id, identifier) DO UPDATE SET
                                    title=EXCLUDED.title, chat_id=EXCLUDED.chat_id, active=EXCLUDED.active"""
                         )
                     elif table == "posts":
                         sql = text(
                             """INSERT INTO posts(
-                                   id, workspace_id, channel_id, message_id, posted_at, text,
+                                   workspace_id, channel_id, message_id, posted_at, text,
                                    formatting_entities, is_deleted, created_at
                                )
                                VALUES (
-                                   :id, :workspace_id, :channel_id, :message_id, :posted_at, :text,
+                                   :workspace_id, :channel_id, :message_id, :posted_at, :text,
                                    CAST(:formatting_entities AS jsonb), :is_deleted, :created_at
                                )
                                ON CONFLICT (workspace_id, channel_id, message_id) DO UPDATE SET
@@ -241,30 +327,20 @@ async def import_sqlite(
                                    is_deleted=EXCLUDED.is_deleted"""
                         )
                     elif table == "snapshots":
-                        if force:
-                            sql = text(
-                                """INSERT INTO snapshots(id, workspace_id, post_id, taken_at, views, comments, reactions, shares)
-                                   VALUES (:id, :workspace_id, :post_id, :taken_at, :views, :comments, :reactions, :shares)
-                                   ON CONFLICT DO NOTHING"""
-                            )
-                        else:
-                            sql = text(
-                                """INSERT INTO snapshots(id, workspace_id, post_id, taken_at, views, comments, reactions, shares)
-                                   VALUES (:id, :workspace_id, :post_id, :taken_at, :views, :comments, :reactions, :shares)
-                                   ON CONFLICT (id) DO UPDATE SET
-                                       taken_at=EXCLUDED.taken_at, views=EXCLUDED.views, comments=EXCLUDED.comments,
-                                       reactions=EXCLUDED.reactions, shares=EXCLUDED.shares"""
-                            )
+                        sql = text(
+                            """INSERT INTO snapshots(workspace_id, post_id, taken_at, views, comments, reactions, shares)
+                               VALUES (:workspace_id, :post_id, :taken_at, :views, :comments, :reactions, :shares)"""
+                        )
                     else:
                         sql = text(
                             """INSERT INTO comments(
-                                   id, workspace_id, post_id, telegram_message_id, discussion_chat_id,
+                                   workspace_id, post_id, telegram_message_id, discussion_chat_id,
                                    discussion_username, sender_id, sender_name, sender_username,
                                    posted_at, edited_at, text, media_type, reactions,
                                    reply_to_message_id, is_deleted, first_collected_at,
                                    last_collected_at, last_seen_sync
                                ) VALUES (
-                                   :id, :workspace_id, :post_id, :telegram_message_id, :discussion_chat_id,
+                                   :workspace_id, :post_id, :telegram_message_id, :discussion_chat_id,
                                    :discussion_username, :sender_id, :sender_name, :sender_username,
                                    :posted_at, :edited_at, :text, :media_type, :reactions,
                                    :reply_to_message_id, :is_deleted, :first_collected_at,
@@ -288,6 +364,13 @@ async def import_sqlite(
                         elif table in ("snapshots", "comments"):
                             sqlite_post = source_row.get("post_id")
                             values["post_id"] = post_id_map.get(sqlite_post, sqlite_post)
+                        if table == "snapshots" and force:
+                            key = tuple(values[field] for field in (
+                                "post_id", "taken_at", "views", "comments", "reactions", "shares"
+                            ))
+                            seen_snapshot_counts[key] += 1
+                            if seen_snapshot_counts[key] <= existing_snapshot_counts[key]:
+                                continue
                         await session.execute(sql, values)
                         await session.flush()
                         if table == "channels":
@@ -308,37 +391,8 @@ async def import_sqlite(
                             post_id_map[source_row.get("id")] = resolved_post.scalar_one()
                     await session.flush()
 
-                    target_columns = columns
-                    target_rows_result = await session.execute(
-                        text(
-                            f'SELECT {", ".join(chr(34) + c + chr(34) for c in target_columns)} '
-                            f'FROM "{table}" WHERE workspace_id=:workspace_id ORDER BY id'
-                        ),
-                        {"workspace_id": workspace_id},
-                    )
-                    target_rows = [tuple(row) for row in target_rows_result]
-                    source_tuples = [tuple(row[column] for column in columns) for row in rows]
-                    source_hash = _digest(columns, source_tuples)
-                    target_hash = _digest(columns, target_rows)
-                    reports.append(
-                        {
-                            "name": table,
-                            "sqlite_count": len(source_tuples),
-                            "postgres_count": len(target_rows),
-                            "sqlite_sha256": source_hash,
-                            "postgres_sha256": target_hash,
-                            "match": len(source_tuples) == len(target_rows) and source_hash == target_hash,
-                        }
-                    )
-
-                for table in ("channels", "posts", "snapshots", "comments"):
-                    await session.execute(
-                        text(
-                            f"SELECT setval(pg_get_serial_sequence(:table_name, 'id'), "
-                            f"COALESCE((SELECT MAX(id) FROM {table}), 1), true)"
-                        ),
-                        {"table_name": table},
-                    )
+                target_records = await _target_records(session, workspace_id, source)
+                reports = _report(source, source_records, target_records, allow_extra=force)
                 all_match = all(report["match"] for report in reports)
                 if not all_match:
                     await session.rollback()

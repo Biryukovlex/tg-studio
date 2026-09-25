@@ -225,7 +225,8 @@ def _normalise_row(row: Mapping[str, Any], *, now: datetime, channel_id: int) ->
 
 
 def _canonical_input(rows: list[dict[str, Any]], channel_id: int, now: datetime) -> str:
-    day = _utc(now).date().isoformat() if _utc(now) else ""
+    normalized_now = _utc(now)
+    day = normalized_now.date().isoformat() if normalized_now else ""
     payload = {
         "analytics_version": ANALYTICS_VERSION,
         "channel_id": int(channel_id),

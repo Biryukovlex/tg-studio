@@ -5,7 +5,7 @@ import sqlalchemy as sa
 
 
 revision = "0015_consent_default"
-down_revision = "0012_channel_system_prompts"
+down_revision = "0014_session_crypto"
 branch_labels = None
 depends_on = None
 

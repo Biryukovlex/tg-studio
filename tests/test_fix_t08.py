@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import os
 import sqlite3
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -146,6 +145,65 @@ def test_import_hash_mismatch_rolls_back_to_empty(tmp_path, monkeypatch):
     assert spy["commits"] == 0
 
 
+@pytest.mark.integration
+def test_import_remaps_ids_and_rejects_same_count_changed_archive(tmp_path):
+    database_url = os.getenv("TEST_POSTGRES_URL")
+    if not database_url:
+        pytest.skip("set TEST_POSTGRES_URL to run isolated PostgreSQL importer proof")
+    from uuid import uuid4
+    from sqlalchemy import text
+    from app.db_session import DatabaseSessionManager
+    from app.migration.sqlite_to_postgres import import_sqlite
+
+    async def prove():
+        first = tmp_path / "first.db"
+        second = tmp_path / "second.db"
+        _make_archive(first)
+        _make_archive(second)
+        connection = sqlite3.connect(second)
+        connection.execute("UPDATE channels SET identifier='@b', title='B' WHERE id=1")
+        connection.execute("UPDATE posts SET text='second archive' WHERE id=1")
+        connection.commit()
+        connection.close()
+        slug_a, slug_b = f"import-a-{uuid4().hex}", f"import-b-{uuid4().hex}"
+        result_a = await import_sqlite(first, database_url, workspace_slug=slug_a)
+        result_b = await import_sqlite(second, database_url, workspace_slug=slug_b)
+        assert result_a["all_match"] and result_b["all_match"]
+        assert (await import_sqlite(second, database_url, workspace_slug=slug_b))["all_match"]
+        manager = DatabaseSessionManager(database_url)
+        try:
+            async with manager.session() as session:
+                rows = (await session.execute(text(
+                    "SELECT c.id, c.identifier, p.id, p.text FROM channels c "
+                    "JOIN posts p ON p.channel_id=c.id WHERE c.workspace_id IN (:a, :b) ORDER BY c.identifier"
+                ), {"a": result_a["workspace_id"], "b": result_b["workspace_id"]})).all()
+            assert len(rows) == 2
+            assert rows[0][0] != rows[1][0] and rows[0][2] != rows[1][2]
+            assert [(row[1], row[3]) for row in rows] == [("@a", "hello"), ("@b", "second archive")]
+        finally:
+            await manager.dispose()
+        connection = sqlite3.connect(second)
+        connection.execute("UPDATE posts SET text='changed after import' WHERE id=1")
+        connection.commit()
+        connection.close()
+        with pytest.raises(RuntimeError, match="already contains rows"):
+            await import_sqlite(second, database_url, workspace_slug=slug_b)
+        merged = await import_sqlite(second, database_url, workspace_slug=slug_b, force=True)
+        assert merged["all_match"]
+        manager = DatabaseSessionManager(database_url)
+        try:
+            async with manager.session() as session:
+                rows = (await session.execute(text(
+                    "SELECT c.identifier, p.text FROM channels c JOIN posts p ON p.channel_id=c.id "
+                    "WHERE c.workspace_id IN (:a, :b) ORDER BY c.identifier"
+                ), {"a": result_a["workspace_id"], "b": result_b["workspace_id"]})).all()
+            assert rows == [("@a", "hello"), ("@b", "changed after import")]
+        finally:
+            await manager.dispose()
+
+    asyncio.run(prove())
+
+
 def test_diagnostic_read_only_does_not_init(tmp_path, monkeypatch):
     import scripts.restore_history as restore
     from app.config import Settings as S
@@ -178,8 +236,6 @@ def test_diagnostic_read_only_does_not_init(tmp_path, monkeypatch):
 
 
 def test_main_exits_without_database_url(monkeypatch):
-    import app.main as main
-
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("ALLOW_LEGACY_SQLITE", raising=False)
     monkeypatch.setenv("API_ID", "1")

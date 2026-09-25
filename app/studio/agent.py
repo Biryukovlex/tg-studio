@@ -13,7 +13,7 @@ from pydantic_ai import Agent, ModelRetry, RunContext
 from .. import limits
 from .model import build_model
 from .prompts import SYSTEM_INSTRUCTIONS
-from .analytics import analyze_posts, analyze_posts_async
+from .analytics import analyze_posts_async
 from .context import ContextAssembler, ContextPack, profile_block_from_mapping
 from .drafts import ClaimSupport, DraftConflictError, DraftValidationError, diff_summary
 from .schemas import ChannelContext

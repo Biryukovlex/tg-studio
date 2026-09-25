@@ -36,7 +36,7 @@ def rotate_connection_rows(
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Re-encrypt rows readable with the previous key under the current key.
 
-    Returns (updates, report) where updates holds ``{label, encrypted_session,
+    Returns (updates, report) where updates holds ``{id, encrypted_session,
     encrypted_api_hash, key_version}`` dicts ready to persist.  Rows already
     on the current key version are reported as skipped.
     """
@@ -44,25 +44,33 @@ def rotate_connection_rows(
     report = {"total": 0, "re_encrypted": 0, "skipped": 0, "unreadable": 0}
     for row in rows:
         report["total"] += 1
-        label = str(row.get("label") or "")
+        row_id = row.get("id")
         try:
-            session_string = previous.decrypt(bytes(row["encrypted_session"]))
+            try:
+                session_string = current.decrypt(bytes(row["encrypted_session"]))
+            except ValueError:
+                session_string = previous.decrypt(bytes(row["encrypted_session"]))
         except (ValueError, TypeError, KeyError):
             report["unreadable"] += 1
             continue
         stored_hash = row.get("encrypted_api_hash")
         if stored_hash is not None:
             try:
-                api_hash = previous.decrypt(bytes(stored_hash))
+                try:
+                    api_hash = current.decrypt(bytes(stored_hash))
+                except ValueError:
+                    api_hash = previous.decrypt(bytes(stored_hash))
             except (ValueError, TypeError):
                 report["unreadable"] += 1
                 continue
         else:
             api_hash = str(row.get("api_hash") or "")
         if row.get("session_key_version") == current.key_version:
-            # Verify the current key actually reads this row before skipping.
+            # Both secrets must already use the current key before skipping.
             try:
                 current.decrypt(bytes(row["encrypted_session"]))
+                if stored_hash is not None:
+                    current.decrypt(bytes(stored_hash))
             except ValueError:
                 pass
             else:
@@ -70,7 +78,7 @@ def rotate_connection_rows(
                 continue
         updates.append(
             {
-                "label": label,
+                "id": row_id,
                 "encrypted_session": current.encrypt(session_string),
                 "encrypted_api_hash": current.encrypt(api_hash) if api_hash else None,
                 "key_version": current.key_version,
@@ -90,10 +98,9 @@ async def _fetch_rows(database_url: str) -> tuple[Any, list[dict[str, Any]]]:
         async with manager.session() as session:
             result = await session.execute(
                 text(
-                    """SELECT c.label, c.api_hash, c.encrypted_api_hash,
+                    """SELECT c.id, c.label, c.api_hash, c.encrypted_api_hash,
                               c.encrypted_session, c.session_key_version
                          FROM telegram_connections c
-                         JOIN workspaces w ON w.id = c.workspace_id
                         WHERE c.status='active' ORDER BY c.label"""
                 )
             )
@@ -117,9 +124,7 @@ async def _apply_updates(manager: Any, updates: list[dict[str, Any]]) -> None:
                               api_hash=NULL,
                               session_key_version=:key_version,
                               updated_at=now()
-                         FROM workspaces AS w
-                        WHERE w.id = c.workspace_id
-                          AND c.label=:label AND c.status='active'"""
+                        WHERE c.id=:id AND c.status='active'"""
                 ),
                 update,
             )
@@ -144,6 +149,10 @@ def main() -> int:
         manager, rows = await _fetch_rows(database_url)
         try:
             updates, report = rotate_connection_rows(rows, current, previous)
+            if report["unreadable"]:
+                raise RuntimeError(
+                    f"rotation stopped: {report['unreadable']} connection row(s) could not be decrypted"
+                )
             await _apply_updates(manager, updates)
             return report
         finally:

@@ -104,15 +104,16 @@ class Collector:
                 connection_id = None
         title = getattr(entity, "title", "") or ""
         chat_id = int(getattr(entity, "id", 0) or 0) or None
+        upsert = getattr(self.db, "upsert_channel")
         try:
             if connection_id is not None:
                 await maybe_await(
-                    self.db.upsert_channel(identifier, title=title, chat_id=chat_id, connection_id=connection_id)
+                    upsert(identifier, title=title, chat_id=chat_id, connection_id=connection_id)
                 )
             else:
-                await maybe_await(self.db.upsert_channel(identifier, title=title, chat_id=chat_id))
+                await maybe_await(upsert(identifier, title=title, chat_id=chat_id))
         except TypeError:
-            await maybe_await(self.db.upsert_channel(identifier, title=title, chat_id=chat_id))
+            await maybe_await(upsert(identifier, title=title, chat_id=chat_id))
         return entity
 
     async def sync_channels(self) -> list[str]:
@@ -233,7 +234,10 @@ class Collector:
                 # operator's explicit per-sync message cap.  ``0`` remains
                 # the only way to request an unlimited scan.
                 limit = self.settings.backfill_limit if self.settings.backfill_limit > 0 else None
-                is_full_scan = True
+                # A capped read cannot prove that older archived posts are
+                # absent from Telegram. Retire posts only after an unlimited
+                # scan has exhausted the channel history.
+                is_full_scan = limit is None
             else:
                 recent_minutes = max(float(self.settings.poll_minutes) * 2, 60)
                 cutoff = utcnow() - timedelta(minutes=recent_minutes)

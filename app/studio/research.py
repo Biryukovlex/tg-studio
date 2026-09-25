@@ -101,6 +101,8 @@ def _story_for_agent(story: StoryCluster) -> dict[str, Any]:
             "conflict_flags",
             "warnings",
             "channel_evidence_ids",
+            "score_breakdown",
+            "channel_evidence",
             "published_at",
             "retrieved_at",
         )
@@ -165,7 +167,7 @@ class ResearchService:
 
     def _state(self, workspace_id: Any, conversation_id: Any, channel_id: int) -> ResearchState:
         key = _scope(workspace_id, conversation_id, channel_id)
-        state = self._states.setdefault(key, ResearchState())
+        self._states.setdefault(key, ResearchState())
         # Bound process memory: evict the oldest conversation beyond 64.
         while len(self._states) > 64:
             oldest = next(iter(self._states))

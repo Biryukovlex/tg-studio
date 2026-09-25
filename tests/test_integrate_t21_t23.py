@@ -18,7 +18,7 @@ from app.workspace_settings import WorkspaceSettings, format_timestamp
 
 _TEST_FERNET_KEY = Fernet.generate_key().decode("ascii")
 
-from tests.test_fix_t23 import FakeDB, FakeWorkspaceSettings, _make_app_with_fake
+from tests.test_fix_t23 import FakeDB, _make_app_with_fake
 
 
 class _StoreDB:
