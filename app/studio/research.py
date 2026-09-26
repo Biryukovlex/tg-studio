@@ -29,12 +29,27 @@ from .provenance import (
     story_from_dict,
     to_source_evidence,
 )
-from .search import SearchProvider, SearchResponse, SearchCache, build_search_provider
+from .search import SearchProvider, SearchResponse, SearchCache, build_search_provider, classify_search_outcome
 from .sources import SafeSourceReader, SourceDocument
 
 
-def _clean_instruction(value: str, limit: int = 2_000) -> str:
-    return " ".join(str(value or "").split())[:limit].strip()
+def _search_status_summary(summary: dict[str, Any]) -> str:
+    """One agent-facing line: usable results stay usable despite engine issues."""
+
+    outcome = str(summary.get("outcome", "healthy"))
+    failed = [str(name) for name in summary.get("failed_engines", [])]
+    if outcome == "healthy":
+        return "Search completed with usable results and no relevant engine failures."
+    if outcome == "partial":
+        engines = ", ".join(failed) if failed else "a requested engine"
+        return f"Search returned usable results, but {engines} failed; treat the results as partial, not unavailable."
+    if outcome == "empty":
+        return "Search completed successfully but returned no results."
+    engines = ", ".join(failed) if failed else "the provider"
+    return f"Search is unavailable ({engines} failed) and returned nothing usable."
+
+
+def _clean_instruction(value: str, limit: int = 2_000) -> str:    return " ".join(str(value or "").split())[:limit].strip()
 
 
 def _topic_names(value: Any) -> list[str]:
@@ -293,6 +308,48 @@ class ResearchService:
                 state.bundle = replace(state.bundle, sources=tuple(state.sources.values()))
         return state
 
+    @staticmethod
+    def aggregate_search_outcomes(responses: Sequence[Any]) -> dict[str, Any]:
+        """Combine parallel query variants without losing successful ones.
+
+        Rules: usable results plus any relevant engine failure is `partial`;
+        usable results with none is `healthy`; nothing usable with a relevant
+        failure is `unavailable`; a clean miss is `empty`. A batch is never
+        reported healthy when a requested engine failed.
+        """
+
+        total_results = sum(len(response.results) for response in responses)
+        relevant = sum(
+            1
+            for response in responses
+            for item in getattr(response, "engine_failures", ())
+            if isinstance(item, dict) and item.get("relevant")
+        )
+        outcome = classify_search_outcome(
+            result_count=total_results,
+            relevant_failures=relevant,
+            transport_failed=False,
+        )
+        failed_engines = sorted({
+            str(item.get("engine", ""))
+            for response in responses
+            for item in getattr(response, "engine_failures", ())
+            if isinstance(item, dict) and item.get("relevant") and item.get("engine")
+        })
+        variants = [
+            {
+                "query": str(getattr(getattr(response, "query", None), "text", ""))[:200],
+                "outcome": str(getattr(response, "outcome", "healthy") or "healthy"),
+                "result_count": len(response.results),
+            }
+            for response in responses
+        ]
+        return {
+            "outcome": outcome,
+            "failed_engines": failed_engines,
+            "variants": variants,
+        }
+
     async def _record_activity(
         self,
         *,
@@ -306,7 +363,12 @@ class ResearchService:
         cache_hit: bool,
         degraded: bool,
         trace_id: str,
+        search_outcome: str = "healthy",
+        failed_engines: Sequence[str] = (),
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        outcome = str(search_outcome or "healthy")[:32]
+        failed = [str(name)[:80] for name in list(failed_engines)[:12]]
         activity = {
             "event_type": str(event_type)[:80],
             "provider": str(provider)[:80],
@@ -315,7 +377,12 @@ class ResearchService:
             "cache_hit": bool(cache_hit),
             "degraded": bool(degraded),
             "trace_id": str(trace_id)[:128],
+            "search_outcome": outcome,
+            "failed_engines": failed,
+            "metadata": dict(metadata or {}),
         }
+        activity["metadata"].setdefault("search_outcome", outcome)
+        activity["metadata"].setdefault("failed_engines", failed)
         recorder = getattr(self.repository, "record_research_event", None)
         if recorder is not None:
             try:
@@ -374,6 +441,9 @@ class ResearchService:
         responses = await asyncio.gather(*(run(candidate) for candidate in queries))
         values = [to_source_evidence(result) for response in responses for result in response.results]
         combined_query = " | ".join(queries)
+        outcome_summary = self.aggregate_search_outcomes(responses)
+        outcome = outcome_summary["outcome"]
+        degraded = outcome in ("partial", "unavailable")
         bundle = await self._store(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
@@ -394,8 +464,10 @@ class ResearchService:
             query_count=len(queries),
             result_count=sum(len(response.results) for response in responses),
             cache_hit=all(response.cache_hit for response in responses),
-            degraded=any(response.degraded for response in responses),
+            degraded=degraded,
             trace_id=responses[0].trace_id,
+            search_outcome=outcome,
+            failed_engines=outcome_summary["failed_engines"],
         )
         # Preserve the provider/cache/degraded activity fields while attaching
         # the deterministic clusters and source links to the tool result.
@@ -422,7 +494,11 @@ class ResearchService:
         }
         response_bundle["provider"] = ",".join(sorted({response.provider for response in responses}))
         response_bundle["cache_hit"] = all(response.cache_hit for response in responses)
-        response_bundle["degraded"] = any(response.degraded for response in responses)
+        response_bundle["degraded"] = degraded
+        response_bundle["search_outcome"] = outcome
+        response_bundle["search_variants"] = outcome_summary["variants"]
+        response_bundle["failed_engines"] = outcome_summary["failed_engines"]
+        response_bundle["status_summary"] = _search_status_summary(outcome_summary)
         response_bundle["trace_id"] = responses[0].trace_id
         response_bundle["activity"] = activity
         response_bundle["warnings"] = list(dict.fromkeys([*(warning for response in responses for warning in response.warnings), *bundle.warnings]))
@@ -639,6 +715,7 @@ class ResearchService:
             )
         warnings = list(bundle.warnings)
         warnings.extend(warning for response in responses for warning in response.warnings)
+        outcome_summary = self.aggregate_search_outcomes(responses)
         activities = []
         for response in responses:
             activities.append(await self._record_activity(
@@ -652,13 +729,21 @@ class ResearchService:
                 cache_hit=response.cache_hit,
                 degraded=response.degraded,
                 trace_id=response.trace_id,
+                search_outcome=str(getattr(response, "outcome", "healthy") or "healthy"),
+                failed_engines=[
+                    str(item.get("engine", ""))
+                    for item in getattr(response, "engine_failures", ())
+                    if isinstance(item, dict) and item.get("relevant")
+                ],
             ))
         return {
             "queries": queries,
             "suggestions": suggestions,
             "sources": [_source_for_agent(source) for source in selected],
             "warnings": list(dict.fromkeys(warnings)),
-            "degraded": any(response.degraded for response in responses),
+            "degraded": outcome_summary["outcome"] in ("partial", "unavailable"),
+            "search_outcome": outcome_summary["outcome"],
+            "failed_engines": outcome_summary["failed_engines"],
             "providers": sorted({response.provider for response in responses}),
             "activity": activities,
         }

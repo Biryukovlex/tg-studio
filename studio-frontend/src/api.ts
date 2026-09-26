@@ -121,8 +121,32 @@ export type RunActivity = {
   story_count: number;
   cache_hit_count: number;
   degraded: boolean;
+  search_outcome?: "healthy" | "partial" | "empty" | "unavailable" | string;
+  failed_engines?: string[];
   references: Record<string, string[]>;
 };
+
+export function describeSearchOutcome(activity: Pick<RunActivity, "degraded" | "search_outcome" | "failed_engines">): string | null {
+  const outcome = activity.search_outcome;
+  const failed = (activity.failed_engines ?? []).filter((name) => name.trim() !== "");
+  if (outcome === "partial") {
+    return failed.length > 0
+      ? `Research was partial for this run (${failed.join(", ")} failed); returned sources are still usable.`
+      : "Research was partial for this run; returned sources are still usable.";
+  }
+  if (outcome === "unavailable") {
+    return failed.length > 0
+      ? `Research was unavailable for this run (${failed.join(", ")} failed).`
+      : "Research was unavailable for this run.";
+  }
+  if (outcome === "empty") {
+    return "Research completed with no results for this run.";
+  }
+  if (activity.degraded) {
+    return "Research was degraded for this run.";
+  }
+  return null;
+}
 
 export type RunDetails = {
   provider: string;

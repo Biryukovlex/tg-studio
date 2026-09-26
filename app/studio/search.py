@@ -53,6 +53,45 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+#: Explicit per-batch search outcomes. `healthy` means usable results with no
+#: failure in the engines that ran the query; `partial` means usable results
+#: plus a relevant engine failure; `empty` means the provider succeeded but
+#: returned nothing; `unavailable` means a provider/transport failure left
+#: nothing usable. The legacy `degraded` flag stays compatible: it is set for
+#: `partial` and `unavailable` only.
+SEARCH_OUTCOMES = ("healthy", "partial", "empty", "unavailable")
+
+#: Bounded engine-failure reason codes derived from provider reason text.
+_ENGINE_FAILURE_HINTS = (
+    ("engine_captcha", ("captcha", "robot", "challenge")),
+    ("engine_rate_limited", ("rate", "429", "too many", "quota", "limit exceeded")),
+    ("engine_timeout", ("timeout", "timed out", "deadline")),
+    ("engine_http_error", ("http", "bad gateway", "gateway", "service unavailable", "internal error")),
+)
+
+
+def classify_engine_failure(reason: str) -> str:
+    """Map a provider engine-failure reason to a bounded, non-secret code."""
+
+    lowered = str(reason or "").lower()
+    for code, hints in _ENGINE_FAILURE_HINTS:
+        if any(hint in lowered for hint in hints):
+            return code
+    return "engine_unavailable"
+
+
+def classify_search_outcome(*, result_count: int, relevant_failures: int, transport_failed: bool) -> str:
+    """Combine one batch into a single explicit outcome."""
+
+    if transport_failed or (result_count == 0 and relevant_failures > 0):
+        return "unavailable"
+    if result_count > 0 and relevant_failures > 0:
+        return "partial"
+    if result_count > 0:
+        return "healthy"
+    return "empty"
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).isoformat(timespec="seconds") if value else None
 
@@ -285,6 +324,11 @@ class SearchResponse:
     degraded: bool = False
     warnings: tuple[str, ...] = ()
     trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    outcome: str = "healthy"
+    engine_failures: tuple[dict[str, Any], ...] = ()
+    engines_requested: tuple[str, ...] = ()
+    engines_executed: tuple[str, ...] = ()
+    engine_selection_mismatch: tuple[str, ...] = ()
 
     @property
     def provenance(self) -> dict[str, Any]:
@@ -299,6 +343,11 @@ class SearchResponse:
             "engines": list(self.query.engines),
             "excluded_domains": list(self.query.excluded_domains),
             "recency_days": self.query.recency_days,
+            "outcome": self.outcome,
+            "engine_failures": [dict(item) for item in self.engine_failures],
+            "engines_requested": list(self.engines_requested),
+            "engines_executed": list(self.engines_executed),
+            "engine_selection_mismatch": list(self.engine_selection_mismatch),
         }
 
     def model_dump(self, *, mode: str = "python") -> dict[str, Any]:
@@ -320,6 +369,11 @@ class SearchResponse:
             "degraded": self.degraded,
             "warnings": list(self.warnings),
             "trace_id": self.trace_id,
+            "outcome": self.outcome,
+            "engine_failures": [dict(item) for item in self.engine_failures],
+            "engines_requested": list(self.engines_requested),
+            "engines_executed": list(self.engines_executed),
+            "engine_selection_mismatch": list(self.engine_selection_mismatch),
             "provenance": self.provenance,
         }
 
@@ -455,7 +509,10 @@ class DegradedSearchProvider:
         options = dict(kwargs)
         options.pop("max_results", None)
         normalized = _normalize_query(query, max_results=max(1, int(kwargs.get("max_results", 10))), **options)
-        return SearchResponse(query=normalized, provider=self.provider, degraded=True, warnings=(self.message,))
+        return SearchResponse(
+            query=normalized, provider=self.provider, degraded=True,
+            outcome="unavailable", warnings=(self.message,),
+        )
 
 
 class SearXNGSearchProvider:
@@ -494,7 +551,27 @@ class SearXNGSearchProvider:
         self.client = client
 
     def _degraded(self, query: SearchQuery, message: str) -> SearchResponse:
-        return SearchResponse(query=query, provider=self.provider, degraded=True, warnings=(message,))
+        return SearchResponse(
+            query=query, provider=self.provider, degraded=True,
+            outcome="unavailable", warnings=(message,),
+        )
+
+    @staticmethod
+    def _parse_engine_failures(payload: dict[str, Any]) -> list[dict[str, str]]:
+        """Parse SearXNG unresponsive-engine entries into bounded records."""
+
+        failures: list[dict[str, str]] = []
+        for failure in payload.get("unresponsive_engines", []) or []:
+            if not isinstance(failure, (list, tuple)) or not failure:
+                continue
+            engine = _clean_text(failure[0], limit=80).lower()
+            reason = _clean_text(failure[1] if len(failure) > 1 else "unavailable", limit=120)
+            if not engine:
+                continue
+            failures.append({"engine": engine, "code": classify_engine_failure(reason), "reason": reason})
+            if len(failures) >= 12:
+                break
+        return failures
 
     async def search(self, query: SearchQuery | str, **kwargs: Any) -> SearchResponse:
         # Settings base_url may change at runtime; other bounds are from limits.
@@ -508,6 +585,8 @@ class SearXNGSearchProvider:
         options = dict(kwargs)
         options.pop("max_results", None)
         normalized = _normalize_query(query, max_results=self.max_results, **options)
+        # The agent's engine wording, before the server allowlist narrows it.
+        agent_requested_engines = tuple(normalized.engines)
         requested_engines = tuple(engine for engine in normalized.engines if not self.allowed_engines or engine in self.allowed_engines)
         rejected_engines = tuple(engine for engine in normalized.engines if self.allowed_engines and engine not in self.allowed_engines)
         if normalized.engines and not requested_engines:
@@ -547,20 +626,42 @@ class SearXNGSearchProvider:
             warnings_list = []
             if rejected_engines:
                 warnings_list.append("Engines not enabled: " + ", ".join(rejected_engines))
-            for failure in payload.get("unresponsive_engines", []) or []:
-                if isinstance(failure, (list, tuple)) and failure:
-                    engine = _clean_text(failure[0], limit=80)
-                    reason = _clean_text(failure[1] if len(failure) > 1 else "unavailable", limit=120)
-                    warnings_list.append(f"Engine {engine} did not respond successfully: {reason}.")
+            raw_failures = self._parse_engine_failures(payload)
+            # SearXNG reports instance-wide engine failures, including engines
+            # this batch never used. Only failures in the executed set are
+            # relevant; the rest stay visible as warnings, never as degradation.
+            # When no explicit engine selection was sent, the provider ran its
+            # defaults and every reported failure counts as relevant.
+            executed = tuple(selected_engines)
+            explicit_selection = bool(agent_requested_engines)
+            engine_failures = [
+                {**item, "relevant": (not explicit_selection or item["engine"] in executed)}
+                for item in raw_failures
+            ]
+            relevant_failures = sum(1 for item in engine_failures if item["relevant"])
+            for item in engine_failures:
+                warnings_list.append(
+                    f"Engine {item['engine']} did not respond successfully: {item['reason']}."
+                )
             if blocked_count:
                 warnings_list.append(f"Excluded {blocked_count} result{'s' if blocked_count != 1 else ''} from low-trust or explicitly excluded domains.")
+            outcome = classify_search_outcome(
+                result_count=len(results),
+                relevant_failures=relevant_failures,
+                transport_failed=False,
+            )
             response = SearchResponse(
                 query=normalized,
                 results=tuple(results),
                 provider=self.provider,
                 fetched_at=fetched_at,
-                degraded=bool(payload.get("unresponsive_engines")),
+                degraded=outcome in ("partial", "unavailable"),
                 warnings=tuple(warnings_list),
+                outcome=outcome,
+                engine_failures=tuple(engine_failures),
+                engines_requested=agent_requested_engines,
+                engines_executed=executed,
+                engine_selection_mismatch=rejected_engines,
             )
             await self.cache.put(_cache_key(normalized), response)
             return response

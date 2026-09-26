@@ -217,6 +217,12 @@ def _safe_event_payload(event: Any) -> dict[str, Any]:
                             payload[key] = max(0, min(int(value), 100))
                         except (TypeError, ValueError):
                             continue
+            outcome = candidate.get("search_outcome")
+            if isinstance(outcome, str) and outcome in ("healthy", "partial", "empty", "unavailable"):
+                payload["search_outcome"] = outcome
+            failed = candidate.get("failed_engines")
+            if isinstance(failed, list):
+                payload["failed_engines"] = [str(name)[:80] for name in failed[:8]]
         if isinstance(content, dict):
             if "sources" in content and isinstance(content["sources"], list):
                 payload["source_count"] = min(len(content["sources"]), 100)

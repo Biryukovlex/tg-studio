@@ -28,6 +28,7 @@ import {
   type RunSummary,
   type RunUsage,
   StudioApiError,
+  describeSearchOutcome,
 } from "./api";
 import { describeRunFailure } from "./runFailure";
 import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
@@ -967,7 +968,10 @@ function RunDetailsPanel({ run }: { run: RunSummary | null }) {
                 <span>{shown.activity.source_count} sources · {shown.activity.story_count} stories</span>
                 <span>{shown.activity.cache_hit_count} cache hits · {shown.prompt_version}</span>
               </div>
-              {shown.activity.degraded && <span className="studio-run-details-warning">Research was degraded for this run.</span>}
+              {(() => {
+                const searchNotice = describeSearchOutcome(shown.activity);
+                return searchNotice !== null && <span className="studio-run-details-warning">{searchNotice}</span>;
+              })()}
               {shown.error && <div className="studio-run-details-error"><strong>{shown.error.code}</strong><span>{shown.error.message}</span></div>}
             </>
           )}
