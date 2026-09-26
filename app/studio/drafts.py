@@ -53,12 +53,22 @@ class DraftConflictError(RuntimeError):
 
 
 class ClaimSupport(BaseModel):
-    """A concise factual claim mapped to conversation-scoped source IDs."""
+    """A concise factual claim mapped to conversation-scoped source IDs.
+
+    `passage` (or per-source `passages`) carries the exact supporting quote
+    from fetched article text; the server confirms it occurs in the stored
+    read text before the mapping is accepted. `verified` is server-managed:
+    agent tools set it only for mappings that passed verification, and any
+    owner body edit clears it.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     claim: str = Field(min_length=1, max_length=500)
     source_ids: list[str] = Field(default_factory=list, max_length=12)
+    passage: str = Field(default="", max_length=2_000)
+    passages: dict[str, str] = Field(default_factory=dict)
+    verified: bool = False
 
     @field_validator("source_ids", mode="before")
     @classmethod
@@ -68,6 +78,22 @@ class ClaimSupport(BaseModel):
         if not isinstance(value, (list, tuple, set)):
             raise ValueError("source_ids must be a list")
         return [str(item).strip() for item in value if str(item).strip()][:12]
+
+    @field_validator("passage", mode="before")
+    @classmethod
+    def _coerce_passage(cls, value: Any) -> str:
+        return str(value or "").strip()[:2_000]
+
+    @field_validator("passages", mode="before")
+    @classmethod
+    def _coerce_passages(cls, value: Any) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(key).strip(): str(item or "").strip()[:2_000]
+            for key, item in list(value.items())[:12]
+            if str(key).strip() and str(item or "").strip()
+        }
 
 
 class DraftInput(BaseModel):

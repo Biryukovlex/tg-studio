@@ -86,7 +86,14 @@ async def test_conversational_revision_preserves_direct_user_edit_and_appends_ca
         conversation_id=conversation["id"],
         channel_id=1,
         bundle={
-            "sources": [{"source_id": "story-1", "url": "https://news.test/story-1"}],
+            "sources": [{
+                "source_id": "story-1",
+                "url": "https://news.test/story-1",
+                "title": "Story one",
+                "content": "Story one reports that the council approved the plan.",
+                "accessible": True,
+                "status": "ok",
+            }],
             "stories": [],
         },
     )
@@ -96,7 +103,11 @@ async def test_conversational_revision_preserves_direct_user_edit_and_appends_ca
         payload={
             "body": "Generated first version.",
             "source_ids": ["story-1"],
-            "claim_support": [{"claim": "Generated first version.", "source_ids": ["story-1"]}],
+            "claim_support": [{
+                "claim": "Generated first version.",
+                "source_ids": ["story-1"],
+                "passage": "Story one reports that the council approved the plan.",
+            }],
         },
     )
     user_edit = await repository.save_draft(
@@ -114,7 +125,11 @@ async def test_conversational_revision_preserves_direct_user_edit_and_appends_ca
                 "body": "A shorter regenerated candidate.",
                 "instruction": "Make it shorter.",
                 "source_ids": ["story-1"],
-                "claim_support": [{"claim": "A shorter regenerated candidate.", "source_ids": ["story-1"]}],
+                "claim_support": [{
+                    "claim": "A shorter regenerated candidate.",
+                    "source_ids": ["story-1"],
+                    "passage": "Story one reports that the council approved the plan.",
+                }],
             }
         },
     )

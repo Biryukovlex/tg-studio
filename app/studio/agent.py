@@ -445,8 +445,16 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         *,
         creative: bool,
         fallback_source_ids: list[str] | None = None,
+        inherit_claims: list[dict[str, Any]] | None = None,
     ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
-        """Keep only conversation-scoped IDs and tolerate imperfect tool JSON."""
+        """Keep only conversation-scoped IDs and tolerate imperfect tool JSON.
+
+        Factual claim-to-source mappings are verified against retrieved
+        article content; inherited mappings from an existing draft are
+        re-verified rather than trusted silently.
+        """
+
+        from .provenance import verify_claim_support
 
         bundle = await _research(ctx, settings).get_bundle(
             workspace_id=ctx.deps.workspace_id,
@@ -494,6 +502,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
 
         claims: list[dict[str, Any]] = []
         claim_requested = False
+        submitted: list[dict[str, Any]] = []
         for item in claim_support or []:
             if isinstance(item, ClaimSupport):
                 item = item.model_dump()
@@ -506,10 +515,74 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             claim_requested = claim_requested or bool(claim_values)
             ids = valid_ids(claim_values)
             if claim and ids:
-                claims.append({"claim": claim, "source_ids": ids})
+                entry = {
+                    "claim": claim,
+                    "source_ids": ids,
+                    "passage": str(item.get("passage") or "").strip()[:2_000],
+                    "passages": {
+                        str(key).strip(): str(value or "").strip()[:2_000]
+                        for key, value in (item.get("passages") or {}).items()
+                        if isinstance(item.get("passages"), dict)
+                        and str(key).strip() and str(value or "").strip()
+                    },
+                }
+                submitted.append(entry)
                 for source_id in ids:
                     if source_id not in selected:
                         selected.append(source_id)
+
+        inherited: list[dict[str, Any]] = []
+        for item in inherit_claims or []:
+            if not isinstance(item, dict):
+                continue
+            claim = " ".join(str(item.get("claim") or "").split())[:500]
+            ids = [str(sid).strip() for sid in (item.get("source_ids") or []) if str(sid).strip()][:12]
+            if claim and ids:
+                inherited.append({
+                    "claim": claim,
+                    "source_ids": ids,
+                    "passage": str(item.get("passage") or "").strip()[:2_000],
+                    "passages": {
+                        str(key).strip(): str(value or "").strip()[:2_000]
+                        for key, value in (item.get("passages") or {}).items()
+                        if isinstance(item.get("passages"), dict)
+                        and str(key).strip() and str(value or "").strip()
+                    },
+                })
+
+        to_verify = submitted if (submitted or claim_requested) else inherited
+        if to_verify and not creative:
+            bundle_sources = {source.source_id: source for source in (bundle.sources if bundle else [])}
+            if bundle is None:
+                raise DraftValidationError(
+                    "unverified_claim",
+                    "Factual claims cannot be verified without this conversation's research bundle; "
+                    "search and read the cited sources first, or drop the claim mappings.",
+                    field="claim_support",
+                )
+            verified, failures = verify_claim_support(bundle_sources, to_verify)
+            if failures:
+                details = "\n".join(
+                    f"- '{failure.claim}' → {failure.source_title or failure.source_id}: "
+                    f"{failure.message} [{failure.code}]"
+                    for failure in failures[:8]
+                )
+                raise DraftValidationError(
+                    "unverified_claim",
+                    f"{len(failures)} claim-to-source mapping(s) could not be verified:\n{details}\n"
+                    "Read another source, rewrite or omit the claim, quote the exact passage, or "
+                    "present the uncertainty to the owner instead.",
+                    field="claim_support",
+                )
+            claims.extend(verified)
+            for entry in verified:
+                for source_id in entry["source_ids"]:
+                    if source_id not in selected:
+                        selected.append(source_id)
+        elif creative:
+            # Creative drafts carry no factual assertion; keep the mappings
+            # explicitly unverified instead of verifying or dropping them.
+            claims.extend({**entry, "verified": False} for entry in submitted)
 
         warnings: list[str] = []
         if unknown_ids:
@@ -908,6 +981,12 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
         Copy exact source_id values from get_channel_context/search/read results,
         never URLs or invented IDs. Use creative only for explicitly requested
         fictional/opinion content, not to bypass missing factual evidence.
+        Every factual claim mapping additionally needs the exact supporting
+        passage quoted from the fetched article text ({claim, source_ids,
+        passage}); the server confirms the passage occurs in the stored read
+        text and that the claim's numbers, dates and quoted phrases occur in
+        the passage. Mappings without a verifiable passage are rejected with
+        an actionable error instead of being saved.
         """
 
         _check_cancel(ctx)
@@ -1012,6 +1091,7 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
                 claim_support,
                 creative=effective_creative,
                 fallback_source_ids=list(current.get("source_ids") or []),
+                inherit_claims=list(current.get("claim_support") or []),
             )
         except DraftValidationError as exc:
             return _record_blocked_tool(ctx, "revise_draft", _draft_error(exc))
@@ -1029,11 +1109,9 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             normalized_warnings.append("No web sources were used; the post is based on channel context only.")
         if removed_commentary:
             normalized_warnings.append("Service commentary or a trailing source list was removed from the publication text; sources stay on the artifact.")
-        # Use normalized claims only when body changed; otherwise keep current
-        if body != current.get("body"):
-            claim_support_value = normalized_claims
-        else:
-            claim_support_value = normalized_claims or (current.get("claim_support") or [])
+        # Normalized claims are already verified (including inherited ones);
+        # never silently reuse stale mappings the validator rejected.
+        claim_support_value = normalized_claims
         payload: dict[str, Any] = {
             "body": body,
             "working_title": working_title,

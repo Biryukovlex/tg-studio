@@ -449,6 +449,62 @@ export function draftSaveErrorMessage(error: unknown): string {
   return "Could not save this draft. Try again.";
 }
 
+export type ClaimDisplayItem = {
+  key: string;
+  claim: string;
+  verified: boolean;
+  passage: string;
+  links: { id: string; url: string; title: string }[];
+};
+
+export function claimDisplayItems(
+  draft: Draft | null,
+  sourceLinks: Map<string, { url: string; title: string }>,
+): ClaimDisplayItem[] {
+  return (draft?.claim_support ?? []).map((item, index) => {
+    const links = (item.source_ids ?? []).flatMap((id) => {
+      const source = sourceLinks.get(id);
+      return source ? [{ ...source, id }] : [];
+    });
+    return {
+      key: `${item.claim}-${index}`,
+      claim: item.claim,
+      verified: item.verified === true,
+      passage: item.passage || "",
+      links,
+    };
+  });
+}
+
+function DraftPanelClaims({ draft, sourceLinks }: {
+  draft: Draft | null;
+  sourceLinks: Map<string, { url: string; title: string }>;
+}) {
+  const items = claimDisplayItems(draft, sourceLinks);
+  if (items.length === 0) return null;
+  return (
+    <div className="studio-draft-notes" aria-label="Claim support">
+      <strong>Claim support</strong>
+      {items.map((item) => (
+        <div key={item.key} className={`studio-claim${item.verified ? "" : " is-unverified"}`}>
+          <p>
+            <span className="studio-claim-mark" aria-label={item.verified ? "Verified claim" : "Unverified claim"}>
+              {item.verified ? "✓" : "!"}
+            </span>
+            <span>{item.claim}</span>
+          </p>
+          {item.passage && <blockquote cite={item.links[0]?.url}>“{item.passage}”</blockquote>}
+          {item.links.length > 0 && (
+            <div className="studio-source-chips">
+              {item.links.map((source) => <a key={source.id} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}
+            </div>
+          )}
+          {!item.verified && <p className="studio-claim-note">Not verified against article text — edit the body to re-verify, or treat as uncertain.</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
 function DraftPanel({
   conversationId,
   seedDraft,
@@ -801,6 +857,7 @@ function DraftPanel({
           </div>
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}
           {clickableSources.length > 0 && <div className="studio-draft-notes"><strong>Sources</strong><div className="studio-source-chips">{clickableSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}</div></div>}
+          <DraftPanelClaims draft={draft} sourceLinks={sourceLinks} />
           <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={shownCounter.overLimit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button>{copyNote && <span className="studio-copy-note" role="status">{copyNote}</span>}<span className="studio-draft-save-group"><button type="button" className="studio-draft-save" onClick={() => saveNow(false)} disabled={!canSave || viewingOld} title="Overwrite the current version with your edits">Save</button><button type="button" className="studio-draft-save" onClick={() => saveNow(true)} disabled={!canSave || viewingOld} title="Keep the current version and add your edits as a new one">Save as new version</button></span><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) choose(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version || saveState === "saving"}>Choose</button></label></div>
           {saveError && <p className="studio-save-error" role="alert">{saveError}</p>}
         </div>

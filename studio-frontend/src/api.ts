@@ -27,7 +27,13 @@ export type Conversation = {
   archived_at: string | null;
 };
 
-export type DraftClaim = { claim: string; source_ids: string[] };
+export type DraftClaim = {
+  claim: string;
+  source_ids: string[];
+  passage?: string;
+  passages?: Record<string, string>;
+  verified?: boolean;
+};
 
 export type Draft = {
   id: string;

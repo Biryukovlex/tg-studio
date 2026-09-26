@@ -130,6 +130,10 @@ class SourceEvidence:
     quality_score: float = 0.0
     quality_notes: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Bounded full read text. Search results never set this (snippet-only);
+    # only a successful page read populates it, which is what makes a source
+    # usable as verified claim evidence.
+    content: str = ""
 
     @property
     def undated(self) -> bool:
@@ -146,6 +150,7 @@ class SourceEvidence:
             "published_at": _iso(self.published_at),
             "retrieved_at": _iso(self.retrieved_at),
             "excerpt": self.excerpt,
+            "content": self.content,
             "content_hash": self.content_hash,
             "provider": self.provider,
             "query": self.query,
@@ -156,6 +161,7 @@ class SourceEvidence:
             "quality_score": round(self.quality_score, 6),
             "quality_notes": list(self.quality_notes),
             "metadata": dict(self.metadata),
+            "has_read_content": bool(self.content and self.content.strip()),
         }
 
     as_dict = model_dump
@@ -269,6 +275,15 @@ def _source(value: SourceEvidence | SearchResult | SourceDocument | dict[str, An
     domain = str(data.get("domain") or (urlsplit(canonical).hostname if canonical else "") or "").lower()
     title = str(data.get("title") or "").strip()
     excerpt = str(data.get("excerpt") or data.get("snippet") or data.get("text") or "").strip()[:2_000]
+    # Full read text is stored only when a page read supplied it. Search
+    # results carry a snippet but no text/content key, so snippet-only
+    # sources can never verify a factual claim.
+    if isinstance(data.get("content"), str) and data.get("content"):
+        content = str(data.get("content"))[:12_000]
+    elif isinstance(data.get("text"), str) and data.get("text") and "snippet" not in data:
+        content = str(data.get("text"))[:12_000]
+    else:
+        content = ""
     source_hash = str(data.get("content_hash") or data.get("source_hash") or "")
     source_id = str(data.get("source_id") or "").strip()
     if not source_id:
@@ -298,6 +313,7 @@ def _source(value: SourceEvidence | SearchResult | SourceDocument | dict[str, An
         warnings=warnings,
         injection_flags=flags,
         metadata={"provenance": dict(data.get("provenance") or {}), "source_role": role},
+        content=content,
     )
     # Quality is deliberately a bounded, transparent heuristic.  It is
     # persisted with the source so a later model can explain the limitation
@@ -823,3 +839,158 @@ cluster_sources = cluster_stories
 rank_stories = rank_sources
 normalize_url = canonicalize_url
 canonicalize_source_url = canonicalize_url
+
+
+# ---------------------------------------------------------------------------
+# Claim-to-article verification (factual drafts)
+# ---------------------------------------------------------------------------
+
+#: Maximum passage characters the model may attach to one claim mapping.
+MAX_VERIFICATION_PASSAGE_CHARS = 2_000
+
+_NUMBER_RE = re.compile(r"[€$£¥]?\d[\d\s.,]*%?")
+_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+_QUOTE_RE = re.compile("“([^”]{4,})”|\"([^\"]{4,})\"|«([^»]{4,})»")
+
+
+def _normalize_passage(value: str) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _claim_check_tokens(claim: str) -> tuple[list[str], list[str], list[str]]:
+    """Extract checkable numbers, years and quoted phrases from a claim."""
+
+    text = str(claim or "")
+    numbers: list[str] = []
+    for match in _NUMBER_RE.findall(text):
+        digits = re.sub(r"\D", "", match)
+        if digits:
+            numbers.append(digits)
+    years = _YEAR_RE.findall(text)
+    quotes = [
+        part.strip()
+        for group in _QUOTE_RE.findall(text)
+        for part in ([group] if isinstance(group, str) else list(group))
+        if part and part.strip()
+    ]
+    return numbers, years, quotes
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimVerificationFailure:
+    """One claim-to-source mapping the server could not verify."""
+
+    claim_index: int
+    claim: str
+    source_id: str
+    source_title: str
+    source_url: str
+    code: str
+    message: str
+
+
+def verify_claim_support(
+    sources: Mapping[str, SourceEvidence],
+    claims: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[ClaimVerificationFailure]]:
+    """Check every factual claim mapping against retrieved article content.
+
+    Returns accepted mappings (with ``verified`` set) and structured
+    failures. Search snippets, blocked pages and failed reads never verify;
+    the model must cite an exact passage from fetched text, and numbers,
+    years and quoted phrases from the claim must occur in that passage.
+    """
+
+    accepted: list[dict[str, Any]] = []
+    failures: list[ClaimVerificationFailure] = []
+    for index, item in enumerate(list(claims or [])[:12]):
+        claim = " ".join(str(item.get("claim") or "").split())[:500]
+        if not claim:
+            continue
+        shared_passage = str(item.get("passage") or "").strip()[:MAX_VERIFICATION_PASSAGE_CHARS]
+        per_source = item.get("passages") if isinstance(item.get("passages"), dict) else {}
+        for source_id in list(dict.fromkeys(str(sid) for sid in (item.get("source_ids") or []) if str(sid).strip()))[:12]:
+            source = sources.get(source_id)
+            title = str(getattr(source, "title", "") or "")[:160]
+            url = str(getattr(source, "url", "") or "")[:300]
+
+            def _fail(code: str, message: str) -> None:
+                failures.append(ClaimVerificationFailure(
+                    claim_index=index, claim=claim[:200], source_id=source_id,
+                    source_title=title, source_url=url, code=code, message=message,
+                ))
+
+            if source is None:
+                _fail("unknown_source", f"Source '{source_id}' is not in this conversation's research.")
+                continue
+            if not source.accessible or source.status != "ok":
+                _fail(
+                    "unread_source",
+                    f"'{source.title or source.url}' could not be read (status: {source.status}); "
+                    "read the article successfully before citing it.",
+                )
+                continue
+            if not (source.content or "").strip():
+                _fail(
+                    "snippet_only",
+                    f"'{source.title or source.url}' has only a search snippet stored; "
+                    "read the full article before citing it as proof.",
+                )
+                continue
+            raw_passage = per_source.get(source_id, shared_passage)
+            passage = str(raw_passage or "").strip()[:MAX_VERIFICATION_PASSAGE_CHARS]
+            if not passage:
+                _fail(
+                    "passage_required",
+                    "Cite the exact supporting passage from the fetched article text; "
+                    "a source link alone is not corroboration.",
+                )
+                continue
+            normalized_text = _normalize_passage(source.content)
+            normalized_passage = _normalize_passage(passage)
+            if not normalized_passage or normalized_passage not in normalized_text:
+                _fail(
+                    "passage_not_found",
+                    "The cited passage does not occur in the stored article text; "
+                    "quote the article exactly or read the correct source.",
+                )
+                continue
+            numbers, years, quotes = _claim_check_tokens(claim)
+            passage_digits = re.sub(r"\D", "", normalized_passage)
+            missing = [
+                token for token in [*numbers, *years]
+                if token and token not in normalized_passage.replace(" ", "") and token not in passage_digits
+            ]
+            missing_quotes = [
+                quoted for quoted in quotes
+                if _normalize_passage(quoted) not in normalized_passage
+            ]
+            missing.extend(missing_quotes)
+            if missing:
+                _fail(
+                    "unsupported_detail",
+                    f"The passage does not contain the claim's specific detail(s): {', '.join(missing[:6])}. "
+                    "Cite a passage that actually states them.",
+                )
+                continue
+            accepted.append({
+                "claim": claim,
+                "claim_index": index,
+                "source_ids": [source_id],
+                "passage": passage,
+                "verified": True,
+            })
+    merged: list[dict[str, Any]] = []
+    by_index: dict[int, dict[str, Any]] = {}
+    for pair in accepted:
+        entry = by_index.get(pair["claim_index"])
+        if entry is None:
+            entry = {"claim": pair["claim"], "source_ids": [], "passages": {}, "verified": True}
+            by_index[pair["claim_index"]] = entry
+            merged.append(entry)
+        entry["source_ids"].append(pair["source_ids"][0])
+        entry["passages"][pair["source_ids"][0]] = pair["passage"]
+    for entry in merged:
+        only = next(iter(entry["passages"].values()), "")
+        entry["passage"] = only
+    return merged, failures

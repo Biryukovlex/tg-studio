@@ -990,6 +990,14 @@ class StudioRepository:
                 payload=merged,
             )
             values = _draft_values(merged, known_source_ids=known, require_sources=not bool(merged.get("creative", False)))
+            if origin == "user_edit" and values["body"] != current.get("body"):
+                # An owner body edit invalidates generated verification: the
+                # saved mappings stay editable but are no longer presented
+                # as verified.
+                values["claim_support"] = [
+                    {**item, "verified": False} if isinstance(item, dict) else item
+                    for item in values["claim_support"]
+                ]
             current_version = int(current.get("current_version") or 1)
             if new_version:
                 max_version = (
@@ -1230,12 +1238,12 @@ class StudioRepository:
                 """INSERT INTO studio_sources(
                        workspace_id, id, conversation_id, channel_id, url, canonical_url,
                        title, publisher, domain, published_at, retrieved_at, excerpt,
-                       content_hash, provider, query, accessible, status, warnings,
+                       content, content_hash, provider, query, accessible, status, warnings,
                        injection_flags, metadata_json, quality_score, quality_notes
                    ) VALUES (
                        :workspace_id, :id, :conversation_id, :channel_id, :url, :canonical_url,
                        :title, :publisher, :domain, :published_at, :retrieved_at, :excerpt,
-                       :content_hash, :provider, :query, :accessible, :status,
+                       :content, :content_hash, :provider, :query, :accessible, :status,
                        CAST(:warnings AS jsonb), CAST(:injection_flags AS jsonb),
                        CAST(:metadata_json AS jsonb), :quality_score, CAST(:quality_notes AS jsonb)
                    ) ON CONFLICT (workspace_id, conversation_id, id) DO UPDATE SET
@@ -1243,7 +1251,7 @@ class StudioRepository:
                        url=EXCLUDED.url, canonical_url=EXCLUDED.canonical_url, title=EXCLUDED.title,
                        publisher=EXCLUDED.publisher, domain=EXCLUDED.domain,
                        published_at=EXCLUDED.published_at, retrieved_at=EXCLUDED.retrieved_at,
-                       excerpt=EXCLUDED.excerpt, content_hash=EXCLUDED.content_hash,
+                       excerpt=EXCLUDED.excerpt, content=EXCLUDED.content, content_hash=EXCLUDED.content_hash,
                        provider=EXCLUDED.provider, query=EXCLUDED.query, accessible=EXCLUDED.accessible,
                        status=EXCLUDED.status, warnings=EXCLUDED.warnings,
                        injection_flags=EXCLUDED.injection_flags, metadata_json=EXCLUDED.metadata_json,
@@ -1266,6 +1274,7 @@ class StudioRepository:
                         "published_at": _datetime(source.get("published_at")),
                         "retrieved_at": _datetime(source.get("retrieved_at")) or utcnow(),
                         "excerpt": str(source.get("excerpt") or "")[:2_000],
+                        "content": str(source.get("content") or "")[:12_000],
                         "content_hash": str(source.get("content_hash") or "")[:128],
                         "provider": str(source.get("provider") or "")[:80],
                         "query": str(source.get("query") or "")[:500],
@@ -2484,6 +2493,14 @@ class MemoryStudioRepository:
                 raise DraftConflictError(public, expected_revision=expected_revision)
             merged = self._draft_payload(public, payload)
             values, _ = self._validate_memory_draft(current["conversation_id"], merged)
+            if origin == "user_edit" and values["body"] != current.get("body"):
+                # An owner body edit invalidates generated verification: the
+                # saved mappings stay editable but are no longer presented
+                # as verified.
+                values["claim_support"] = [
+                    {**item, "verified": False} if isinstance(item, dict) else item
+                    for item in values["claim_support"]
+                ]
             versions = self.draft_versions.setdefault(draft_id, [])
             now = utcnow()
             current_version = int(public.get("current_version") or 1)

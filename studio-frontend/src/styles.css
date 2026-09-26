@@ -303,6 +303,12 @@ button { color: inherit; }
 .studio-profile-status { margin-top: 12px; color: var(--studio-soft); }
 .studio-profile-status.is-error { color: #f6b8a9; }
 .studio-profile-status button { margin: 0 8px 0 0; }
+.studio-claim { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--studio-line); font-size: 11px; }
+.studio-claim p { margin: 2px 0; }
+.studio-claim-mark { display: inline-block; min-width: 16px; font-weight: 800; color: var(--studio-accent); }
+.studio-claim.is-unverified .studio-claim-mark { color: #f6b8a9; }
+.studio-claim blockquote { margin: 4px 0; padding-left: 8px; border-left: 2px solid var(--studio-line); color: var(--studio-soft); font-style: italic; }
+.studio-claim-note { color: var(--studio-muted); }
 .studio-rail-foot .studio-rail-foot-buttons { display: flex; gap: 8px; margin-left: auto; }
 .studio-draft-preview { min-height: 300px; max-height: 58vh; overflow-y: auto; overflow-x: hidden; margin: 0; padding: 13px; border: 1px solid rgba(149,190,203,.24); border-radius: 12px; background: rgba(7,19,29,.7); color: #efffff; font-size: 12px; line-height: 1.58; }
 .studio-draft-mode { border: 1px solid var(--studio-line); border-radius: 9px; padding: 8px 10px; color: var(--studio-soft); background: rgba(110,231,221,.06); font-size: 10px; font-weight: 800; cursor: pointer; }

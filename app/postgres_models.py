@@ -541,6 +541,7 @@ class StudioSource(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     excerpt: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    content: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     content_hash: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     provider: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     query: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
