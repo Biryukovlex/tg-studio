@@ -175,6 +175,8 @@ def safe_error(exc: BaseException) -> tuple[str, str, bool]:
         code = "provider_model_not_found"
     elif status_code == 400:
         code = "provider_bad_request"
+    elif status_code is not None and 500 <= status_code <= 599:
+        code = "provider_unavailable"
     elif any(token in text for token in ("rate", "quota", "429")):
         code = "provider_rate_limited"
     elif any(token in text for token in ("timeout", "timed out")):
@@ -272,7 +274,10 @@ def emit_observation(logger: Any, kind: str, **fields: Any) -> None:
         "draft_id",
         "error_code",
         "exception_class",
+        "upstream_class",
         "status_code",
+        "provider_code",
+        "phase",
         "usage",
     }
     safe: dict[str, Any] = {}
@@ -285,7 +290,7 @@ def emit_observation(logger: Any, kind: str, **fields: Any) -> None:
             safe[key] = str(value)[:120]
         elif key == "status_code":
             safe[key] = _bounded_int(value)
-        elif key.endswith("_id") or key in {"provider", "requested_model", "actual_model", "prompt_version", "tool_name", "event_type", "stage", "status", "error_code"}:
+        elif key.endswith("_id") or key in {"provider", "requested_model", "actual_model", "prompt_version", "tool_name", "event_type", "stage", "status", "error_code", "phase", "upstream_class"}:
             safe[key] = str(value)[:160]
         elif key in {"cache_hit", "degraded"}:
             safe[key] = bool(value)

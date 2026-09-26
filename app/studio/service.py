@@ -51,7 +51,16 @@ log = logging.getLogger("studio")
 
 
 class _UpstreamRunError(RuntimeError):
-    """Internal sentinel for an error already emitted by the UI adapter."""
+    """Internal sentinel for an error already emitted by the UI adapter.
+
+    ``diagnostics`` carries the upstream classification captured before
+    AG-UI wrapping so the failure path persists it instead of re-deriving
+    everything from the flattened message text.
+    """
+
+    def __init__(self, message: str = "", *, diagnostics: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostics: dict[str, Any] = dict(diagnostics or {})
 
 
 @dataclass(slots=True)
@@ -551,6 +560,12 @@ class StudioService:
             agent = self.agent_factory(self.settings)
         except Exception as exc:  # noqa: BLE001 - convert setup failures to a safe response
             code, message, retryable = _safe_error(exc)
+            from .diagnostics import build_run_diagnostics
+
+            setup_diagnostics = build_run_diagnostics(
+                exc, phase="startup", requested_model=model_name(self.settings),
+                elapsed_ms=0, requests=0, tool_calls=0,
+            )
             await self.repository.set_run_status(
                 run_id,
                 status="failed",
@@ -558,6 +573,7 @@ class StudioService:
                 error_code=code,
                 error_message=message,
                 usage=normalize_usage(None, latency_ms=0),
+                diagnostics=setup_diagnostics,
             )
             emit_observation(
                 log,
@@ -572,7 +588,10 @@ class StudioService:
                 prompt_version=PROMPT_VERSION,
                 error_code=code,
                 exception_class=exc.__class__.__name__,
+                upstream_class=setup_diagnostics.get("exception_class"),
+                phase="startup",
                 status_code=safe_status_code(exc),
+                provider_code=setup_diagnostics.get("provider_code"),
                 _level=logging.WARNING,
             )
             self.registry.finish(run_id)
@@ -639,6 +658,38 @@ class StudioService:
         actual_model_holder: dict[str, str] = {}
         final_output_holder: dict[str, str] = {}
         observed_tool_calls = 0
+        saw_model_output = False
+
+        def _run_elapsed_ms() -> int:
+            return int(max(0, (time.monotonic() - run_started_monotonic) * 1000))
+
+        def _run_requests() -> int:
+            try:
+                return max(0, int(normalize_usage(usage_holder).get("requests", 0)))
+            except Exception:  # noqa: BLE001 - diagnostics must never crash the run
+                return 0
+
+        def _failure_phase() -> str:
+            from .diagnostics import phase_for_failure
+
+            return phase_for_failure(
+                tool_calls_started=observed_tool_calls, model_output_seen=saw_model_output
+            )
+
+        def _failure_diagnostics(exc: BaseException) -> dict[str, Any]:
+            from .diagnostics import build_run_diagnostics
+
+            stored = dict(getattr(exc, "diagnostics", None) or ())
+            if stored:
+                return stored
+            return build_run_diagnostics(
+                exc,
+                phase=_failure_phase(),
+                requested_model=model_name(self.settings),
+                elapsed_ms=_run_elapsed_ms(),
+                requests=_run_requests(),
+                tool_calls=observed_tool_calls,
+            )
         deps = StudioDeps(
             repository=self.repository,
             workspace_id=self.repository.workspace_id,
@@ -773,6 +824,7 @@ class StudioService:
                             # Tool activity remains live. Only the accepted
                             # final reply is shown, not provisional narration.
                             if event_type.startswith(("TEXT_MESSAGE_", "THINKING_", "REASONING_")):
+                                saw_model_output = True
                                 continue
                             event_payload = _safe_event_payload(event)
                             if event_type == "RUN_FINISHED":
@@ -783,13 +835,29 @@ class StudioService:
                                 )
                             elif event_type == "RUN_ERROR":
                                 # The adapter exposes provider/model failures as
-                                # terminal protocol events. Let the recovery
-                                # block decide whether this is a failed run or
-                                # a successfully saved artifact with only its
-                                # optional chat acknowledgement missing.
-                                raise _UpstreamRunError(
+                                # terminal protocol events. Classify the upstream
+                                # message immediately, before AG-UI wrapping
+                                # erases it, and carry the result on the
+                                # sentinel. Let the recovery block decide whether
+                                # this is a failed run or a successfully saved
+                                # artifact with only its optional chat
+                                # acknowledgement missing.
+                                from .diagnostics import describe_upstream_failure
+
+                                upstream_message = (
                                     getattr(event, "message", "")
                                     or "The provider ended the AG-UI run with an error."
+                                )
+                                raise _UpstreamRunError(
+                                    upstream_message,
+                                    diagnostics=describe_upstream_failure(
+                                        upstream_message,
+                                        phase=_failure_phase(),
+                                        requested_model=model_name(self.settings),
+                                        elapsed_ms=_run_elapsed_ms(),
+                                        requests=_run_requests(),
+                                        tool_calls=observed_tool_calls,
+                                    ),
                                 )
                             await self.repository.append_event(
                                 run_id,
@@ -824,7 +892,9 @@ class StudioService:
                             else:
                                 await queue.put(event)
                     if not run_finished:
-                        raise _UpstreamRunError("The AG-UI run ended without a completion event.")
+                        ended = _UpstreamRunError("The AG-UI run ended without a completion event.")
+                        ended.diagnostics = _failure_diagnostics(ended)
+                        raise ended
                     if handle.cancelled:
                         raise asyncio.CancelledError
                 assistant_text = (final_output_holder["value"] if "value" in final_output_holder else "".join(output_parts)).strip()
@@ -880,12 +950,23 @@ class StudioService:
                 status = "cancelled" if user_cancelled else "interrupted"
                 code = "run_cancelled" if user_cancelled else "run_interrupted"
                 message = "Run cancelled by the user." if user_cancelled else "The worker stopped before completion."
+                cancel_diagnostics = {
+                    "phase": _failure_phase(),
+                    "error_code": code,
+                    "exception_class": "CancelledError" if user_cancelled else "InterruptedError",
+                    "status_code": None,
+                    "provider_code": None,
+                    "requested_model": model_name(self.settings),
+                    "elapsed_ms": _run_elapsed_ms(),
+                    "requests": _run_requests(),
+                    "tool_calls": observed_tool_calls,
+                }
                 if current and current.get("status") in {"queued", "running"}:
                     usage = normalize_usage(
                         usage_holder,
                         latency_ms=int(max(0, (time.monotonic() - run_started_monotonic) * 1000)),
                     )
-                    await self.repository.append_event(run_id, event_type=event_type, safe_payload={"usage": usage})
+                    await self.repository.append_event(run_id, event_type=event_type, safe_payload={"usage": usage, "diagnostics": cancel_diagnostics})
                     with suppress(RunClaimLost):
                         await self.repository.set_run_status(
                             run_id,
@@ -895,6 +976,7 @@ class StudioService:
                             error_message=message,
                             usage=usage,
                             worker_id=worker_id,
+                            diagnostics=cancel_diagnostics,
                         )
                     emit_observation(
                         log,
@@ -910,9 +992,12 @@ class StudioService:
                         prompt_version=PROMPT_VERSION,
                         usage=usage,
                         error_code=code,
+                        phase=cancel_diagnostics["phase"],
+                        _level=logging.WARNING,
                     )
             except Exception as exc:  # noqa: BLE001 - persist only a safe classification
                 code, message, _ = _safe_error(exc)
+                diagnostics = _failure_diagnostics(exc)
                 current = await self.repository.get_run(run_id)
                 if await emit_terminal_notice(current):
                     return
@@ -1008,7 +1093,7 @@ class StudioService:
                     await self.repository.append_event(
                         run_id,
                         event_type="RUN_ERROR",
-                        safe_payload={"code": code, "usage": usage},
+                        safe_payload={"code": code, "usage": usage, "diagnostics": diagnostics},
                     )
                     with suppress(RunClaimLost):
                         await self.repository.set_run_status(
@@ -1019,6 +1104,7 @@ class StudioService:
                             error_message=message,
                             usage=usage,
                             worker_id=worker_id,
+                            diagnostics=diagnostics,
                         )
                     emit_observation(
                         log,
@@ -1035,7 +1121,10 @@ class StudioService:
                         usage=usage,
                         error_code=code,
                         exception_class=exc.__class__.__name__,
+                        upstream_class=diagnostics.get("exception_class"),
+                        phase=diagnostics.get("phase"),
                         status_code=safe_status_code(exc),
+                        provider_code=diagnostics.get("provider_code"),
                         _level=logging.WARNING,
                     )
             finally:
@@ -1083,6 +1172,17 @@ class StudioService:
                 stage="cancelled",
                 error_code="run_cancelled",
                 error_message="Run cancelled by the user.",
+                diagnostics={
+                    "phase": "startup",
+                    "error_code": "run_cancelled",
+                    "exception_class": "CancelledError",
+                    "status_code": None,
+                    "provider_code": None,
+                    "requested_model": model_name(self.settings),
+                    "elapsed_ms": 0,
+                    "requests": 0,
+                    "tool_calls": 0,
+                },
             )
             await self.repository.append_event(run_id, event_type="RUN_CANCELLED", safe_payload={})
         return updated

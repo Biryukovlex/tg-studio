@@ -111,6 +111,7 @@ def _message(row: dict[str, Any]) -> dict[str, Any]:
 
 def _run(row: dict[str, Any]) -> dict[str, Any]:
     error_code, error_message, _ = safe_error_for_code(row.get("error_code"), row.get("error_message"))
+    diagnostics = _run_diagnostics(row)
     return {
         "id": str(row["id"]),
         "conversation_id": str(row["conversation_id"]),
@@ -122,10 +123,36 @@ def _run(row: dict[str, Any]) -> dict[str, Any]:
         "usage": normalize_usage(row.get("usage")),
         "error_code": error_code or None,
         "error_message": error_message or None,
+        "diagnostics": diagnostics,
         "created_at": _iso(row.get("created_at")),
         "started_at": _iso(row.get("started_at")),
         "finished_at": _iso(row.get("finished_at")),
         "duration_ms": duration_ms(row.get("started_at"), row.get("finished_at")),
+    }
+
+
+def _run_diagnostics(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Project persisted non-secret failure metadata, if a run recorded any."""
+
+    phase = str(row.get("error_phase") or "")
+    error_class = str(row.get("error_class") or "")
+    status_code = row.get("error_status")
+    provider_code = row.get("error_provider_code")
+    if not phase and not error_class and status_code is None and provider_code is None:
+        return None
+    try:
+        status_number = int(status_code) if status_code is not None else None
+    except (TypeError, ValueError):
+        status_number = None
+    try:
+        provider_number = int(provider_code) if provider_code is not None else None
+    except (TypeError, ValueError):
+        provider_number = None
+    return {
+        "phase": phase[:32] or None,
+        "exception_class": error_class[:80] or None,
+        "status_code": status_number if status_number is not None and 100 <= status_number <= 599 else None,
+        "provider_code": provider_number if provider_number is not None and 100 <= provider_number <= 599 else None,
     }
 
 
@@ -147,6 +174,7 @@ _PUBLIC_EVENT_KEYS = {
     "draft_id",
     "code",
     "usage",
+    "diagnostics",
 }
 
 
@@ -161,6 +189,25 @@ def _public_event_payload(raw: Any) -> dict[str, Any]:
             continue
         if key == "usage":
             payload[key] = normalize_usage(value)
+        elif key == "diagnostics" and isinstance(value, dict):
+            phase = str(value.get("phase") or "")[:32] or None
+            error_class = str(value.get("exception_class") or "")[:80] or None
+            error_code = str(value.get("error_code") or "")[:80] or None
+            try:
+                status_number = int(value["status_code"]) if value.get("status_code") is not None else None
+            except (TypeError, ValueError):
+                status_number = None
+            try:
+                provider_number = int(value["provider_code"]) if value.get("provider_code") is not None else None
+            except (TypeError, ValueError):
+                provider_number = None
+            payload[key] = {
+                "phase": phase,
+                "error_code": error_code,
+                "exception_class": error_class,
+                "status_code": status_number if status_number is not None and 100 <= status_number <= 599 else None,
+                "provider_code": provider_number if provider_number is not None and 100 <= provider_number <= 599 else None,
+            }
         elif key == "providers" and isinstance(value, list):
             payload[key] = [str(item)[:80] for item in value[:4]]
         elif key in {"tool_name", "provider", "analysis_id", "story_cluster_id", "draft_id", "code"}:
@@ -914,6 +961,7 @@ def build_router() -> APIRouter:
                 "usage": public_run["usage"],
                 "activity": _run_activity(events),
                 "error": error,
+                "diagnostics": public_run.get("diagnostics"),
             },
             "events": [
                 {

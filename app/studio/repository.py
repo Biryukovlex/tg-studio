@@ -135,6 +135,14 @@ def _draft_values(payload: dict[str, Any] | DraftInput, *, known_source_ids: set
     return values
 
 
+def _diagnostic_int(value: Any) -> int | None:
+    try:
+        number = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if 100 <= number <= 599 else None
+
+
 def _draft_uuid(value: Any) -> uuid.UUID:
     try:
         return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
@@ -217,7 +225,7 @@ class StudioRepositoryProtocol(Protocol):
     async def get_run(self, run_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def get_active_run(self, conversation_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def get_events(self, run_id: uuid.UUID, *, after: int = 0) -> list[dict[str, Any]]: ...
-    async def set_run_status(self, run_id: uuid.UUID, *, status: str, stage: str | None = None, error_code: str | None = None, error_message: str | None = None, actual_model: str | None = None, usage: dict[str, Any] | None = None, worker_id: str | None = None) -> dict[str, Any]: ...
+    async def set_run_status(self, run_id: uuid.UUID, *, status: str, stage: str | None = None, error_code: str | None = None, error_message: str | None = None, actual_model: str | None = None, usage: dict[str, Any] | None = None, worker_id: str | None = None, diagnostics: dict[str, Any] | None = None) -> dict[str, Any]: ...
     async def append_event(self, run_id: uuid.UUID, *, event_type: str, safe_payload: dict[str, Any] | None = None, result_content: str | None = None) -> dict[str, Any]: ...
     async def list_tool_result_logs(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
     async def request_cancel(self, run_id: uuid.UUID) -> dict[str, Any]: ...
@@ -1804,6 +1812,7 @@ class StudioRepository:
         actual_model: str | None = None,
         usage: dict[str, Any] | None = None,
         worker_id: str | None = None,
+        diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if status not in {"queued", "running", "succeeded", "failed", "cancelled", "interrupted"}:
             raise StudioRepositoryError("unsupported run status")
@@ -1815,6 +1824,10 @@ class StudioRepository:
                           error_code=:error_code, error_message=:error_message,
                           actual_model=COALESCE(:actual_model, actual_model),
                           usage=CASE WHEN CAST(:usage AS jsonb) IS NULL THEN usage ELSE CAST(:usage AS jsonb) END,
+                          error_phase=COALESCE(:error_phase, error_phase),
+                          error_class=COALESCE(:error_class, error_class),
+                          error_status=COALESCE(:error_status, error_status),
+                          error_provider_code=COALESCE(:error_provider_code, error_provider_code),
                           finished_at=CASE WHEN :terminal THEN COALESCE(finished_at, now()) ELSE finished_at END,
                           lease_expires_at=CASE WHEN :terminal THEN NULL ELSE lease_expires_at END
                     WHERE workspace_id=:workspace_id AND id=:run_id
@@ -1830,6 +1843,10 @@ class StudioRepository:
                     "usage": json.dumps(usage) if usage is not None else None,
                     "terminal": terminal,
                     "worker_id": worker_id,
+                    "error_phase": str((diagnostics or {}).get("phase") or "")[:32] or None,
+                    "error_class": str((diagnostics or {}).get("exception_class") or "")[:80] or None,
+                    "error_status": _diagnostic_int((diagnostics or {}).get("status_code")),
+                    "error_provider_code": _diagnostic_int((diagnostics or {}).get("provider_code")),
                 },
             )
         ).mappings().first()
@@ -2883,13 +2900,22 @@ class MemoryStudioRepository:
             row["lease_expires_at"] = now + timedelta(seconds=max(1, lease_seconds))
             return dict(row)
 
-    async def set_run_status(self, run_id: uuid.UUID, *, status: str, stage: str | None = None, error_code: str | None = None, error_message: str | None = None, actual_model: str | None = None, usage: dict[str, Any] | None = None, worker_id: str | None = None) -> dict[str, Any]:
+    async def set_run_status(self, run_id: uuid.UUID, *, status: str, stage: str | None = None, error_code: str | None = None, error_message: str | None = None, actual_model: str | None = None, usage: dict[str, Any] | None = None, worker_id: str | None = None, diagnostics: dict[str, Any] | None = None) -> dict[str, Any]:
         row = self.runs.get(run_id)
         if row is None:
             raise RunNotFound("run is not part of the active workspace")
         if worker_id is not None and row.get("worker_id") != worker_id:
             raise RunClaimLost("run is owned by a different worker")
         row.update({"status": status, "stage": stage or row["stage"], "error_code": error_code, "error_message": error_message, "actual_model": actual_model or row["actual_model"], "usage": usage if usage is not None else row["usage"]})
+        if diagnostics:
+            if diagnostics.get("phase"):
+                row["error_phase"] = str(diagnostics["phase"])[:32]
+            if diagnostics.get("exception_class"):
+                row["error_class"] = str(diagnostics["exception_class"])[:80]
+            if _diagnostic_int(diagnostics.get("status_code")) is not None:
+                row["error_status"] = _diagnostic_int(diagnostics.get("status_code"))
+            if _diagnostic_int(diagnostics.get("provider_code")) is not None:
+                row["error_provider_code"] = _diagnostic_int(diagnostics.get("provider_code"))
         if status in {"succeeded", "failed", "cancelled", "interrupted"}:
             row["finished_at"] = row["finished_at"] or utcnow()
             row["lease_expires_at"] = None
