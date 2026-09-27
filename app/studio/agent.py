@@ -6,9 +6,10 @@ import asyncio
 import re
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from pydantic_ai import Agent, ModelRetry, RunContext
+from pydantic_ai.settings import ModelSettings
 
 from .. import limits
 from .model import build_model
@@ -18,12 +19,7 @@ from .context import ContextAssembler, ContextPack, profile_block_from_mapping
 from .drafts import ClaimSupport, DraftConflictError, DraftValidationError, diff_summary
 from .schemas import ChannelContext
 from .research import ResearchService
-
-
-class StudioContextReader(Protocol):
-    async def channel_context(self, channel_id: int) -> dict[str, Any]: ...
-
-    async def performance_rows(self, channel_id: int) -> list[dict[str, Any]]: ...
+from .repository import StudioRepositoryProtocol
 
 
 @dataclass(slots=True)
@@ -35,7 +31,7 @@ class StudioDeps:
     accepted from model tool arguments.
     """
 
-    repository: StudioContextReader
+    repository: StudioRepositoryProtocol
     workspace_id: Any
     conversation_id: Any
     channel_id: int
@@ -414,7 +410,7 @@ async def _draft_context(ctx: RunContext[StudioDeps]) -> dict[str, Any] | None:
 def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
     """Create the single bounded agent used by the production Studio route."""
 
-    def workflow_model_settings(ctx: RunContext[StudioDeps]) -> dict[str, Any]:
+    def workflow_model_settings(ctx: RunContext[StudioDeps]) -> ModelSettings:
         missing = set(ctx.deps.required_tools) - ctx.deps.completed_tools
         artifact_ready = bool(
             {"create_draft", "revise_draft", "save_draft"}.intersection(ctx.deps.completed_tools)

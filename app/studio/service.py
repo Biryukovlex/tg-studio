@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from ag_ui.core import (
     RunErrorEvent,
     RunFinishedEvent,
+    RunFinishedSuccessOutcome,
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
@@ -765,7 +766,7 @@ class StudioService:
                 return
 
         async def execute_run() -> None:
-            nonlocal observed_tool_calls
+            nonlocal observed_tool_calls, saw_model_output
             output_parts: list[str] = []
             finished_event = None
             watchdog: asyncio.Task[Any] | None = None
@@ -1068,9 +1069,9 @@ class StudioService:
                             )
                         await queue.put(
                             RunFinishedEvent(
-                                threadId=str(conversation_id),
-                                runId=str(run_id),
-                                outcome={"type": "success"},
+                                thread_id=str(conversation_id),
+                                run_id=str(run_id),
+                                outcome=RunFinishedSuccessOutcome(),
                             )
                         )
                         emit_observation(

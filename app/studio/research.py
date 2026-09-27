@@ -29,7 +29,7 @@ from .provenance import (
     story_from_dict,
     to_source_evidence,
 )
-from .search import SearchProvider, SearchResponse, SearchCache, build_search_provider, classify_search_outcome
+from .search import SearchProvider, SearchResponse, SearchCache, build_search_provider
 from .sources import SafeSourceReader, SourceDocument
 
 
@@ -41,7 +41,7 @@ def _search_status_summary(summary: dict[str, Any]) -> str:
     if outcome == "healthy":
         return "Search completed with usable results and no relevant engine failures."
     if outcome == "partial":
-        engines = ", ".join(failed) if failed else "a requested engine"
+        engines = ", ".join(failed) if failed else "a query or search provider"
         return f"Search returned usable results, but {engines} failed; treat the results as partial, not unavailable."
     if outcome == "empty":
         return "Search completed successfully but returned no results."
@@ -325,11 +325,21 @@ class ResearchService:
             for item in getattr(response, "engine_failures", ())
             if isinstance(item, dict) and item.get("relevant")
         )
-        outcome = classify_search_outcome(
-            result_count=total_results,
-            relevant_failures=relevant,
-            transport_failed=False,
+        # Transport/provider failures carry no per-engine record. Preserve
+        # them when combining parallel variants instead of mislabelling a
+        # failed variant as a clean empty search (or the whole batch healthy).
+        unavailable_variant = any(
+            getattr(response, "outcome", "healthy") == "unavailable"
+            for response in responses
         )
+        partial_variant = any(
+            getattr(response, "outcome", "healthy") == "partial"
+            for response in responses
+        )
+        if total_results:
+            outcome = "partial" if relevant or unavailable_variant or partial_variant else "healthy"
+        else:
+            outcome = "unavailable" if relevant or unavailable_variant or partial_variant else "empty"
         failed_engines = sorted({
             str(item.get("engine", ""))
             for response in responses
@@ -369,7 +379,7 @@ class ResearchService:
     ) -> dict[str, Any]:
         outcome = str(search_outcome or "healthy")[:32]
         failed = [str(name)[:80] for name in list(failed_engines)[:12]]
-        activity = {
+        activity: dict[str, Any] = {
             "event_type": str(event_type)[:80],
             "provider": str(provider)[:80],
             "query_count": max(0, int(query_count)),

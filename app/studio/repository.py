@@ -135,6 +135,37 @@ def _draft_values(payload: dict[str, Any] | DraftInput, *, known_source_ids: set
     return values
 
 
+def _preserve_server_verification_on_user_edit(current: dict[str, Any], values: dict[str, Any]) -> None:
+    """Never accept a verified flag supplied by an editable draft payload.
+
+    A no-op edit may retain server-verified mappings, but any change to the
+    post, source selection, or mapping substance invalidates them together.
+    """
+
+    prior = current.get("claim_support") or []
+    incoming = values.get("claim_support") or []
+    def substance(item: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            item.get("claim"), item.get("source_ids"),
+            item.get("passage"), item.get("passages"),
+        )
+
+    unchanged = (
+        values.get("body") == current.get("body")
+        and values.get("source_ids") == current.get("source_ids")
+        and len(incoming) == len(prior)
+        and all(
+            isinstance(new, dict) and isinstance(old, dict)
+            and substance(new) == substance(old)
+            for new, old in zip(incoming, prior)
+        )
+    )
+    values["claim_support"] = [
+        {**item, "verified": bool(prior[index].get("verified")) if unchanged else False}
+        for index, item in enumerate(incoming)
+    ]
+
+
 def _diagnostic_int(value: Any) -> int | None:
     try:
         number = int(value)  # type: ignore[arg-type]
@@ -998,14 +1029,8 @@ class StudioRepository:
                 payload=merged,
             )
             values = _draft_values(merged, known_source_ids=known, require_sources=not bool(merged.get("creative", False)))
-            if origin == "user_edit" and values["body"] != current.get("body"):
-                # An owner body edit invalidates generated verification: the
-                # saved mappings stay editable but are no longer presented
-                # as verified.
-                values["claim_support"] = [
-                    {**item, "verified": False} if isinstance(item, dict) else item
-                    for item in values["claim_support"]
-                ]
+            if origin == "user_edit":
+                _preserve_server_verification_on_user_edit(current, values)
             current_version = int(current.get("current_version") or 1)
             if new_version:
                 max_version = (
@@ -2510,14 +2535,8 @@ class MemoryStudioRepository:
                 raise DraftConflictError(public, expected_revision=expected_revision)
             merged = self._draft_payload(public, payload)
             values, _ = self._validate_memory_draft(current["conversation_id"], merged)
-            if origin == "user_edit" and values["body"] != current.get("body"):
-                # An owner body edit invalidates generated verification: the
-                # saved mappings stay editable but are no longer presented
-                # as verified.
-                values["claim_support"] = [
-                    {**item, "verified": False} if isinstance(item, dict) else item
-                    for item in values["claim_support"]
-                ]
+            if origin == "user_edit":
+                _preserve_server_verification_on_user_edit(public, values)
             versions = self.draft_versions.setdefault(draft_id, [])
             now = utcnow()
             current_version = int(public.get("current_version") or 1)

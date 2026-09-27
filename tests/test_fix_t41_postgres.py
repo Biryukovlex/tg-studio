@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -113,7 +112,7 @@ async def test_research_read_draft_verifies_claim_on_postgres():
         accepted, failures = verify_claim_support(by_id, [{
             "claim": "Meridian Labs raised $75 million in 2026.",
             "source_ids": [meridian_id],
-            "passage": "announced on 9 June 2026 that it raised $75 million",
+            "passage": "Meridian Labs announced on 9 June 2026 that it raised $75 million",
         }])
         assert failures == []
         assert accepted[0]["verified"] is True
@@ -134,7 +133,7 @@ async def test_research_read_draft_verifies_claim_on_postgres():
                 "claim_support": [{
                     "claim": "Meridian Labs raised $75 million in 2026.",
                     "source_ids": [meridian_id],
-                    "passage": "announced on 9 June 2026 that it raised $75 million",
+                    "passage": "Meridian Labs announced on 9 June 2026 that it raised $75 million",
                     "verified": True,
                 }],
             },
@@ -146,7 +145,7 @@ async def test_research_read_draft_verifies_claim_on_postgres():
         reloaded = await fresh.get_current_draft(conversation_id=conversation["id"], channel_id=channel_id)
         assert reloaded is not None
         assert reloaded["claim_support"][0]["verified"] is True
-        assert reloaded["claim_support"][0]["passage"].startswith("announced on 9 June 2026")
+        assert reloaded["claim_support"][0]["passage"].startswith("Meridian Labs announced on 9 June 2026")
     finally:
         engine = create_async_engine(base)
         try:

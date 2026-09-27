@@ -205,6 +205,39 @@ async def test_tool_execution_phase_recorded_after_tool_start(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_model_response_phase_recorded_after_text_before_failure(monkeypatch):
+    import app.studio.service as service_module
+    from ag_ui.core import RunStartedEvent
+
+    repository = MemoryStudioRepository()
+    conversation = await repository.create_conversation(channel_id=1)
+    service = StudioService(repository, Settings(studio_test_mode=True))
+
+    class _TextThenErrorAdapter:
+        build_run_input = staticmethod(AGUIAdapter.build_run_input)
+
+        def __init__(self, **_kwargs):
+            pass
+
+        async def run_stream(self, **kwargs):
+            yield RunStartedEvent(thread_id=kwargs["conversation_id"], run_id=kwargs["run_id"])
+            yield SimpleNamespace(type="TEXT_MESSAGE_CONTENT", delta="Provisional answer")
+            yield SimpleNamespace(type="RUN_ERROR", message="status_code: 503, model_name: x/y, body: unavailable")
+
+        def encode_stream(self, stream):
+            return stream
+
+    monkeypatch.setattr(service_module, "AGUIAdapter", _TextThenErrorAdapter)
+    run_id = uuid.uuid4()
+    response = await service.stream_request(None, _payload(conversation["id"], run_id))
+    async for _event in response.body_iterator:
+        pass
+    run = await repository.get_run(run_id)
+    assert run is not None and run["error_code"] == "provider_unavailable"
+    assert run["error_phase"] == "model_response"
+
+
+@pytest.mark.asyncio
 async def test_user_cancel_records_cancelled_diagnostics(monkeypatch):
     import app.studio.service as service_module
 

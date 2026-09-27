@@ -891,13 +891,13 @@ class PostgresDatabase:
                 by_day[day] = dict(row)
         output: dict[str, list] = {key: [] for key in ("views", "comments", "reactions", "shares", "posts_per_day")}
         for day in days_list:
-            row = by_day.get(day)
-            if row:
+            day_row = by_day.get(day)
+            if day_row:
                 for key in totals:
-                    totals[key] += int(row[key] or 0)
+                    totals[key] += int(day_row[key] or 0)
             for key in totals:
                 output[key].append(totals[key])
-            output["posts_per_day"].append(int(row["posts"] or 0) if row else 0)
+            output["posts_per_day"].append(int(day_row["posts"] or 0) if day_row else 0)
         return {"days": days_list, **output}
 
     # ---------- import diagnostics and overlap-safe jobs ----------
@@ -943,7 +943,7 @@ class PostgresDatabase:
                     ),
                     {"id": job_id, "workspace_id": workspace_id, "channel_id": channel_id, "lease_until": lease_until},
                 )
-                if not created.rowcount:
+                if not getattr(created, "rowcount", 0):
                     return None
                 await session.commit()
                 return job_id

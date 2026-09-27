@@ -5,10 +5,7 @@ import sqlalchemy as sa
 
 
 revision = "0017_run_error_diagnostics"
-# NOTE: T41 (unintegrated) also chains from 0015 with 0016_research_source_content.
-# Merging both branches produces two heads; reconcile with an Alembic merge
-# revision or by rebasing one chain onto the other at integration time.
-down_revision = "0015_consent_default"
+down_revision = "0016_research_source_content"
 branch_labels = None
 depends_on = None
 

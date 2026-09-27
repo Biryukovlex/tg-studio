@@ -90,6 +90,20 @@ async def test_requested_engine_failure_marks_batch_partial():
 
 
 @pytest.mark.asyncio
+async def test_provider_failure_text_is_reduced_to_safe_reason_code():
+    secret = "sk-or-not-for-logs"
+    provider = _provider([_payload(
+        [_result("google")],
+        unresponsive=[["google", f"HTTP 429 https://search.test/?token={secret}"]],
+    )])
+    response = await provider.search("channel topic", engines=("google",))
+    assert response.outcome == "partial"
+    assert response.engine_failures[0]["code"] == "engine_rate_limited"
+    assert secret not in str(response.engine_failures)
+    assert secret not in str(response.warnings)
+
+
+@pytest.mark.asyncio
 async def test_all_requested_engines_failing_is_unavailable():
     provider = _provider([_payload([], unresponsive=[["google", "connection timed out"], ["bing", "HTTP 503"]])])
     response = await provider.search("channel topic", engines=("google", "bing"))
@@ -168,6 +182,10 @@ async def test_mixed_parallel_variants_aggregate_without_losing_success():
     summary = ResearchService.aggregate_search_outcomes([healthy, partial])
     assert summary["outcome"] == "partial"
     assert summary["failed_engines"] == ["bing"]
+
+    unavailable = await _variant("unavailable", 0)
+    assert ResearchService.aggregate_search_outcomes([healthy, unavailable])["outcome"] == "partial"
+    assert ResearchService.aggregate_search_outcomes([unavailable])["outcome"] == "unavailable"
     assert [v["result_count"] for v in summary["variants"]] == [2, 1]
 
 

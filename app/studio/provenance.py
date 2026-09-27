@@ -849,8 +849,14 @@ canonicalize_source_url = canonicalize_url
 MAX_VERIFICATION_PASSAGE_CHARS = 2_000
 
 _NUMBER_RE = re.compile(r"[€$£¥]?\d[\d\s.,]*%?")
-_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 _QUOTE_RE = re.compile("“([^”]{4,})”|\"([^\"]{4,})\"|«([^»]{4,})»")
+_ENTITY_RE = re.compile(r"(?<!\w)[A-ZА-ЯЁ][\w.-]*(?:\s+[A-ZА-ЯЁ][\w.-]*)*")
+_GENERIC_CAPITALIZED = {
+    "a", "an", "the", "this", "that", "on", "in", "at", "for", "new",
+    "ai", "llm", "api", "company", "today", "yesterday",
+    "это", "этот", "эта", "компания", "сегодня", "вчера",
+}
 
 
 def _normalize_passage(value: str) -> str:
@@ -874,6 +880,24 @@ def _claim_check_tokens(claim: str) -> tuple[list[str], list[str], list[str]]:
         if part and part.strip()
     ]
     return numbers, years, quotes
+
+
+def _claim_named_entities(claim: str) -> list[str]:
+    """Conservative proper-name guard, not a substitute for semantic review.
+
+    A supporting passage must identify the named subject. Ignore only generic
+    sentence starters and topic acronyms; a multiword name such as "Company A"
+    remains material even when its first word is generic by itself.
+    """
+
+    names: list[str] = []
+    for match in _ENTITY_RE.finditer(str(claim or "")):
+        name = _normalize_passage(match.group())
+        if name in _GENERIC_CAPITALIZED or name.isdigit():
+            continue
+        if name not in names:
+            names.append(name)
+    return names
 
 
 @dataclass(frozen=True, slots=True)
@@ -908,7 +932,8 @@ def verify_claim_support(
         if not claim:
             continue
         shared_passage = str(item.get("passage") or "").strip()[:MAX_VERIFICATION_PASSAGE_CHARS]
-        per_source = item.get("passages") if isinstance(item.get("passages"), dict) else {}
+        passage_map = item.get("passages")
+        per_source: dict[str, Any] = passage_map if isinstance(passage_map, dict) else {}
         for source_id in list(dict.fromkeys(str(sid) for sid in (item.get("source_ids") or []) if str(sid).strip()))[:12]:
             source = sources.get(source_id)
             title = str(getattr(source, "title", "") or "")[:160]
@@ -956,11 +981,18 @@ def verify_claim_support(
                 )
                 continue
             numbers, years, quotes = _claim_check_tokens(claim)
-            passage_digits = re.sub(r"\D", "", normalized_passage)
+            passage_numbers = {
+                re.sub(r"\D", "", value)
+                for value in _NUMBER_RE.findall(passage)
+            }
             missing = [
                 token for token in [*numbers, *years]
-                if token and token not in normalized_passage.replace(" ", "") and token not in passage_digits
+                if token and token not in passage_numbers
             ]
+            missing.extend(
+                name for name in _claim_named_entities(claim)
+                if name not in normalized_passage
+            )
             missing_quotes = [
                 quoted for quoted in quotes
                 if _normalize_passage(quoted) not in normalized_passage

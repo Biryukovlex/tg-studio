@@ -566,9 +566,11 @@ class SearXNGSearchProvider:
                 continue
             engine = _clean_text(failure[0], limit=80).lower()
             reason = _clean_text(failure[1] if len(failure) > 1 else "unavailable", limit=120)
-            if not engine:
+            if not engine or re.fullmatch(r"[a-z0-9_-]{1,80}", engine) is None:
                 continue
-            failures.append({"engine": engine, "code": classify_engine_failure(reason), "reason": reason})
+            # Provider text can contain arbitrary URLs or tokens. Only the
+            # bounded classification enters agent results and persisted logs.
+            failures.append({"engine": engine, "code": classify_engine_failure(reason)})
             if len(failures) >= 12:
                 break
         return failures
@@ -641,7 +643,7 @@ class SearXNGSearchProvider:
             relevant_failures = sum(1 for item in engine_failures if item["relevant"])
             for item in engine_failures:
                 warnings_list.append(
-                    f"Engine {item['engine']} did not respond successfully: {item['reason']}."
+                    f"Engine {item['engine']} did not respond successfully ({item['code']})."
                 )
             if blocked_count:
                 warnings_list.append(f"Excluded {blocked_count} result{'s' if blocked_count != 1 else ''} from low-trust or explicitly excluded domains.")

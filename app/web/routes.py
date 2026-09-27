@@ -138,7 +138,7 @@ def static_asset_version() -> str:
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, settings: Settings):
+    def __init__(self, app, settings: Settings | RuntimeSettings):
         super().__init__(app)
         self._settings = settings
 
@@ -159,7 +159,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 def _optional_positive_int(value: str | int | None) -> int | None:
     """Treat an empty HTML select value as no filter instead of a 422 error."""
-    if value in (None, ""):
+    if value is None or value == "":
         return None
     try:
         parsed = int(value)

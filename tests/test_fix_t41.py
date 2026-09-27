@@ -11,7 +11,6 @@ from app.config import Settings
 from app.studio.agent import StudioDeps, build_agent
 from app.studio.provenance import SourceEvidence, verify_claim_support
 from app.studio.repository import MemoryStudioRepository
-from app.studio.research import ResearchService
 
 ARTICLE_A = (
     "Company A announced on 12 March 2026 that it raised $50 million in Series C "
@@ -69,7 +68,7 @@ def test_same_topic_article_lacking_number_or_date_is_blocked():
 
 def test_matching_readable_passage_succeeds():
     sources = {"a": _evidence("a", ARTICLE_A)}
-    passage = "it raised $50 million in Series C funding led by North Peak"
+    passage = "Company A announced on 12 March 2026 that it raised $50 million in Series C funding led by North Peak"
     accepted, failures = verify_claim_support(sources, [{
         "claim": "Company A raised $50 million.",
         "source_ids": ["a"],
@@ -79,6 +78,28 @@ def test_matching_readable_passage_succeeds():
     assert len(accepted) == 1
     assert accepted[0]["verified"] is True
     assert accepted[0]["passage"] == passage
+
+
+def test_matching_number_but_wrong_named_subject_is_blocked():
+    sources = {"b": _evidence("b", "Company B raised $50 million in 2026.")}
+    accepted, failures = verify_claim_support(sources, [{
+        "claim": "Company A raised $50 million in 2026.",
+        "source_ids": ["b"],
+        "passage": "Company B raised $50 million in 2026.",
+    }])
+    assert accepted == []
+    assert failures[0].code == "unsupported_detail"
+
+
+def test_numeric_token_must_match_whole_number():
+    sources = {"a": _evidence("a", "Company A raised $150 million in 2026.")}
+    accepted, failures = verify_claim_support(sources, [{
+        "claim": "Company A raised $50 million in 2026.",
+        "source_ids": ["a"],
+        "passage": "Company A raised $150 million in 2026.",
+    }])
+    assert accepted == []
+    assert failures[0].code == "unsupported_detail"
 
 
 def test_inaccessible_and_snippet_only_sources_cannot_verify():
@@ -252,7 +273,7 @@ async def test_tool_blocks_unverified_mapping_and_saves_verified_draft():
             "claim_support": [{
                 "claim": "Company A raised $50 million in 2026.",
                 "source_ids": ["s-a"],
-                "passage": "announced on 12 March 2026 that it raised $50 million in Series C funding",
+                "passage": "Company A announced on 12 March 2026 that it raised $50 million in Series C funding",
             }],
         }},
     )
@@ -263,7 +284,7 @@ async def test_tool_blocks_unverified_mapping_and_saves_verified_draft():
     draft = await repository.get_current_draft(conversation_id=conversation["id"], channel_id=1)
     assert draft is not None
     assert draft["claim_support"][0]["verified"] is True
-    assert draft["claim_support"][0]["passage"].startswith("announced on 12 March 2026")
+    assert draft["claim_support"][0]["passage"].startswith("Company A announced on 12 March 2026")
 
 
 @pytest.mark.asyncio
@@ -366,7 +387,7 @@ async def test_owner_body_edit_clears_verified_state():
             "claim_support": [{
                 "claim": "Company A raised $50 million in 2026.",
                 "source_ids": ["s-a"],
-                "passage": "announced on 12 March 2026 that it raised $50 million in Series C funding",
+                "passage": "Company A announced on 12 March 2026 that it raised $50 million in Series C funding",
             }],
         }},
     )
@@ -381,4 +402,45 @@ async def test_owner_body_edit_clears_verified_state():
         expected_revision=draft["revision"],
     )
     assert edited["claim_support"][0]["verified"] is False
-    assert edited["claim_support"][0]["passage"].startswith("announced on 12 March 2026")
+    assert edited["claim_support"][0]["passage"].startswith("Company A announced on 12 March 2026")
+
+
+@pytest.mark.asyncio
+async def test_owner_cannot_forge_or_reuse_verification_for_changed_mapping():
+    repository = MemoryStudioRepository()
+    conversation = await repository.create_conversation(channel_id=1)
+    await _research_flow(repository, conversation["id"])
+    model = _DraftingModel(
+        call_tools=["create_draft"],
+        custom_output_text="Saved.",
+        tool_args={"create_draft": {
+            "body": "Company A raised $50 million in 2026.",
+            "source_ids": ["s-a"],
+            "claim_support": [{
+                "claim": "Company A raised $50 million in 2026.",
+                "source_ids": ["s-a"],
+                "passage": "Company A announced on 12 March 2026 that it raised $50 million in Series C funding",
+            }],
+        }},
+    )
+    await build_agent(Settings(studio_test_mode=True), model=model).run(
+        "Write it.", deps=_deps(repository, conversation["id"]),
+    )
+    draft = await repository.get_current_draft(conversation_id=conversation["id"], channel_id=1)
+    assert draft["claim_support"][0]["verified"] is True
+    changed = await repository.save_draft(
+        draft_id=uuid.UUID(str(draft["id"])),
+        payload={"claim_support": [{
+            **draft["claim_support"][0],
+            "claim": "Company B raised $50 million in 2026.",
+            "verified": True,
+        }]},
+        expected_revision=draft["revision"],
+    )
+    assert changed["claim_support"][0]["verified"] is False
+    attempted = await repository.save_draft(
+        draft_id=uuid.UUID(str(changed["id"])),
+        payload={"claim_support": [{**changed["claim_support"][0], "verified": True}]},
+        expected_revision=changed["revision"],
+    )
+    assert attempted["claim_support"][0]["verified"] is False
