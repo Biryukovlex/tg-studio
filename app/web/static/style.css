@@ -933,3 +933,262 @@ input[type="number"]:focus, textarea:focus { border-color: var(--cyan); box-shad
   .save-confirmation { opacity: 1; transform: none; transition: none; }
   .save-confirmation-progress { display: none; }
 }
+
+/* T50 — shared shell tokens, brand junction, mascot and control primitives.
+ *
+ * Shared token contract (server shell + Studio): --bg, --sidebar, --surface,
+ * --surface-raised, --line, --line-strong, --text, --soft-text, --muted,
+ * --cyan, --teal, --coral, --blue, --amber. Accent mapping: views/cyan,
+ * reactions/coral, comments/teal, shares/blue. The UI supplies the dark
+ * surface behind the mascot; there is no logo tile or backing rectangle.
+ */
+:root {
+  --amber: #f5d399;
+  --junction-height: 88px;
+  --ghost-size: 80px;
+}
+
+/* Brand junction: one interactive ghost at the header/sidebar junction with
+ * an adjacent static wordmark. Lower placement (+8px) leaves prop/flight
+ * room inside the 88px first header row. */
+.brand-junction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--junction-height);
+  margin: 0 0 20px;
+  padding: 0;
+  background: transparent;
+}
+.ghost-trigger {
+  position: relative;
+  width: var(--ghost-size);
+  min-height: var(--junction-height);
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.ghost-trigger .ghost-scene {
+  position: absolute;
+  width: var(--ghost-size);
+  height: var(--ghost-size);
+  left: 0;
+  top: calc(50% + 8px);
+  transform: translateY(-50%);
+}
+.ghost-trigger:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+.ghost-fallback {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 8px);
+  transform: translate(-50%, -50%);
+  display: block;
+  width: 56px;
+  height: 56px;
+  margin: 0;
+  border-radius: 46% 54% 52% 48% / 44% 46% 54% 56%;
+  background: radial-gradient(circle at 34% 34%, #eafffd 0 9%, transparent 10%),
+    radial-gradient(circle at 66% 34%, #eafffd 0 9%, transparent 10%),
+    radial-gradient(circle at 50% 62%, rgba(255, 156, 147, .55) 0 12%, transparent 13%),
+    linear-gradient(180deg, #d8f4f1, #9fd8d4);
+  opacity: .9;
+}
+.ghost-trigger:has(.ghost-scene) .ghost-fallback { display: none; }
+.ghost-scene { mix-blend-mode: lighten; }
+html[data-mascot-paused] .ghost-scene *,
+html[data-mascot-paused] .ghost-scene *::before,
+html[data-mascot-paused] .ghost-scene *::after {
+  animation-play-state: paused !important;
+}
+
+/* Static wordmark beside the ghost (desktop) / in the header (phone). */
+.brand-wordmark {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-right: 22px;
+  color: var(--soft-text);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: -.02em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.brand-wordmark:hover { color: var(--cyan); }
+
+/* Static login brand: approved artwork directly on the dark surface. */
+.brand-lockup {
+  display: inline-block;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.brand-lockup img {
+  width: 64px;
+  height: 64px;
+  pointer-events: none;
+  mix-blend-mode: lighten;
+}
+
+/* Shared dropdown primitive (progressive enhancement for
+ * select[data-ui-dropdown]; see ui-controls.js). */
+.ui-select { position: relative; min-width: 0; }
+.ui-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+.ui-select-trigger:hover { background: var(--surface-raised); }
+.ui-select-trigger:focus-visible {
+  outline: 1px solid var(--cyan);
+  outline-offset: 3px;
+  box-shadow: var(--focus);
+}
+.ui-select-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-select-chevron {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg) translateY(-2px);
+}
+.ui-select-menu {
+  position: absolute;
+  z-index: 45;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  min-width: 180px;
+  max-width: min(340px, calc(100vw - 32px));
+  max-height: min(320px, calc(100dvh - 120px));
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, .45);
+}
+.ui-select.opens-up .ui-select-menu {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+.ui-select-option {
+  padding: 10px 12px;
+  border-radius: 7px;
+  color: var(--soft-text);
+  cursor: pointer;
+  font-size: 13px;
+}
+.ui-select-option:hover { background: rgba(25, 210, 236, .08); color: var(--text); }
+.ui-select-option:focus-visible {
+  outline: 1px solid var(--cyan);
+  outline-offset: -1px;
+  background: rgba(25, 210, 236, .1);
+  color: var(--text);
+}
+.ui-select-option[aria-selected="true"] { color: var(--cyan); }
+.ui-select-option[aria-disabled="true"] {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.ui-native-select {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* Shared dialog primitive (native dialog; see ui-controls.js). */
+.ui-dialog {
+  width: min(520px, calc(100vw - 28px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .62);
+}
+.ui-dialog::backdrop { background: rgba(1, 8, 14, .78); backdrop-filter: blur(6px); }
+.ui-dialog-body { padding: 24px; }
+.ui-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 0 24px 24px;
+}
+
+/* Phone: one header character + bottom navigation. The single ghost moves to
+ * the header (fixed) while the sidebar becomes the bottom nav. */
+@media (max-width: 680px) {
+  .brand-junction {
+    position: fixed;
+    z-index: 60;
+    top: 0;
+    left: 0;
+    min-height: 0;
+    margin: 0;
+    padding: 8px 0 0 10px;
+    pointer-events: none;
+  }
+  .ghost-trigger {
+    width: 44px;
+    min-height: 44px;
+    pointer-events: auto;
+  }
+  .ghost-trigger .ghost-scene {
+    width: 44px;
+    height: 44px;
+    left: 0;
+    top: calc(50% + 4px);
+  }
+  .ghost-fallback { width: 32px; height: 32px; }
+  .topbar { padding-left: 62px; }
+  .brand-wordmark { margin-right: 12px; font-size: 13px; }
+}
+
+/* Small phones: keep the header character, wordmark and heading clear. */
+@media (max-width: 380px) {
+  .topbar { padding-left: 58px; }
+  .brand-wordmark { font-size: 12px; margin-right: 8px; }
+  .ghost-trigger { width: 40px; }
+  .ghost-trigger .ghost-scene { width: 40px; height: 40px; }
+  .ui-select-menu { max-width: calc(100vw - 24px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ghost-scene *,
+  .ghost-scene *::before,
+  .ghost-scene *::after {
+    animation: none !important;
+  }
+}

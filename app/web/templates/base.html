@@ -11,14 +11,24 @@
   <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
   <script src="/static/vendor/chartjs/chart.umd.min.js"></script>
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
+  <script src="/static/ghost.js?v={{ asset_version }}" defer></script>
+  <script src="/static/ui-controls.js?v={{ asset_version }}" defer></script>
   {% block head %}{% endblock %}
 </head>
 <body class="app-body{% block body_class %}{% endblock %}">
+  {% set ghost_mode = 'overview' %}
+  {% if request.url.path.startswith('/studio') %}{% set ghost_mode = 'studio' %}
+  {% elif request.url.path.startswith('/settings') %}{% set ghost_mode = 'settings' %}{% endif %}
   <div class="app-shell">
     <aside class="sidebar" aria-label="Primary navigation">
-      <a class="brand-mark" href="/" aria-label="{{ app_name }} home">
-        <i class="mgc mgc-chart-bar-2-core-regular" aria-hidden="true"></i>
-      </a>
+      <div class="brand-junction">
+        <button id="ghost-trigger" class="ghost-trigger" type="button"
+          data-ghost-mode="{{ ghost_mode }}"
+          data-ghost-src="/static/brand/tgstudio-ghost-{{ ghost_mode }}.svg?v={{ asset_version }}"
+          aria-label="Replay ghost animation">
+          <span class="ghost-fallback" aria-hidden="true"></span>
+        </button>
+      </div>
 
       <nav class="sidebar-nav">
         <a class="sidebar-link{% if request.url.path == '/' %} active{% endif %}" href="/">
@@ -47,6 +57,7 @@
 
     <div class="workspace">
       <header class="topbar">
+        <a class="brand-wordmark" href="/" aria-label="{{ app_name }} home">TG Studio</a>
         <div class="page-heading">
           {% block pageheading %}
           <p class="eyebrow">Channel intelligence</p>
