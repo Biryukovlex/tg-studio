@@ -259,6 +259,7 @@ class StudioRepositoryProtocol(Protocol):
     async def set_run_status(self, run_id: uuid.UUID, *, status: str, stage: str | None = None, error_code: str | None = None, error_message: str | None = None, actual_model: str | None = None, usage: dict[str, Any] | None = None, worker_id: str | None = None, diagnostics: dict[str, Any] | None = None) -> dict[str, Any]: ...
     async def append_event(self, run_id: uuid.UUID, *, event_type: str, safe_payload: dict[str, Any] | None = None, result_content: str | None = None) -> dict[str, Any]: ...
     async def list_tool_result_logs(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
+    async def count_tool_result_logs(self, *, query: str | None = None, channel_id: int | None = None, status: str | None = None) -> int: ...
     async def request_cancel(self, run_id: uuid.UUID) -> dict[str, Any]: ...
     async def mark_stale_runs_interrupted(self, *, queued_grace_seconds: int = 60) -> int: ...
 
@@ -1929,9 +1930,58 @@ class StudioRepository:
         )
         return [dict(row) for row in result.mappings().all()]
 
-    async def list_tool_result_logs(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    _LOG_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled", "interrupted"}
+
+    @staticmethod
+    def _validate_log_filters(
+        query: Any | None, channel_id: Any | None, status: Any | None
+    ) -> tuple[str | None, int | None, str | None]:
+        trimmed: str | None = None
+        if query is not None:
+            candidate = str(query).strip()
+            if candidate:
+                if len(candidate) > 200:
+                    raise ValueError("Invalid query: must be at most 200 characters.")
+                trimmed = candidate
+        parsed_channel: int | None = None
+        if channel_id is not None and (not isinstance(channel_id, str) or str(channel_id).strip() != ""):
+            try:
+                parsed_channel = int(str(channel_id).strip())  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                raise ValueError("Invalid channel: expected a positive integer.") from None
+            if parsed_channel <= 0:
+                raise ValueError("Invalid channel: expected a positive integer.")
+        normalized_status: str | None = None
+        if status is not None and str(status).strip() != "":
+            normalized_status = str(status).strip().lower()
+            if normalized_status not in StudioRepository._LOG_STATUSES:
+                raise ValueError(
+                    "Invalid status: expected one of queued, running, succeeded, failed, cancelled, interrupted."
+                )
+        return trimmed, parsed_channel, normalized_status
+
+    def _log_filter_sql(self) -> str:
+        return (
+            "AND (CAST(:query AS text) IS NULL OR ("
+            "POSITION(LOWER(CAST(:query AS text)) IN LOWER(COALESCE(e.safe_payload->>'tool_name',''))) > 0 "
+            "OR POSITION(LOWER(CAST(:query AS text)) IN LOWER(COALESCE(c.title,''))) > 0 "
+            "OR POSITION(LOWER(CAST(:query AS text)) IN LOWER(COALESCE(e.result_content,''))) > 0)) "
+            "AND (CAST(:channel_id AS bigint) IS NULL OR c.channel_id=CAST(:channel_id AS bigint)) "
+            "AND (CAST(:status AS text) IS NULL OR r.status=CAST(:status AS text))"
+        )
+
+    async def list_tool_result_logs(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        query: str | None = None,
+        channel_id: int | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        trimmed, parsed_channel, normalized_status = self._validate_log_filters(query, channel_id, status)
         result = await self.db._execute(
-            """SELECT e.id, e.run_id, e.sequence, e.safe_payload, e.result_content, e.created_at,
+            f"""SELECT e.id, e.run_id, e.sequence, e.safe_payload, e.result_content, e.created_at,
                       COALESCE(
                           e.safe_payload->>'tool_name',
                           (SELECT matched.safe_payload->>'tool_name'
@@ -1947,6 +1997,8 @@ class StudioRepository:
                             ORDER BY prior.sequence DESC LIMIT 1)
                       ) AS tool_name,
                       r.requested_model, r.actual_model, r.status AS run_status,
+                      r.error_phase, r.error_class, r.error_status, r.error_provider_code,
+                      r.error_code, c.channel_id,
                       c.id AS conversation_id, c.title AS conversation_title
                  FROM studio_run_events e
                  JOIN studio_agent_runs r
@@ -1956,11 +2008,52 @@ class StudioRepository:
                 WHERE e.workspace_id=:workspace_id
                   AND e.event_type='TOOL_CALL_RESULT'
                   AND e.result_content IS NOT NULL
+                  {self._log_filter_sql()}
                 ORDER BY e.created_at DESC, e.id DESC
                 LIMIT :limit OFFSET :offset""",
-            {"limit": max(1, min(int(limit), 100)), "offset": max(0, int(offset))},
+            {
+                "limit": max(1, min(int(limit), 100)),
+                "offset": max(0, int(offset)),
+                "query": trimmed,
+                "channel_id": parsed_channel,
+                "status": normalized_status,
+            },
         )
-        return [dict(row) for row in result.mappings().all()]
+        rows = [dict(row) for row in result.mappings().all()]
+        for row in rows:
+            row["diagnostics"] = {
+                "phase": (str(row.get("error_phase") or "")[:32] or None),
+                "exception_class": (str(row.get("error_class") or "")[:80] or None),
+                "status_code": int(row["error_status"]) if row.get("error_status") is not None and 100 <= int(row["error_status"]) <= 599 else None,
+                "provider_code": int(row["error_provider_code"]) if row.get("error_provider_code") is not None and 100 <= int(row["error_provider_code"]) <= 599 else None,
+            }
+            if all(value is None for value in row["diagnostics"].values()):
+                row["diagnostics"] = None
+        return rows
+
+    async def count_tool_result_logs(
+        self,
+        *,
+        query: str | None = None,
+        channel_id: int | None = None,
+        status: str | None = None,
+    ) -> int:
+        trimmed, parsed_channel, normalized_status = self._validate_log_filters(query, channel_id, status)
+        result = await self.db._execute(
+            f"""SELECT COUNT(*) AS total
+                  FROM studio_run_events e
+                  JOIN studio_agent_runs r
+                    ON r.workspace_id=e.workspace_id AND r.id=e.run_id
+                  JOIN studio_conversations c
+                    ON c.workspace_id=r.workspace_id AND c.id=r.conversation_id
+                 WHERE e.workspace_id=:workspace_id
+                   AND e.event_type='TOOL_CALL_RESULT'
+                   AND e.result_content IS NOT NULL
+                   {self._log_filter_sql()}""",
+            {"query": trimmed, "channel_id": parsed_channel, "status": normalized_status},
+        )
+        row = result.mappings().first()
+        return int(row["total"] or 0) if row else 0
 
     async def get_run(self, run_id: uuid.UUID) -> dict[str, Any] | None:
         result = await self.db._execute(
@@ -2953,13 +3046,26 @@ class MemoryStudioRepository:
             raise RunNotFound("run is not part of the active workspace")
         return [dict(row) for row in self.events[run_id] if row["sequence"] > after]
 
-    async def list_tool_result_logs(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    async def list_tool_result_logs(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        query: str | None = None,
+        channel_id: int | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        trimmed, parsed_channel, normalized_status = StudioRepository._validate_log_filters(query, channel_id, status)
         rows: list[dict[str, Any]] = []
         for run_id, events in self.events.items():
             run = self.runs.get(run_id)
             if run is None:
                 continue
+            if normalized_status is not None and str(run.get("status")) != normalized_status:
+                continue
             conversation = self.conversations.get(run["conversation_id"])
+            if parsed_channel is not None and (conversation is None or int(conversation.get("channel_id", -1)) != int(parsed_channel)):
+                continue
             latest_tool_name: str | None = None
             tool_names_by_id: dict[str, str] = {}
             for event in events:
@@ -2972,25 +3078,78 @@ class MemoryStudioRepository:
                 if event["event_type"] != "TOOL_CALL_RESULT" or event.get("result_content") is None:
                     continue
                 tool_call_id = event.get("safe_payload", {}).get("tool_call_id")
+                tool_name = (
+                    event.get("safe_payload", {}).get("tool_name")
+                    or tool_names_by_id.get(str(tool_call_id))
+                    or latest_tool_name
+                )
+                title = conversation.get("title") if conversation else None
+                content = str(event.get("result_content") or "")
+                if trimmed:
+                    haystacks = [str(tool_name or "").lower(), str(title or "").lower(), content.lower()]
+                    if not any(trimmed.lower() in hay for hay in haystacks):
+                        continue
                 rows.append(
                     {
                         **event,
                         "run_id": run_id,
-                        "tool_name": (
-                            event.get("safe_payload", {}).get("tool_name")
-                            or tool_names_by_id.get(str(tool_call_id))
-                            or latest_tool_name
-                        ),
+                        "tool_name": tool_name,
                         "requested_model": run.get("requested_model"),
                         "actual_model": run.get("actual_model"),
                         "run_status": run.get("status"),
+                        "channel_id": conversation.get("channel_id") if conversation else None,
                         "conversation_id": run.get("conversation_id"),
-                        "conversation_title": conversation.get("title") if conversation else None,
+                        "conversation_title": title,
+                        "diagnostics": None,
                     }
                 )
         rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse=True)
         start = max(0, int(offset))
         return rows[start : start + max(1, min(int(limit), 100))]
+
+    async def count_tool_result_logs(
+        self,
+        *,
+        query: str | None = None,
+        channel_id: int | None = None,
+        status: str | None = None,
+    ) -> int:
+        trimmed, parsed_channel, normalized_status = StudioRepository._validate_log_filters(query, channel_id, status)
+        count = 0
+        for run_id, events in self.events.items():
+            run = self.runs.get(run_id)
+            if run is None:
+                continue
+            if normalized_status is not None and str(run.get("status")) != normalized_status:
+                continue
+            conversation = self.conversations.get(run["conversation_id"])
+            if parsed_channel is not None and (conversation is None or int(conversation.get("channel_id", -1)) != int(parsed_channel)):
+                continue
+            latest_tool_name: str | None = None
+            tool_names_by_id: dict[str, str] = {}
+            for event in events:
+                if event["event_type"] == "TOOL_CALL_START":
+                    candidate = event.get("safe_payload", {}).get("tool_name")
+                    latest_tool_name = str(candidate) if candidate else None
+                    tool_call_id = event.get("safe_payload", {}).get("tool_call_id")
+                    if tool_call_id and latest_tool_name:
+                        tool_names_by_id[str(tool_call_id)] = latest_tool_name
+                if event["event_type"] != "TOOL_CALL_RESULT" or event.get("result_content") is None:
+                    continue
+                tool_call_id = event.get("safe_payload", {}).get("tool_call_id")
+                tool_name = (
+                    event.get("safe_payload", {}).get("tool_name")
+                    or tool_names_by_id.get(str(tool_call_id))
+                    or latest_tool_name
+                )
+                if trimmed:
+                    title = conversation.get("title") if conversation else None
+                    content = str(event.get("result_content") or "")
+                    haystacks = [str(tool_name or "").lower(), str(title or "").lower(), content.lower()]
+                    if not any(trimmed.lower() in hay for hay in haystacks):
+                        continue
+                count += 1
+        return count
 
     async def get_run(self, run_id: uuid.UUID) -> dict[str, Any] | None:
         row = self.runs.get(run_id)

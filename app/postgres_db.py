@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -31,6 +32,54 @@ def _aware(value: datetime | None) -> datetime | None:
 def _iso(value: datetime | None) -> str | None:
     value = _aware(value)
     return value.isoformat(timespec="microseconds") if value else None
+
+
+_UTC_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+
+def parse_utc_date(value: Any) -> datetime | None:
+    """Parse an inclusive UTC publication date (``YYYY-MM-DD``).
+
+    Empty/None means open-ended.  Raises ``ValueError`` for malformed or
+    out-of-range input so callers return 422 instead of partially applying.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = _aware(value)
+        assert parsed is not None
+        return parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    match = _UTC_DATE_RE.match(raw)
+    if not match:
+        raise ValueError(f"Invalid date '{raw}': expected YYYY-MM-DD (UTC).")
+    year, month, day = (int(part) for part in match.groups())
+    if not (1970 <= year <= 2100):
+        raise ValueError(f"Invalid date '{raw}': year must be 1970-2100.")
+    try:
+        return datetime(year, month, day, tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError(f"Invalid date '{raw}': not a calendar date.") from None
+
+
+def cohort_bounds(from_date: Any, to_date: Any) -> tuple[datetime | None, datetime | None]:
+    """Return (from_inclusive, to_exclusive) for an inclusive From/To cohort.
+
+    The upper bound is the half-open next-day boundary, so a post published
+    at ``To 23:59:59.999 UTC`` is included while ``To+1 00:00 UTC`` is not.
+    """
+
+    start = parse_utc_date(from_date)
+    end_inclusive = parse_utc_date(to_date)
+    end_exclusive = (end_inclusive + timedelta(days=1)) if end_inclusive is not None else None
+    if start is not None and end_exclusive is not None and start >= end_exclusive:
+        raise ValueError("Invalid date range: From must not be after To.")
+    return start, end_exclusive
 
 
 class PostgresDatabase:
@@ -710,7 +759,8 @@ class PostgresDatabase:
         )
         return [dict(row) for row in result.mappings().all()]
 
-    async def all_comments(self, channel_id: int | None = None) -> list[dict[str, Any]]:
+    async def all_comments(self, channel_id: int | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+        bounded = max(1, min(int(limit), 100000)) if limit is not None else 100000
         result = await self._execute(
             """SELECT cm.*, p.message_id AS post_message_id, p.posted_at AS post_posted_at,
                       ch.identifier AS channel_identifier
@@ -720,8 +770,8 @@ class PostgresDatabase:
                   AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
                   AND (CAST(:channel_id AS bigint) IS NOT NULL OR ch.active=true)
                   AND cm.is_deleted=false AND p.is_deleted=false
-                ORDER BY cm.posted_at DESC, cm.id DESC""",
-            {"channel_id": channel_id},
+                ORDER BY cm.posted_at DESC, cm.id DESC LIMIT :limit""",
+            {"channel_id": channel_id, "limit": bounded},
         )
         return [dict(row) for row in result.mappings().all()]
 
@@ -785,7 +835,168 @@ class PostgresDatabase:
         )
         return [dict(row) for row in result.mappings().all()]
 
-    async def kpis(self, channel_id: int | None = None, include_deleted: bool = False) -> dict[str, Any]:
+    @staticmethod
+    def _validate_metric_bound(name: str, value: Any) -> int | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid {name}: expected a non-negative integer.") from None
+        if parsed < 0 or parsed > 2_147_483_647:
+            raise ValueError(f"Invalid {name}: expected 0..2147483647.")
+        return parsed
+
+    async def explorer_posts(
+        self,
+        channel_id: int | None = None,
+        channel_ids: list[int] | tuple[int, ...] | None = None,
+        search: str | None = None,
+        sort: str = "date",
+        min_views: Any = None,
+        max_views: Any = None,
+        min_reactions: Any = None,
+        max_reactions: Any = None,
+        min_comments: Any = None,
+        max_comments: Any = None,
+        min_shares: Any = None,
+        max_shares: Any = None,
+        limit: int = 50,
+        offset: int = 0,
+        include_deleted: bool = False,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Server-side Post Explorer query with stable pagination.
+
+        Search is a bounded case-insensitive substring over post text.
+        ``sort`` is one field (date/views/reactions/comments/shares, newest
+        or highest first) with stable ``posted_at DESC, id DESC`` tie-breaks.
+        Metric min/max pairs are AND-combined.  Filters never expand the
+        workspace scope; ``None`` means All active (paused excluded), while
+        explicitly listed stored channels remain readable.  The Explorer
+        history is independent of chart dates (no date narrowing here).
+        Returns ``(rows, total)`` with a bounded page.
+        """
+
+        normalized_sort = str(sort or "date").strip().lower()
+        if normalized_sort not in self._ORDER_SQL:
+            raise ValueError(f"Invalid sort '{sort}': expected one of date, views, reactions, comments, shares.")
+        try:
+            bounded_limit = int(limit)
+        except (TypeError, ValueError):
+            raise ValueError("Invalid page_size: expected 1..100.") from None
+        if not 1 <= bounded_limit <= 100:
+            raise ValueError("Invalid page_size: expected 1..100.")
+        try:
+            bounded_offset = int(offset)
+        except (TypeError, ValueError):
+            raise ValueError("Invalid page: expected offset >= 0.") from None
+        if bounded_offset < 0 or bounded_offset > 100000:
+            raise ValueError("Invalid page: offset must be 0..100000.")
+        bounds = {
+            "views": (self._validate_metric_bound("min_views", min_views), self._validate_metric_bound("max_views", max_views)),
+            "reactions": (self._validate_metric_bound("min_reactions", min_reactions), self._validate_metric_bound("max_reactions", max_reactions)),
+            "comments": (self._validate_metric_bound("min_comments", min_comments), self._validate_metric_bound("max_comments", max_comments)),
+            "shares": (self._validate_metric_bound("min_shares", min_shares), self._validate_metric_bound("max_shares", max_shares)),
+        }
+        for metric, (low, high) in bounds.items():
+            if low is not None and high is not None and low > high:
+                raise ValueError(f"Invalid {metric} range: min must not exceed max.")
+        trimmed_search: str | None = None
+        if search is not None:
+            candidate = str(search).strip()
+            if candidate:
+                if len(candidate) > 200:
+                    raise ValueError("Invalid search: must be at most 200 characters.")
+                trimmed_search = candidate
+        explicit_ids: list[int] | None = None
+        if channel_ids is not None:
+            if channel_id is not None:
+                raise ValueError("Invalid channel filter: specify channel or channels, not both.")
+            explicit_ids = []
+            for raw in list(channel_ids):
+                try:
+                    parsed = int(raw)  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    raise ValueError("Invalid channel filter: expected positive integers.") from None
+                if parsed <= 0:
+                    raise ValueError("Invalid channel filter: expected positive integers.")
+                explicit_ids.append(parsed)
+            if len(explicit_ids) > 50:
+                raise ValueError("Invalid channel filter: at most 50 channels.")
+            # Deduplicate preserving order for stable caching.
+            explicit_ids = list(dict.fromkeys(explicit_ids))
+            if not explicit_ids:
+                explicit_ids = None
+        order_sql = self._ORDER_SQL[normalized_sort]
+        metric_clauses: list[str] = []
+        params: dict[str, Any] = {
+            "channel_id": channel_id,
+            "include_deleted": bool(include_deleted),
+            "search": trimmed_search,
+        }
+        column_map = {"views": "l.views", "reactions": "l.reactions", "comments": "l.comments", "shares": "l.shares"}
+        for metric, (low, high) in bounds.items():
+            column = column_map[metric]
+            if low is not None:
+                metric_clauses.append(f"COALESCE({column},0) >= :min_{metric}")
+                params[f"min_{metric}"] = low
+            if high is not None:
+                metric_clauses.append(f"COALESCE({column},0) <= :max_{metric}")
+                params[f"max_{metric}"] = high
+        metric_sql = (" AND " + " AND ".join(metric_clauses)) if metric_clauses else ""
+        if explicit_ids is not None:
+            channel_sql = "AND p.channel_id = ANY(CAST(:channel_ids AS bigint[]))"
+            params["channel_ids"] = explicit_ids
+            # Explicit subset remains readable even when paused; no active filter.
+            active_sql = ""
+        elif channel_id is not None:
+            channel_sql = "AND p.channel_id = CAST(:channel_id AS bigint)"
+            active_sql = ""
+        else:
+            channel_sql = ""
+            active_sql = "AND c.active=true"
+        search_sql = "AND (POSITION(LOWER(CAST(:search AS text)) IN LOWER(p.text)) > 0)" if trimmed_search else ""
+        base = self._LATEST_CTE + f"""
+        SELECT p.id, p.message_id, p.posted_at, p.text, p.channel_id,
+               c.identifier, c.title AS channel_title, c.chat_id,
+               COALESCE(l.views,0) AS views, COALESCE(l.comments,0) AS comments,
+               COALESCE(l.reactions,0) AS reactions, COALESCE(l.shares,0) AS shares,
+               (SELECT COUNT(*) FROM comments cm
+                  WHERE cm.workspace_id=p.workspace_id AND cm.post_id=p.id AND cm.is_deleted=false) AS collected_comments,
+               l.taken_at AS updated_at,
+               COALESCE(l.views,0) - COALESCE(d.views, f.views, COALESCE(l.views,0)) AS views_delta
+          FROM posts p JOIN channels c ON c.id=p.channel_id AND c.workspace_id=p.workspace_id
+          LEFT JOIN latest l ON l.workspace_id=p.workspace_id AND l.post_id=p.id
+          LEFT JOIN dayago d ON d.post_id=p.id LEFT JOIN firstsnap f ON f.post_id=p.id
+         WHERE p.workspace_id=:workspace_id {channel_sql} {active_sql}
+           AND (CAST(:include_deleted AS boolean) OR p.is_deleted=false)
+           {search_sql}{metric_sql}"""
+        count_result = await self._execute(
+            f"SELECT COUNT(*) AS total FROM ({base}) AS scoped",
+            params,
+        )
+        total = int(count_result.mappings().first()["total"] or 0)  # type: ignore[index]
+        page_result = await self._execute(
+            base + f" ORDER BY {order_sql} LIMIT :limit OFFSET :offset",
+            {**params, "limit": bounded_limit, "offset": bounded_offset},
+        )
+        return [dict(row) for row in page_result.mappings().all()], total
+
+    async def kpis(
+        self,
+        channel_id: int | None = None,
+        include_deleted: bool = False,
+        from_date: Any = None,
+        to_date: Any = None,
+    ) -> dict[str, Any]:
+        """Latest known totals for the UTC publication-date cohort.
+
+        Inclusive From/To via a half-open next-day boundary.  ``All active``
+        (``channel_id=None``) excludes paused channels; an explicitly
+        selected stored channel remains readable even when paused.
+        """
+
+        start, end_exclusive = cohort_bounds(from_date, to_date)
         sql = self._LATEST_CTE + """
         SELECT COUNT(*) AS posts,
                COALESCE(SUM(l.views),0) AS views, COALESCE(SUM(l.comments),0) AS comments,
@@ -794,7 +1005,9 @@ class PostgresDatabase:
                  JOIN channels ccp ON ccp.id=cp.channel_id AND ccp.workspace_id=cp.workspace_id
                  WHERE cm.workspace_id=:workspace_id AND cm.is_deleted=false AND cp.is_deleted=false
                    AND (CAST(:channel_id AS bigint) IS NULL OR cp.channel_id=CAST(:channel_id AS bigint))
-                   AND (CAST(:channel_id AS bigint) IS NOT NULL OR ccp.active=true)) AS collected_comments,
+                   AND (CAST(:channel_id AS bigint) IS NOT NULL OR ccp.active=true)
+                   AND (CAST(:from_dt AS timestamptz) IS NULL OR cp.posted_at >= CAST(:from_dt AS timestamptz))
+                   AND (CAST(:to_exclusive AS timestamptz) IS NULL OR cp.posted_at < CAST(:to_exclusive AS timestamptz))) AS collected_comments,
                (SELECT MAX(s.taken_at) FROM snapshots s JOIN posts pp ON pp.id=s.post_id AND pp.workspace_id=s.workspace_id
                  JOIN channels cpp ON cpp.id=pp.channel_id AND cpp.workspace_id=pp.workspace_id
                  WHERE s.workspace_id=:workspace_id AND pp.is_deleted=false
@@ -805,8 +1018,18 @@ class PostgresDatabase:
          WHERE p.workspace_id=:workspace_id
            AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
            AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
-           AND (CAST(:include_deleted AS boolean) OR p.is_deleted=false)"""
-        result = await self._execute(sql, {"channel_id": channel_id, "include_deleted": bool(include_deleted)})
+           AND (CAST(:include_deleted AS boolean) OR p.is_deleted=false)
+           AND (CAST(:from_dt AS timestamptz) IS NULL OR p.posted_at >= CAST(:from_dt AS timestamptz))
+           AND (CAST(:to_exclusive AS timestamptz) IS NULL OR p.posted_at < CAST(:to_exclusive AS timestamptz))"""
+        result = await self._execute(
+            sql,
+            {
+                "channel_id": channel_id,
+                "include_deleted": bool(include_deleted),
+                "from_dt": start,
+                "to_exclusive": end_exclusive,
+            },
+        )
         row = result.mappings().first()
         return dict(row) if row else {}
 
@@ -832,14 +1055,29 @@ class PostgresDatabase:
         )
         return [dict(row) for row in result.mappings().all()]
 
-    async def timeseries_totals(self, days: int | None, channel_id: int | None = None) -> dict[str, list]:
+    async def timeseries_totals(
+        self,
+        days: int | None,
+        channel_id: int | None = None,
+        from_date: Any = None,
+        to_date: Any = None,
+    ) -> dict[str, list]:
         """Current cumulative metrics attributed to each post's publication date.
 
         Snapshot timestamps describe collection activity, so they must never
         drive the Overview x-axis.  The latest snapshot supplies each post's
         current values and ``posts.posted_at`` decides when those values enter
         the cumulative series.
+
+        When ``from_date``/``to_date`` are given they form one inclusive UTC
+        cohort with the KPI query (half-open next-day boundary) and override
+        the relative ``days`` window.  Sparse days carry totals forward with
+        ``posts_per_day=0``; an empty cohort returns zeros for the requested
+        range.
         """
+
+        start, end_exclusive = cohort_bounds(from_date, to_date)
+        explicit = start is not None or end_exclusive is not None
         workspace_id = self._workspace()
         now = datetime.now(timezone.utc)
         async with self.sessions.session() as session:
@@ -866,12 +1104,49 @@ class PostgresDatabase:
                              AND (CAST(:channel_id AS bigint) IS NULL OR p.channel_id=CAST(:channel_id AS bigint))
                              AND (CAST(:channel_id AS bigint) IS NOT NULL OR c.active=true)
                              AND p.is_deleted=false
+                             AND (CAST(:from_dt AS timestamptz) IS NULL OR p.posted_at >= CAST(:from_dt AS timestamptz))
+                             AND (CAST(:to_exclusive AS timestamptz) IS NULL OR p.posted_at < CAST(:to_exclusive AS timestamptz))
                              GROUP BY p.posted_at::date
                              ORDER BY p.posted_at::date"""
                     ),
-                    {"workspace_id": workspace_id, "channel_id": channel_id},
+                    {
+                        "workspace_id": workspace_id,
+                        "channel_id": channel_id,
+                        "from_dt": start,
+                        "to_exclusive": end_exclusive,
+                    },
                 )
             ).mappings().all()
+        if explicit:
+            today = now.date()
+            if start is not None and end_exclusive is not None:
+                range_start = start.date()
+                range_end = (end_exclusive - timedelta(days=1)).date()
+            elif start is not None:
+                range_start = start.date()
+                range_end = today
+            else:
+                assert end_exclusive is not None
+                range_end = (end_exclusive - timedelta(days=1)).date()
+                earliest = min((row["day"] for row in rows), default=range_end)
+                range_start = min(earliest, range_end)
+            span = max(1, (range_end - range_start).days + 1)
+            # Bound an absurd single request while keeping every valid
+            # Overview range usable (collection itself caps at 3650 days).
+            span = min(span, 4000)
+            days_list = [(datetime.combine(range_start, datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(span)]
+            totals = {key: 0 for key in ("views", "comments", "reactions", "shares")}
+            by_day: dict[str, dict[str, Any]] = {str(row["day"]): dict(row) for row in rows}
+            output: dict[str, list] = {key: [] for key in ("views", "comments", "reactions", "shares", "posts_per_day")}
+            for day in days_list:
+                day_row = by_day.get(day)
+                if day_row:
+                    for key in totals:
+                        totals[key] += int(day_row[key] or 0)
+                for key in totals:
+                    output[key].append(totals[key])
+                output["posts_per_day"].append(int(day_row["posts"] or 0) if day_row else 0)
+            return {"days": days_list, **output}
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         first_day = min((row["day"] for row in rows), default=now.date())
         if days is None:

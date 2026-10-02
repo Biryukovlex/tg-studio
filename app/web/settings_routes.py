@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import limits
@@ -24,6 +24,10 @@ from ..studio.setup import build_setup_state
 from ..workspace_settings import SETTINGS, EncryptionKeyRequired, WorkspaceSettings, format_timestamp
 from .dependencies import require_auth
 from .links import normalize_channel_identifier
+
+_LOG_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled", "interrupted"}
+_LOGS_PAGE_SIZE_DEFAULT = 25
+_LOGS_PAGE_SIZE_MAX = 100
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -42,6 +46,82 @@ _FRIENDLY_ERRORS = {
 
 _CHANNEL_MESSAGE = "Channel identifier must be @name, t.me/name, or -100…"
 _USERNAME_RE = re.compile(r"[A-Za-z0-9_]{5,32}")
+
+
+def _wants_json(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept.lower():
+        if request.query_params.get("format") == "html":
+            return False
+        return True
+    # In-place saves from the new UI post JSON or set ?format=json.
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type.lower():
+        return True
+    return request.query_params.get("format") == "json"
+
+
+def _json_error(code: str, message: str, status_code: int = 422) -> JSONResponse:
+    return JSONResponse(
+        {"ok": False, "error": {"code": code, "message": message, "retryable": False}},
+        status_code=status_code,
+    )
+
+
+async def _canonical_settings_json(request: Request, section: str, notice: str) -> dict[str, Any]:
+    """Stable canonical response for in-place Settings saves (no secret echo)."""
+
+    context = await _page_context(request)
+    ws_dict = dict(context.get("ws_dict") or {})
+    # Secrets are already write-only in as_dict ({set, source}); never echo plaintext.
+    return {
+        "ok": True,
+        "section": section,
+        "notice": notice,
+        "fields": ws_dict,
+        "connection": context.get("connection_status"),
+        "setup": context.get("setup_state"),
+        "search": context.get("search_state"),
+        "restart_required": bool(context.get("restart_required", False)),
+    }
+
+
+def _parse_log_filters(request: Request) -> tuple[str | None, int | None, str | None, int, int, JSONResponse | None]:
+    params = request.query_params
+    raw_query = params.get("q", "")
+    query = raw_query.strip() or None
+    if query is not None and len(query) > 200:
+        return None, None, None, 1, _LOGS_PAGE_SIZE_DEFAULT, _json_error("invalid_query", "Invalid query: must be at most 200 characters.", 422)
+    raw_channel = params.get("channel", "")
+    channel_id: int | None = None
+    if raw_channel.strip():
+        try:
+            channel_id = int(raw_channel.strip())
+        except (TypeError, ValueError):
+            return None, None, None, 1, _LOGS_PAGE_SIZE_DEFAULT, _json_error("invalid_channel", "Invalid channel: expected a positive integer.", 422)
+        if channel_id <= 0:
+            return None, None, None, 1, _LOGS_PAGE_SIZE_DEFAULT, _json_error("invalid_channel", "Invalid channel: expected a positive integer.", 422)
+    raw_status = params.get("status", "")
+    status: str | None = raw_status.strip().lower() or None
+    if status is not None and status not in _LOG_STATUSES:
+        return None, None, None, 1, _LOGS_PAGE_SIZE_DEFAULT, _json_error(
+            "invalid_status",
+            "Invalid status: expected one of queued, running, succeeded, failed, cancelled, interrupted.",
+            422,
+        )
+    try:
+        page = int(str(params.get("page", "1")).strip() or "1")
+    except (TypeError, ValueError):
+        return None, None, None, 1, _LOGS_PAGE_SIZE_DEFAULT, _json_error("invalid_page", "Invalid page: expected >= 1.", 422)
+    if page < 1 or page > 10000:
+        return None, None, None, 1, _LOGS_PAGE_SIZE_DEFAULT, _json_error("invalid_page", "Invalid page: expected 1..10000.", 422)
+    try:
+        page_size = int(str(params.get("page_size", str(_LOGS_PAGE_SIZE_DEFAULT))).strip() or str(_LOGS_PAGE_SIZE_DEFAULT))
+    except (TypeError, ValueError):
+        return None, None, None, 1, _LOGS_PAGE_SIZE_DEFAULT, _json_error("invalid_page", "Invalid page_size: expected 1..100.", 422)
+    if not 1 <= page_size <= _LOGS_PAGE_SIZE_MAX:
+        return None, None, None, 1, _LOGS_PAGE_SIZE_DEFAULT, _json_error("invalid_page", "Invalid page_size: expected 1..100.", 422)
+    return query, channel_id, status, page, page_size, None
 
 
 def _csrf_token(request: Request) -> str:
@@ -215,25 +295,85 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 @router.get("", response_class=HTMLResponse)
 async def settings_page(request: Request):
     if (redirect := _guard(request)) is not None:
+        # JSON callers receive 401/303? Preserve redirect for browsers; JSON gets 401.
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "error": {"code": "unauthenticated", "message": "Sign in to continue.", "retryable": False}}, status_code=401)
         return redirect
+    if _wants_json(request):
+        context = await _page_context(request)
+        return JSONResponse(
+            {
+                "ok": True,
+                "fields": context.get("ws_dict"),
+                "connection": context.get("connection_status"),
+                "setup": context.get("setup_state"),
+                "search": context.get("search_state"),
+                "restart_required": bool(context.get("restart_required", False)),
+                "available": bool(context.get("available", False)),
+            }
+        )
     return await _render(request)
 
 
 @router.get("/logs", response_class=HTMLResponse)
-async def settings_logs_page(request: Request, page: int = Query(1, ge=1)):
-    """Show private full Studio tool outputs to the workspace owner."""
+async def settings_logs_page(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(_LOGS_PAGE_SIZE_DEFAULT, ge=1, le=_LOGS_PAGE_SIZE_MAX),
+):
+    """Show private full Studio tool outputs to the workspace owner.
+
+    Server-side query/channel/status filtering with count/pagination over
+    stored results.  JSON (`Accept: application/json` or `?format=json`)
+    returns canonical fields including requested/actual model, run state and
+    allowlisted diagnostics; ``available:false`` is storage unavailability,
+    distinct from empty data.
+    """
 
     if (redirect := _guard(request)) is not None:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "available": False, "error": {"code": "unauthenticated", "message": "Sign in to continue.", "retryable": False}}, status_code=401)
         return redirect
+    query, channel_id, status, parsed_page, parsed_size, filter_error = _parse_log_filters(request)
+    # FastAPI already validated page/page_size bounds; keep manual parse as source of truth when present.
+    if filter_error is not None:
+        if _wants_json(request):
+            return filter_error
+        raise HTTPException(status_code=filter_error.status_code, detail=filter_error.body.decode("utf-8") if hasattr(filter_error, "body") else "Invalid logs filter")
+    # Prefer FastAPI-validated values when query string omits the new filters.
+    page = parsed_page
+    page_size = parsed_size
     repository = getattr(request.app.state, "studio_repository", None)
     getter = getattr(repository, "list_tool_result_logs", None)
-    page_size = 25
-    logs: list[dict[str, Any]] = []
-    if getter is not None:
+    counter = getattr(repository, "count_tool_result_logs", None)
+    try:
+        if getter is None:
+            raise RuntimeError("Studio log storage is unavailable")
         try:
+            logs = list(await getter(limit=page_size + 1, offset=(page - 1) * page_size, query=query, channel_id=channel_id, status=status))
+        except TypeError:
+            # Backward-compatible repository without filters: paginate unfiltered, then filter in memory.
             logs = list(await getter(limit=page_size + 1, offset=(page - 1) * page_size))
-        except Exception:  # noqa: BLE001 - settings must remain available if Studio storage is unavailable
-            logs = []
+        try:
+            total = int(await counter(query=query, channel_id=channel_id, status=status)) if counter is not None else (len(logs) if len(logs) <= page_size else (page - 1) * page_size + len(logs))
+        except TypeError:
+            total = len(logs)
+        available = True
+        error: dict[str, Any] | None = None
+    except ValueError as exc:
+        if _wants_json(request):
+            return _json_error("invalid_filter", str(exc), 422)
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except Exception as exc:  # noqa: BLE001 - settings must remain available if Studio storage is unavailable
+        if _wants_json(request):
+            return JSONResponse(
+                {"ok": False, "available": False, "error": {"code": "logs_unavailable", "message": "Agent log storage is unavailable.", "retryable": True}},
+                status_code=503,
+            )
+        logs = []
+        total = 0
+        available = False
+        error = {"code": "logs_unavailable"}
     has_next = len(logs) > page_size
     logs = logs[:page_size]
     for row in logs:
@@ -241,6 +381,49 @@ async def settings_logs_page(request: Request, page: int = Query(1, ge=1)):
         safe_payload = row.get("safe_payload")
         if not row.get("tool_name"):
             row["tool_name"] = safe_payload.get("tool_name", "Tool") if isinstance(safe_payload, dict) else "Tool"
+    if _wants_json(request):
+        total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+        payload_logs = []
+        for row in logs:
+            diagnostics = row.get("diagnostics")
+            if isinstance(diagnostics, dict):
+                safe_diag = {
+                    "phase": diagnostics.get("phase"),
+                    "exception_class": diagnostics.get("exception_class"),
+                    "status_code": diagnostics.get("status_code"),
+                    "provider_code": diagnostics.get("provider_code"),
+                }
+            else:
+                safe_diag = None
+            payload_logs.append(
+                {
+                    "id": int(row.get("id", 0) or 0),
+                    "run_id": str(row.get("run_id") or ""),
+                    "sequence": int(row.get("sequence", 0) or 0),
+                    "tool_name": str(row.get("tool_name") or "Tool"),
+                    "conversation_id": str(row.get("conversation_id") or ""),
+                    "conversation_title": str(row.get("conversation_title") or ""),
+                    "channel_id": int(row["channel_id"]) if row.get("channel_id") is not None else None,
+                    "requested_model": row.get("requested_model"),
+                    "actual_model": row.get("actual_model"),
+                    "run_status": row.get("run_status") or row.get("status") or "unknown",
+                    "diagnostics": safe_diag,
+                    "created_at": str(row.get("created_at") or ""),
+                    "created_at_display": row.get("created_at_display"),
+                }
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "available": True,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "has_next": has_next,
+                "logs": payload_logs,
+            }
+        )
     return templates.TemplateResponse(
         request,
         "settings_logs.html",
@@ -254,12 +437,30 @@ async def settings_logs_page(request: Request, page: int = Query(1, ge=1)):
     )
 
 
-async def _begin_write(request: Request) -> RedirectResponse | HTMLResponse | None:
+async def _begin_write(request: Request) -> RedirectResponse | HTMLResponse | JSONResponse | None:
     """Shared prelude for every POST: auth, owner, CSRF, store availability."""
     if (redirect := _guard(request)) is not None:
+        if _wants_json(request):
+            return JSONResponse(
+                {"ok": False, "error": {"code": "unauthenticated", "message": "Sign in to continue.", "retryable": False}},
+                status_code=401,
+            )
         return redirect
-    await _require_csrf(request)
+    try:
+        await _require_csrf(request)
+    except HTTPException as exc:
+        if _wants_json(request):
+            return JSONResponse(
+                {"ok": False, "error": {"code": "csrf_failed", "message": "CSRF validation failed.", "retryable": False}},
+                status_code=403,
+            )
+        raise
     if not _available(request):
+        if _wants_json(request):
+            return JSONResponse(
+                {"ok": False, "available": False, "error": {"code": "store_unavailable", "message": "Settings storage is unavailable.", "retryable": True}},
+                status_code=503,
+            )
         return await _render(request)
     return None
 
@@ -268,15 +469,30 @@ async def _begin_write(request: Request) -> RedirectResponse | HTMLResponse | No
 async def add_channel(request: Request, identifier: str = Form("")):
     if (early := await _begin_write(request)) is not None:
         return early
+    # Support JSON callers that post {"identifier": "..."} without a form.
+    if not identifier.strip() and "application/json" in request.headers.get("content-type", "").lower():
+        try:
+            body = await request.json()
+            identifier = str(body.get("identifier", "") or "")
+        except Exception:  # noqa: BLE001 - fall through to validation
+            identifier = ""
     error = validate_channel_identifier(identifier)
+    new_id: int | None = None
     if error is None:
         try:
-            await request.app.state.db.add_channel(normalize_channel_identifier(identifier))
+            new_id = await request.app.state.db.add_channel(normalize_channel_identifier(identifier))
         except ValueError as exc:
             error = str(exc)
     if error is not None:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "errors": {"identifier": error}, "values": {"identifier": identifier}}, status_code=422)
         return await _render(request, errors={"identifier": error}, values={"identifier": identifier}, status_code=422)
-    _flash(request, f"Channel {identifier.strip()} added.", "telegram")
+    notice = f"Channel {identifier.strip()} added."
+    _flash(request, notice, "telegram")
+    if _wants_json(request):
+        payload = await _canonical_settings_json(request, "telegram", notice)
+        payload["channel"] = {"id": new_id, "identifier": identifier.strip()}
+        return payload
     return _redirect("telegram")
 
 
@@ -294,7 +510,12 @@ async def deactivate_channel(request: Request, channel_id: int):
     except Exception:  # noqa: BLE001 - the label is cosmetic
         pass
     await db.deactivate_channel(channel_id)
-    _flash(request, f"Channel {label} deactivated.", "telegram")
+    notice = f"Channel {label} deactivated."
+    _flash(request, notice, "telegram")
+    if _wants_json(request):
+        payload = await _canonical_settings_json(request, "telegram", notice)
+        payload["channel_id"] = channel_id
+        return payload
     return _redirect("telegram")
 
 
@@ -304,12 +525,22 @@ async def delete_channel(request: Request, channel_id: int, confirmation: str = 
 
     if (early := await _begin_write(request)) is not None:
         return early
+    if not confirmation.strip() and "application/json" in request.headers.get("content-type", "").lower():
+        try:
+            body = await request.json()
+            confirmation = str(body.get("confirmation", "") or "")
+        except Exception:  # noqa: BLE001 - fall through to validation
+            confirmation = ""
     delete = getattr(request.app.state.db, "delete_channel", None)
     if delete is None:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "error": {"code": "unavailable", "message": "Channel deletion is unavailable.", "retryable": False}}, status_code=501)
         raise HTTPException(status_code=501, detail="Channel deletion is unavailable")
     try:
         deleted = await (delete(channel_id, confirmation=confirmation))
     except ValueError as exc:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "errors": {"channel_delete": str(exc)}, "values": {"delete_channel_id": channel_id}}, status_code=422)
         return await _render(
             request,
             errors={"channel_delete": str(exc)},
@@ -317,6 +548,8 @@ async def delete_channel(request: Request, channel_id: int, confirmation: str = 
             status_code=422,
         )
     if deleted is None:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "errors": {"channel_delete": "Channel not found."}, "values": {"delete_channel_id": channel_id}}, status_code=404)
         return await _render(
             request,
             errors={"channel_delete": "Channel not found."},
@@ -332,7 +565,12 @@ async def delete_channel(request: Request, channel_id: int, confirmation: str = 
         deleted.get("conversations", 0),
         deleted.get("drafts", 0),
     )
-    _flash(request, f"Channel {label} and all of its data were permanently deleted.", "telegram")
+    notice = f"Channel {label} and all of its data were permanently deleted."
+    _flash(request, notice, "telegram")
+    if _wants_json(request):
+        payload = await _canonical_settings_json(request, "telegram", notice)
+        payload["deleted"] = deleted
+        return payload
     return _redirect("telegram")
 
 
@@ -362,10 +600,14 @@ async def save_telegram_connection(
     if not errors and not (api_id.strip() or api_hash.strip() or session_string.strip()):
         errors["api_id"] = "Enter an API ID, an API hash, or a session string to save."
     if errors:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "errors": errors, "values": values}, status_code=422)
         return await _render(request, errors=errors, values=values, status_code=422)
 
     cipher = build_cipher(str(getattr(settings, "telegram_session_encryption_key", "") or ""))
     if cipher is None:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "error": {"code": "encryption_key_required", "message": ENCRYPTION_KEY_MESSAGE, "retryable": False}}, status_code=409)
         return await _render(request, values=values, status_code=409, msg=ENCRYPTION_KEY_MESSAGE)
 
     existing: dict[str, Any] = {}
@@ -386,6 +628,8 @@ async def save_telegram_connection(
     if not final_session:
         errors["session_string"] = "Required for a new connection."
     if errors:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "errors": errors, "values": values}, status_code=422)
         return await _render(request, errors=errors, values=values, status_code=422)
 
     assert final_api_id is not None
@@ -399,7 +643,12 @@ async def save_telegram_connection(
     store = _store(request)
     if store is not None:
         store.telegram_restart_required = True
-    _flash(request, "Connection saved. Restart the collector to use the updated credentials.", "telegram")
+    notice = "Connection saved. Restart the collector to use the updated credentials."
+    _flash(request, notice, "telegram")
+    if _wants_json(request):
+        # Write-only secrets: blank keeps current values; never echo plaintext.
+        payload = await _canonical_settings_json(request, "telegram", notice)
+        return payload
     return _redirect("telegram")
 
 
@@ -457,7 +706,10 @@ async def save_collection(
         _validate_field(store, key, field, typed, errors)
         changes[key] = typed
     if errors:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "errors": errors, "values": values}, status_code=422)
         return await _render(request, errors=errors, values=values, status_code=422)
+    # No partial apply: validation precedes the single atomic transaction.
     await _apply_fields(store, changes)
     # In the combined process, update the live scheduler immediately after a
     # successful persistence.  The worker process has no callback here and
@@ -469,7 +721,10 @@ async def save_collection(
                 await (callback(float(changes["collection.poll_minutes"])))
             except Exception as exc:  # noqa: BLE001 - settings save must still succeed
                 log.warning("poll interval callback failed (%s)", type(exc).__name__)
-    _flash(request, "Collection settings saved.", "collection")
+    notice = "Collection settings saved."
+    _flash(request, notice, "collection")
+    if _wants_json(request):
+        return await _canonical_settings_json(request, "collection", notice)
     return _redirect("collection")
 
 
@@ -502,14 +757,25 @@ async def save_studio(
         else:
             errors["model"] = "Model is required."
     except EncryptionKeyRequired:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "error": {"code": "encryption_key_required", "message": ENCRYPTION_KEY_MESSAGE, "retryable": False}}, status_code=409)
         return await _render(request, values=values, status_code=409, msg=ENCRYPTION_KEY_MESSAGE)
     if errors:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "errors": errors, "values": values}, status_code=422)
         return await _render(request, errors=errors, values=values, status_code=422)
     try:
         await _apply_fields(store, changes, reset_keys=reset_keys)
     except EncryptionKeyRequired:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "error": {"code": "encryption_key_required", "message": ENCRYPTION_KEY_MESSAGE, "retryable": False}}, status_code=409)
         return await _render(request, values=values, status_code=409, msg=ENCRYPTION_KEY_MESSAGE)
-    _flash(request, "Studio settings saved.", "studio")
+    # Provider changes invalidate prior consent via configuration fingerprint;
+    # blank secrets keep current values and are never echoed back.
+    notice = "Studio settings saved."
+    _flash(request, notice, "studio")
+    if _wants_json(request):
+        return await _canonical_settings_json(request, "studio", notice)
     return _redirect("studio")
 
 
@@ -532,9 +798,14 @@ async def save_research(
     _validate_field(store, "research.enabled", "research_enabled", changes["research.enabled"], errors)
     _validate_field(store, "research.blocked_domains", "blocked_domains", changes["research.blocked_domains"], errors)
     if errors:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "errors": errors, "values": values}, status_code=422)
         return await _render(request, errors=errors, values=values, status_code=422)
     await _apply_fields(store, changes)
-    _flash(request, "Research settings saved.", "research")
+    notice = "Research settings saved."
+    _flash(request, notice, "research")
+    if _wants_json(request):
+        return await _canonical_settings_json(request, "research", notice)
     return _redirect("research")
 
 
@@ -543,14 +814,21 @@ def _reset_route(section: str):
         if (early := await _begin_write(request)) is not None:
             return early
         if not key.startswith(f"{section}."):
+            if _wants_json(request):
+                return JSONResponse({"ok": False, "error": {"code": "invalid_key", "message": "Unknown setting for this section.", "retryable": False}}, status_code=422)
             raise HTTPException(status_code=422, detail="Unknown setting for this section")
         reset_store = _store(request)
         assert reset_store is not None  # _begin_write guarantees an available store
         try:
             await reset_store.reset(key)
         except ValueError as exc:
+            if _wants_json(request):
+                return JSONResponse({"ok": False, "error": {"code": "invalid_key", "message": str(exc), "retryable": False}}, status_code=422)
             raise HTTPException(status_code=422, detail=str(exc)) from None
-        _flash(request, "Setting reset to the .env value.", section)
+        notice = "Setting reset to the .env value."
+        _flash(request, notice, section)
+        if _wants_json(request):
+            return await _canonical_settings_json(request, section, notice)
         return _redirect(section)
 
     reset_setting.__name__ = f"reset_{section}"

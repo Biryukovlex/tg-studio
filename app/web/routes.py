@@ -17,8 +17,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -26,8 +26,9 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from ..collector import Collector
 from ..config import Settings
+from ..postgres_db import cohort_bounds, parse_utc_date
 from ..workspace_settings import RuntimeSettings
-from ..telegram_formatting import render_telegram_html
+from ..telegram_formatting import normalize_entities, render_telegram_html
 from .dependencies import csrf_token as shared_csrf_token
 from .dependencies import require_auth as shared_require_auth
 from .dependencies import require_csrf as shared_require_csrf
@@ -188,6 +189,121 @@ def _page_number(value: str | int | None) -> int:
         return max(1, int(value or 1))
     except (TypeError, ValueError):
         return 1
+
+
+_EXPORT_ROW_LIMIT = 100000
+_EXPLORER_SORTS = {"date", "views", "reactions", "comments", "shares"}
+_EXPLORER_PAGE_SIZE_MAX = 100
+
+
+def _wants_json(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept.lower():
+        # Explicit ?format=html still forces HTML for debugging.
+        if request.query_params.get("format") == "html":
+            return False
+        return True
+    return request.query_params.get("format") == "json"
+
+
+def _json_error(code: str, message: str, status_code: int = 422) -> JSONResponse:
+    return JSONResponse(
+        {"error": {"code": code, "message": message, "retryable": False}},
+        status_code=status_code,
+    )
+
+
+def _parse_cohort(request: Request) -> tuple[object | None, object | None, JSONResponse | None]:
+    """Parse inclusive UTC From/To (half-open next-day) or return a 422 JSON."""
+
+    raw_from = request.query_params.get("from", "")
+    raw_to = request.query_params.get("to", "")
+    if not raw_from.strip() and not raw_to.strip():
+        return None, None, None
+    try:
+        start = parse_utc_date(raw_from) if raw_from.strip() else None
+        end = parse_utc_date(raw_to) if raw_to.strip() else None
+        cohort_bounds(raw_from if raw_from.strip() else None, raw_to if raw_to.strip() else None)
+    except ValueError as exc:
+        return None, None, _json_error("invalid_date", str(exc), 422)
+    # Return raw strings; the repository parses again so SQL binding stays UTC.
+    return (raw_from.strip() or None, raw_to.strip() or None, None)
+
+
+def _strict_channel(value: str | int | None) -> int | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ValueError("Invalid channel: expected a positive integer.") from None
+    if parsed <= 0:
+        raise ValueError("Invalid channel: expected a positive integer.")
+    return parsed
+
+
+def _parse_channel_list(value: str | None) -> list[int] | None:
+    if value is None or not str(value).strip():
+        return None
+    parts = [part.strip() for part in str(value).split(",") if part.strip()]
+    if not parts:
+        return None
+    if len(parts) > 50:
+        raise ValueError("Invalid channels: at most 50 channels.")
+    parsed: list[int] = []
+    for part in parts:
+        try:
+            number = int(part)
+        except (TypeError, ValueError):
+            raise ValueError("Invalid channels: expected comma-separated positive integers.") from None
+        if number <= 0:
+            raise ValueError("Invalid channels: expected comma-separated positive integers.")
+        parsed.append(number)
+    return list(dict.fromkeys(parsed))
+
+
+def _parse_sort(value: str | None) -> str:
+    normalized = str(value or "date").strip().lower()
+    if normalized not in _EXPLORER_SORTS:
+        raise ValueError("Invalid sort: expected one of date, views, reactions, comments, shares.")
+    return normalized
+
+
+def _parse_metric_bound(name: str, value: str | int | None) -> int | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {name}: expected a non-negative integer.") from None
+    if parsed < 0 or parsed > 2_147_483_647:
+        raise ValueError(f"Invalid {name}: expected 0..2147483647.")
+    return parsed
+
+
+def _parse_search(value: str | None) -> str | None:
+    if value is None:
+        return None
+    candidate = str(value).strip()
+    if not candidate:
+        return None
+    if len(candidate) > 200:
+        raise ValueError("Invalid search: must be at most 200 characters.")
+    return candidate
+
+
+def _parse_page(value: str | int | None, *, name: str = "page", minimum: int = 1, maximum: int = 10000) -> int:
+    try:
+        parsed = int(str(value or minimum).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {name}: expected {minimum}..{maximum}.") from None
+    if not minimum <= parsed <= maximum:
+        raise ValueError(f"Invalid {name}: expected {minimum}..{maximum}.")
+    return parsed
+
+
+def _parse_page_size(value: str | int | None) -> int:
+    return _parse_page(value, name="page_size", minimum=1, maximum=_EXPLORER_PAGE_SIZE_MAX)
 
 
 def _num(v) -> str:
@@ -380,16 +496,36 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
     ):
         require_auth(request)
         channel_id = _optional_positive_int(channel)
+        from_param, to_param, cohort_error = _parse_cohort(request)
+        if cohort_error is not None:
+            return cohort_error
+        use_cohort = from_param is not None or to_param is not None
         window_days, window_value = _history_window(days)
         current_page = _page_number(page)
         page_size = 100
         channels = await (db.get_channels())
-        k = await (db.kpis(channel_id))
+        try:
+            if use_cohort:
+                k = await (db.kpis(channel_id, from_date=from_param, to_date=to_param))
+            else:
+                k = await (db.kpis(channel_id))
+        except TypeError as exc:
+            if "from_date" in str(exc) or "to_date" in str(exc):
+                return _json_error("unavailable", "Date-cohort queries are unavailable for this storage backend.", 503)
+            raise
         total_rows = max(0, int(k.get("posts", 0) or 0))
         total_pages = max(1, (total_rows + page_size - 1) // page_size)
         current_page = min(current_page, total_pages)
         offset = (current_page - 1) * page_size
-        ts = await (db.timeseries_totals(days=window_days, channel_id=channel_id))
+        try:
+            if use_cohort:
+                ts = await (db.timeseries_totals(days=None, channel_id=channel_id, from_date=from_param, to_date=to_param))
+            else:
+                ts = await (db.timeseries_totals(days=window_days, channel_id=channel_id))
+        except TypeError as exc:
+            if "from_date" in str(exc) or "to_date" in str(exc):
+                return _json_error("unavailable", "Date-cohort queries are unavailable for this storage backend.", 503)
+            raise
         stats_order = order if order in _ORDER_KEYS else "date"
         reader = getattr(db, "latest_stats")
         try:
@@ -421,6 +557,29 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
             "shares": ts["shares"],
             "postsPerDay": ts["posts_per_day"],
         }
+        if _wants_json(request):
+            return {
+                "channel_id": channel_id,
+                "from": from_param,
+                "to": to_param,
+                "cohort": {"from": from_param, "to": to_param} if use_cohort else None,
+                "kpis": {
+                    "posts": int(k.get("posts", 0) or 0),
+                    "views": int(k.get("views", 0) or 0),
+                    "reactions": int(k.get("reactions", 0) or 0),
+                    "comments": int(k.get("comments", 0) or 0),
+                    "shares": int(k.get("shares", 0) or 0),
+                    "collected_comments": int(k.get("collected_comments", 0) or 0),
+                    "last_poll": str(k.get("last_poll") or "") or None,
+                },
+                "chart": chart,
+                "pagination": {
+                    "page": current_page,
+                    "page_size": page_size,
+                    "total_rows": total_rows,
+                    "total_pages": total_pages,
+                },
+            }
         return render(request, "dashboard.html", {
             "channels": channels,
             "current_channel": channel_id,
@@ -439,6 +598,220 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
             "has_next": has_next,
             "chart": chart,
         })
+
+    @app.get("/api/overview")
+    async def api_overview(request: Request):
+        """Same UTC publication-date cohort for chart and KPIs (JSON).
+
+        Query: ``channel`` (optional positive int, None=All active),
+        ``from``/``to`` (optional YYYY-MM-DD UTC, inclusive via half-open
+        next-day).  Latest known metric totals of selected posts; All active
+        excludes paused, explicit stored channels remain readable.
+        """
+
+        require_auth(request)
+        try:
+            channel_id = _strict_channel(request.query_params.get("channel", ""))
+        except ValueError as exc:
+            return _json_error("invalid_channel", str(exc), 422)
+        from_param, to_param, cohort_error = _parse_cohort(request)
+        if cohort_error is not None:
+            return cohort_error
+        try:
+            try:
+                k = await (db.kpis(channel_id, from_date=from_param, to_date=to_param))
+            except TypeError as exc:
+                if "from_date" in str(exc) or "to_date" in str(exc):
+                    return _json_error("unavailable", "Date-cohort queries are unavailable for this storage backend.", 503)
+                raise
+            try:
+                ts = await (
+                    db.timeseries_totals(days=None, channel_id=channel_id, from_date=from_param, to_date=to_param)
+                    if (from_param is not None or to_param is not None)
+                    else db.timeseries_totals(days=14, channel_id=channel_id)
+                )
+            except TypeError as exc:
+                if "from_date" in str(exc) or "to_date" in str(exc):
+                    return _json_error("unavailable", "Date-cohort queries are unavailable for this storage backend.", 503)
+                raise
+        except ValueError as exc:
+            return _json_error("invalid_date", str(exc), 422)
+        return {
+            "channel_id": channel_id,
+            "from": from_param,
+            "to": to_param,
+            "kpis": {
+                "posts": int(k.get("posts", 0) or 0),
+                "views": int(k.get("views", 0) or 0),
+                "reactions": int(k.get("reactions", 0) or 0),
+                "comments": int(k.get("comments", 0) or 0),
+                "shares": int(k.get("shares", 0) or 0),
+                "collected_comments": int(k.get("collected_comments", 0) or 0),
+                "last_poll": str(k.get("last_poll") or "") or None,
+            },
+            "series": {
+                "days": ts["days"],
+                "views": ts["views"],
+                "reactions": ts["reactions"],
+                "comments": ts["comments"],
+                "shares": ts["shares"],
+                "posts_per_day": ts["posts_per_day"],
+            },
+        }
+
+    @app.get("/api/explorer")
+    async def api_explorer(request: Request):
+        """Server-side Post Explorer (JSON): search, one sort, channel subset,
+        optional min/max for all four metrics, stable tie-breaks, total count
+        and bounded pagination.  Filters never expand the workspace scope;
+        Explorer history is independent of chart dates.
+        """
+
+        require_auth(request)
+        params = request.query_params
+        try:
+            if params.get("channel") and params.get("channels"):
+                return _json_error("invalid_channel", "Specify channel or channels, not both.", 422)
+            channel_id = _strict_channel(params.get("channel", ""))
+            channel_ids = _parse_channel_list(params.get("channels"))
+            sort = _parse_sort(params.get("sort", "date"))
+            search = _parse_search(params.get("q"))
+            min_views = _parse_metric_bound("min_views", params.get("min_views"))
+            max_views = _parse_metric_bound("max_views", params.get("max_views"))
+            min_reactions = _parse_metric_bound("min_reactions", params.get("min_reactions"))
+            max_reactions = _parse_metric_bound("max_reactions", params.get("max_reactions"))
+            min_comments = _parse_metric_bound("min_comments", params.get("min_comments"))
+            max_comments = _parse_metric_bound("max_comments", params.get("max_comments"))
+            min_shares = _parse_metric_bound("min_shares", params.get("min_shares"))
+            max_shares = _parse_metric_bound("max_shares", params.get("max_shares"))
+            page = _parse_page(params.get("page", "1"))
+            page_size = _parse_page_size(params.get("page_size", "50"))
+            for low, high, name in (
+                (min_views, max_views, "views"),
+                (min_reactions, max_reactions, "reactions"),
+                (min_comments, max_comments, "comments"),
+                (min_shares, max_shares, "shares"),
+            ):
+                if low is not None and high is not None and low > high:
+                    return _json_error("invalid_range", f"Invalid {name} range: min must not exceed max.", 422)
+        except ValueError as exc:
+            message = str(exc)
+            code = "invalid_sort" if "sort" in message.lower() else (
+                "invalid_search" if "search" in message.lower() else (
+                    "invalid_channel" if "channel" in message.lower() else (
+                        "invalid_page" if "page" in message.lower() else "invalid_range"
+                    )
+                )
+            )
+            return _json_error(code, message, 422)
+        explorer = getattr(db, "explorer_posts", None)
+        if explorer is None:
+            return _json_error("unavailable", "Post Explorer is unavailable for this storage backend.", 503)
+        try:
+            rows, total = await explorer(
+                channel_id=channel_id,
+                channel_ids=channel_ids,
+                search=search,
+                sort=sort,
+                min_views=min_views,
+                max_views=max_views,
+                min_reactions=min_reactions,
+                max_reactions=max_reactions,
+                min_comments=min_comments,
+                max_comments=max_comments,
+                min_shares=min_shares,
+                max_shares=max_shares,
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+        except ValueError as exc:
+            return _json_error("invalid_range", str(exc), 422)
+        total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+        payload_rows = []
+        for row in rows:
+            item = dict(row)
+            item["posted_at"] = str(item.get("posted_at") or "")
+            item["updated_at"] = str(item.get("updated_at") or "")
+            item["link"] = _post_link(item)
+            payload_rows.append(item)
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "sort": sort,
+            "rows": payload_rows,
+        }
+
+    @app.get("/api/posts/{post_id}")
+    async def api_post_detail(request: Request, post_id: int):
+        """Full post read model (JSON): complete sanitized text/entities,
+        metrics, permitted discussion, snapshot timestamps and validated
+        source URL.  IDs are authorized server-side against the workspace.
+        """
+
+        require_auth(request)
+        if post_id <= 0:
+            return _json_error("not_found", "Post not found.", 404)
+        post = await (db.post_row(post_id))
+        if post is None:
+            return _json_error("not_found", "Post not found.", 404)
+        hist = await (db.post_history(post_id))
+        raw_comments = await (db.comments_for_post(post_id))
+        # Permitted discussion only: workspace-scoped, non-deleted.
+        comments = [dict(item) for item in raw_comments if not item.get("is_deleted")]
+        row = dict(post)
+        entities = normalize_entities(row.get("formatting_entities"))
+        formatted = render_telegram_html(row.get("text"), entities)
+        source_url = _post_link(row)
+        validated_url: str | None = None if source_url == "#" else source_url
+        snapshots = [
+            {
+                "taken_at": str(item.get("taken_at") or ""),
+                "views": int(item.get("views", 0) or 0),
+                "comments": int(item.get("comments", 0) or 0),
+                "reactions": int(item.get("reactions", 0) or 0),
+                "shares": int(item.get("shares", 0) or 0),
+            }
+            for item in hist
+        ]
+        discussion = [
+            {
+                "id": int(item.get("id", 0) or 0),
+                "telegram_message_id": int(item.get("telegram_message_id", 0) or 0),
+                "sender_name": str(item.get("sender_name") or ""),
+                "sender_username": str(item.get("sender_username") or ""),
+                "posted_at": str(item.get("posted_at") or ""),
+                "edited_at": str(item.get("edited_at") or "") or None,
+                "text": str(item.get("text") or ""),
+                "reactions": int(item.get("reactions", 0) or 0),
+                "link": _comment_link(item),
+            }
+            for item in comments
+        ]
+        return {
+            "id": int(row.get("id")),
+            "message_id": int(row.get("message_id", 0) or 0),
+            "channel_id": int(row.get("channel_id", 0) or 0),
+            "channel_identifier": str(row.get("identifier") or ""),
+            "channel_title": str(row.get("channel_title") or ""),
+            "posted_at": str(row.get("posted_at") or ""),
+            "text": str(row.get("text") or ""),
+            "formatting_entities": entities,
+            "formatted_html": formatted,
+            "metrics": {
+                "views": int(row.get("views", 0) or 0),
+                "reactions": int(row.get("reactions", 0) or 0),
+                "comments": int(row.get("comments", 0) or 0),
+                "shares": int(row.get("shares", 0) or 0),
+                "collected_comments": int(row.get("collected_comments", 0) or 0),
+                "updated_at": str(row.get("updated_at") or "") or None,
+            },
+            "snapshots": snapshots,
+            "snapshot_note": "Snapshot timestamps are collection times; the Overview chart uses publication dates.",
+            "source_url": validated_url,
+            "discussion": discussion,
+        }
 
     @app.get("/post/{post_id}")
     async def post_detail(request: Request, post_id: int):
@@ -500,7 +873,15 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
     @app.get("/export.csv")
     async def export_csv(request: Request, channel: str = ""):
         require_auth(request)
-        rows = await (db.latest_stats(channel_id=_optional_positive_int(channel), limit=100000))
+        channel_id = _optional_positive_int(channel)
+        rows = await (db.latest_stats(channel_id=channel_id, limit=_EXPORT_ROW_LIMIT))
+        try:
+            totals = await (db.kpis(channel_id))
+            total_posts = int(totals.get("posts", 0) or 0)
+        except Exception:  # noqa: BLE001 - export must stay available when counts fail
+            total_posts = len(rows)
+        truncated = total_posts > len(rows)
+        scope = f"channel-{channel_id}" if channel_id else "all-active"
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([
@@ -513,16 +894,37 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
                 _sanitize_csv_cell((r["text"] or "").replace("\n", " ")),
                 _sanitize_csv_cell(r["views"]), _sanitize_csv_cell(r["reactions"]), _sanitize_csv_cell(r["comments"]), _sanitize_csv_cell(r["shares"]), _sanitize_csv_cell(r["updated_at"]),
             ])
+        # Never silently claim a complete export after truncation: the stored
+        # history scope, server cap and truncation state travel in headers.
         return Response(
             content=buf.getvalue(),
             media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=tg-studio-export.csv"},
+            headers={
+                "Content-Disposition": "attachment; filename=tg-studio-export.csv",
+                "X-Export-Scope": f"stored-history:{scope}",
+                "X-Export-Limit": str(_EXPORT_ROW_LIMIT),
+                "X-Export-Total": str(total_posts),
+                "X-Export-Truncated": "true" if truncated else "false",
+            },
         )
 
     @app.get("/export-comments.csv")
     async def export_comments_csv(request: Request, channel: str = ""):
         require_auth(request)
-        rows = await (db.all_comments(channel_id=_optional_positive_int(channel)))
+        channel_id = _optional_positive_int(channel)
+        fetch = getattr(db, "all_comments")
+        try:
+            rows = await (fetch(channel_id=channel_id, limit=_EXPORT_ROW_LIMIT))
+        except TypeError:
+            rows = await (fetch(channel_id=channel_id))
+            rows = rows[:_EXPORT_ROW_LIMIT]
+        try:
+            totals = await (db.kpis(channel_id))
+            total_comments = int(totals.get("collected_comments", 0) or 0)
+        except Exception:  # noqa: BLE001 - export must stay available when counts fail
+            total_comments = len(rows)
+        truncated = total_comments > len(rows)
+        scope = f"channel-{channel_id}" if channel_id else "all-active"
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([
@@ -544,7 +946,11 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
             content=buf.getvalue(),
             media_type="text/csv",
             headers={
-                "Content-Disposition": "attachment; filename=tg-comments-export.csv"
+                "Content-Disposition": "attachment; filename=tg-comments-export.csv",
+                "X-Export-Scope": f"stored-history:{scope}",
+                "X-Export-Limit": str(_EXPORT_ROW_LIMIT),
+                "X-Export-Total": str(total_comments),
+                "X-Export-Truncated": "true" if truncated else "false",
             },
         )
 
