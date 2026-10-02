@@ -1192,3 +1192,117 @@ html[data-mascot-paused] .ghost-scene *::after {
     animation: none !important;
   }
 }
+
+/* T45 — Settings scope, channel cards, save feedback and Agent logs.
+ *
+ * Contract: Configuration and Agent logs are separate tabs with one global
+ * scope notice above both. Channel status/counts/actions surface as a table
+ * on wide screens and as cards at tablet widths and below. Form saves merge
+ * the canonical JSON response in place (no remount); logs filter on the
+ * server across all stored results.
+ */
+.settings-scope {
+  max-width: 1080px;
+  margin: 18px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(6, 16, 26, .52);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.restart-banner { max-width: 1080px; }
+.restart-hint { padding: 12px 22px 0; }
+.consent-note { padding: 0 22px 20px; }
+.save-feedback.is-dirty { color: var(--coral); }
+
+/* Channel cards: hidden on wide screens, replace the table at <=860px. */
+.channel-cards { display: none; }
+.channel-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(6, 16, 26, .4);
+}
+.channel-card .card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.channel-card .card-top strong { color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+.channel-card .fine { color: var(--muted); font-size: 11px; }
+.channel-card .counts { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 11px; }
+.channel-card .counts b { margin-right: 5px; color: var(--text); font-size: 13px; }
+.channel-card .action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.channel-card .channel-progress { margin: 0; color: var(--muted); font-size: 11px; }
+.empty-reference { padding: 8px 2px; }
+.empty-reference h3 { margin: 0 0 6px; color: var(--text); font-size: 14px; }
+.empty-reference p { margin: 0; color: var(--muted); font-size: 11px; }
+
+/* Honest run states: succeeded is ok; failed, cancelled/interrupted and
+ * queued/running stay visually distinct; unknown keeps the neutral pill. */
+.pill.bad { color: var(--danger); border-color: rgba(255, 111, 133, .45); background: rgba(255, 111, 133, .07); }
+.pill.warn { color: var(--coral); border-color: rgba(255, 113, 106, .4); background: rgba(255, 113, 106, .06); }
+.pill.info { color: var(--cyan); border-color: rgba(25, 210, 236, .35); background: rgba(25, 210, 236, .07); }
+
+/* Agent logs filter: server-backed query/channel/status toolbar. */
+.log-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(110px, .6fr) minmax(140px, .8fr) auto;
+  gap: 12px;
+  align-items: end;
+  max-width: 1080px;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(6, 16, 26, .52);
+}
+.log-filter-field { display: grid; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.log-filter-field input, .log-filter-field select {
+  min-height: 40px;
+  width: 100%;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  font-size: 12px;
+}
+.log-filter-field input:focus, .log-filter-field select:focus { border-color: var(--cyan); box-shadow: var(--focus); }
+.log-filter-actions { display: flex; gap: 8px; }
+#log-channel-help { max-width: 1080px; color: var(--faint); font-size: 10px; }
+.agent-log-meta { grid-template-columns: repeat(3, 1fr); }
+.agent-log-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin: 0;
+  padding: 13px 22px;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 113, 106, .03);
+}
+.agent-log-diagnostics dt { margin-bottom: 4px; color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.agent-log-diagnostics dd { margin: 0; overflow-wrap: anywhere; color: var(--soft-text); font-size: 11px; }
+
+@media (max-width: 860px) {
+  .settings-table-wrap { display: none; }
+  .channel-cards { display: grid; gap: 12px; padding: 4px 22px 6px; }
+  .log-toolbar { grid-template-columns: 1fr 1fr; }
+  .log-filter-search { grid-column: 1 / -1; }
+  .agent-log-diagnostics { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 680px) {
+  .channel-cards { padding-inline: 16px; }
+  .restart-hint, .consent-note { padding-inline: 16px; }
+  .log-toolbar { grid-template-columns: 1fr; }
+  .log-filter-actions .btn { flex: 1; justify-content: center; }
+  .agent-log-meta { grid-template-columns: 1fr; }
+  .agent-log-diagnostics { grid-template-columns: 1fr; padding-inline: 16px; }
+}

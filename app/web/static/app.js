@@ -90,11 +90,204 @@
 
   activateSaveConfirmation(document.querySelector('[data-save-confirmation]'));
 
+  // Settings saves (T45): POST the form, accept the canonical T51 JSON
+  // response and merge it in place. The panel node stays mounted, so there
+  // is no remount blink and scroll/focus never move. Edits are preserved on
+  // validation, conflict and network failures.
+  const dirtyForms = new Set();
+
+  function settingsFeedback(form) {
+    return form.querySelector('[data-save-feedback]');
+  }
+
+  function markDirty(form) {
+    const section = form.dataset.settingsSave;
+    if (!section || form.dataset.submitting === 'true') return;
+    dirtyForms.add(section);
+    const note = settingsFeedback(form);
+    if (note) {
+      note.textContent = 'Unsaved changes';
+      note.classList.add('is-dirty');
+    }
+  }
+
+  function markClean(form) {
+    dirtyForms.delete(form.dataset.settingsSave);
+    const note = settingsFeedback(form);
+    if (note) {
+      note.textContent = '';
+      note.classList.remove('is-dirty');
+    }
+  }
+
+  function showSettingsNotice(message) {
+    const current = document.querySelector('[data-save-confirmation]');
+    current?.remove();
+    const notice = document.createElement('aside');
+    notice.className = 'save-confirmation';
+    notice.dataset.saveConfirmation = '';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+    const copy = document.createElement('span');
+    copy.className = 'save-confirmation-copy';
+    const strong = document.createElement('strong');
+    strong.textContent = 'Saved';
+    const text = document.createElement('span');
+    text.textContent = message;
+    copy.append(strong, text);
+    const close = document.createElement('button');
+    close.className = 'save-confirmation-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Dismiss confirmation');
+    close.textContent = '×';
+    const progress = document.createElement('span');
+    progress.className = 'save-confirmation-progress';
+    progress.setAttribute('aria-hidden', 'true');
+    notice.append(copy, close, progress);
+    document.getElementById('main-content')?.prepend(notice);
+    activateSaveConfirmation(notice);
+  }
+
+  function provenanceLabel(entry) {
+    if (!entry || typeof entry !== 'object') return { text: 'default', saved: false };
+    if (entry.source === 'db') {
+      const when = typeof entry.updated_at === 'string' && entry.updated_at ? entry.updated_at.slice(0, 16) : '';
+      return { text: when ? `Saved ${when} UTC` : 'Saved', saved: true };
+    }
+    if (entry.source === 'env') return { text: 'from .env', saved: false };
+    return { text: 'default', saved: false };
+  }
+
+  function mergeProvenance(form, fields) {
+    if (!fields || typeof fields !== 'object') return;
+    form.querySelectorAll('[data-provenance-for]').forEach((slot) => {
+      const key = slot.dataset.provenanceFor;
+      const label = provenanceLabel(fields[key]);
+      const tag = slot.querySelector('.source-tag');
+      if (tag) {
+        tag.textContent = label.text;
+        tag.classList.toggle('saved', label.saved);
+      }
+      slot.querySelectorAll('.link-btn[form]').forEach((reset) => {
+        reset.hidden = !label.saved;
+      });
+    });
+  }
+
+  function mergeSetupState(payload) {
+    const setup = payload.setup;
+    if (!setup || typeof setup !== 'object') return;
+    document.querySelectorAll('[data-setup-readiness]').forEach((pill) => {
+      pill.classList.toggle('ok', setup.ready === true);
+      const blockers = Array.isArray(setup.blockers) ? setup.blockers : [];
+      const label = setup.ready === true ? 'Ready' : (blockers[0]?.message || 'Not ready');
+      pill.textContent = label;
+    });
+    const restart = payload.restart_required === true;
+    const notices = [...document.querySelectorAll('[data-restart-notice]')];
+    let banner = notices.find((node) => !node.hasAttribute('data-idle')) || null;
+    let idle = notices.find((node) => node.hasAttribute('data-idle')) || null;
+    const telegramPanel = document.getElementById('telegram');
+    if (restart && !banner && telegramPanel) {
+      banner = document.createElement('div');
+      banner.className = 'banner warn restart-banner';
+      banner.dataset.restartNotice = '';
+      banner.setAttribute('role', 'status');
+      banner.textContent = 'Connection saved. Restart the collector to use the updated credentials.';
+      const connectionForm = telegramPanel.querySelector('form[data-settings-save]');
+      if (connectionForm) connectionForm.before(banner);
+      else telegramPanel.prepend(banner);
+    }
+    if (!restart && !idle && telegramPanel) {
+      idle = document.createElement('p');
+      idle.className = 'panel-note restart-hint';
+      idle.dataset.restartNotice = '';
+      idle.dataset.idle = '';
+      idle.textContent = 'Connection changes take effect after the collector restarts.';
+      const connectionForm = telegramPanel.querySelector('form[data-settings-save]');
+      if (connectionForm) connectionForm.before(idle);
+      else telegramPanel.prepend(idle);
+    }
+    if (banner) banner.hidden = !restart;
+    if (idle) idle.hidden = restart;
+    const connection = payload.connection;
+    if (connection && typeof connection === 'object') {
+      const statusLine = document.querySelector('[data-connection-status]');
+      const apiId = document.querySelector('[data-connection-api-id]');
+      if (apiId) apiId.textContent = connection.api_id != null ? String(connection.api_id) : '—';
+      const sessionPill = statusLine?.querySelector('.pill');
+      if (sessionPill && typeof connection.has_session === 'boolean') {
+        sessionPill.classList.toggle('ok', connection.has_session);
+        const icon = sessionPill.querySelector('i');
+        sessionPill.textContent = connection.has_session ? 'Session set' : 'Not set';
+        if (icon) sessionPill.prepend(icon);
+      }
+    }
+    const keyEntry = payload.fields?.['studio.openrouter_api_key'];
+    if (keyEntry && typeof keyEntry.set === 'boolean') {
+      document.querySelectorAll('[data-key-status]').forEach((node) => {
+        node.textContent = '';
+        const pill = document.createElement('span');
+        pill.className = keyEntry.set ? 'pill ok' : 'pill';
+        pill.textContent = keyEntry.set ? 'Set' : 'Not set';
+        node.append(pill);
+      });
+    }
+    const researchEnabled = payload.fields?.['research.enabled'];
+    if (researchEnabled && typeof researchEnabled.value === 'boolean') {
+      document.querySelectorAll('[data-switch-text]').forEach((node) => {
+        node.textContent = researchEnabled.value ? 'Enabled' : 'Disabled';
+      });
+    }
+  }
+
+  function clearFieldErrors(form) {
+    form.querySelectorAll('.field-error[data-settings-error]').forEach((node) => node.remove());
+    form.querySelectorAll('[aria-invalid="true"]').forEach((node) => node.removeAttribute('aria-invalid'));
+    form.querySelectorAll('.field.has-error').forEach((node) => {
+      if (!node.querySelector('.field-error')) node.classList.remove('has-error');
+    });
+  }
+
+  function showFieldErrors(form, errors) {
+    let firstInvalid = null;
+    Object.entries(errors).forEach(([field, message]) => {
+      const input = form.querySelector(`[name="${field}"]`);
+      if (!(input instanceof HTMLElement)) return;
+      input.setAttribute('aria-invalid', 'true');
+      const control = input.closest('.field-control') || input.parentElement;
+      const error = document.createElement('p');
+      error.className = 'field-error';
+      error.dataset.settingsError = '';
+      error.textContent = String(message);
+      control?.append(error);
+      input.closest('.field')?.classList.add('has-error');
+      firstInvalid ??= input;
+    });
+    firstInvalid?.focus({ preventScroll: true });
+  }
+
+  function showPanelError(panel, message) {
+    panel.querySelector('[data-settings-save-error]')?.remove();
+    const banner = document.createElement('div');
+    banner.className = 'banner warn';
+    banner.dataset.settingsSaveError = '';
+    banner.setAttribute('role', 'alert');
+    banner.textContent = message;
+    panel.prepend(banner);
+  }
+
   const settingsStack = document.querySelector('.settings-stack');
   if (settingsStack) {
+    settingsStack.addEventListener('input', (event) => {
+      const form = event.target.closest?.('form[data-settings-save]');
+      if (form instanceof HTMLFormElement) markDirty(form);
+    });
+
     settingsStack.addEventListener('submit', async (event) => {
       const form = event.target;
       if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== 'post') return;
+      if (!form.hasAttribute('data-settings-save')) return;
 
       const action = new URL(form.action, window.location.href);
       if (action.origin !== window.location.origin || !action.pathname.startsWith('/settings/')) return;
@@ -109,56 +302,164 @@
         submitter.disabled = true;
         submitter.classList.add('is-busy');
       }
+      form.querySelector('[data-settings-save-error]')?.remove();
 
       try {
         const response = await fetch(action, {
           method: 'POST',
           body: new FormData(form),
           credentials: 'same-origin',
-          headers: { Accept: 'text/html' },
+          headers: { Accept: 'application/json' },
         });
-        const responseURL = new URL(response.url, window.location.href);
-        if (response.redirected && (responseURL.origin !== window.location.origin || responseURL.pathname !== '/settings')) {
-          window.location.assign(response.url);
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+        if (!response.ok || !payload || payload.ok !== true) {
+          const errors = payload && typeof payload.errors === 'object' ? payload.errors : null;
+          clearFieldErrors(form);
+          if (errors && Object.keys(errors).length > 0) {
+            showFieldErrors(form, errors);
+          } else {
+            const message = payload?.error?.message || 'Could not save these settings. Check the connection and try again.';
+            showPanelError(panel, message);
+          }
           return;
         }
 
-        if (!response.headers.get('content-type')?.includes('text/html')) {
-          throw new Error('Settings response is not HTML.');
-        }
-        const html = await response.text();
-        const nextDocument = new DOMParser().parseFromString(html, 'text/html');
-        const nextPanel = nextDocument.getElementById(panel.id);
-        if (!nextPanel) throw new Error('Updated settings section is missing from the response.');
-
-        const updatedContents = [...nextPanel.childNodes].map((node) => document.importNode(node, true));
-        panel.replaceChildren(...updatedContents);
-
-        const currentConfirmation = document.querySelector('[data-save-confirmation]');
-        currentConfirmation?.remove();
-        const nextConfirmation = nextDocument.querySelector('[data-save-confirmation]');
-        if (nextConfirmation) {
-          const confirmation = document.importNode(nextConfirmation, true);
-          document.getElementById('main-content')?.prepend(confirmation);
-          activateSaveConfirmation(confirmation);
-        }
-
-        panel.querySelector('[aria-invalid="true"]')?.focus({ preventScroll: true });
+        clearFieldErrors(form);
+        mergeProvenance(form, payload.fields);
+        mergeSetupState(payload);
+        // Secrets are write-only: blank keeps the stored value, so clear the
+        // inputs after a save instead of echoing anything back.
+        form.querySelectorAll('input[type="password"]').forEach((input) => { input.value = ''; });
+        const clearKey = form.querySelector('input[name="clear_openrouter_api_key"]');
+        if (clearKey instanceof HTMLInputElement) clearKey.checked = false;
+        markClean(form);
+        showSettingsNotice(payload.notice || 'Settings saved.');
       } catch {
+        showPanelError(panel, 'Could not save these settings. Check the connection and try again.');
+      } finally {
         form.dataset.submitting = 'false';
         if (submitter) {
           submitter.disabled = false;
           submitter.classList.remove('is-busy');
         }
-        panel.querySelector('[data-settings-save-error]')?.remove();
-        const message = document.createElement('div');
-        message.className = 'banner warn';
-        message.dataset.settingsSaveError = '';
-        message.setAttribute('role', 'alert');
-        message.textContent = 'Could not save these settings. Check the connection and try again.';
-        panel.prepend(message);
       }
     });
+
+    // Reset buttons post their hidden form to /settings/*/reset. They merge
+    // through the same canonical response, and refresh the field input from
+    // the server value because a reset changes what the user sees.
+    const RESET_FIELD_NAMES = {
+      'collection.poll_minutes': 'poll_minutes',
+      'collection.track_days': 'track_days',
+      'collection.backfill_limit': 'backfill_limit',
+      'studio.model': 'model',
+      'research.enabled': 'research_enabled',
+      'research.blocked_domains': 'blocked_domains',
+    };
+    settingsStack.addEventListener('submit', (event) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== 'post') return;
+      if (form.hasAttribute('data-settings-save')) return;
+      const action = new URL(form.action, window.location.href);
+      if (!action.pathname.endsWith('/reset')) return;
+      event.preventDefault();
+      const opener = document.querySelector(`form[data-settings-save] [form="${form.id}"]`);
+      const owner = opener?.closest('form[data-settings-save]');
+      if (!(owner instanceof HTMLFormElement) || owner.dataset.submitting === 'true') return;
+      owner.dataset.submitting = 'true';
+      fetch(action, {
+        method: 'POST',
+        body: new FormData(form),
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      }).then(async (response) => {
+        const payload = await response.json().catch(() => null);
+        if (response.ok && payload?.ok === true) {
+          mergeProvenance(owner, payload.fields);
+          mergeSetupState(payload);
+          const fields = payload.fields || {};
+          Object.entries(RESET_FIELD_NAMES).forEach(([key, name]) => {
+            const entry = fields[key];
+            const input = owner.querySelector(`[name="${name}"]`);
+            if (!entry || !(input instanceof HTMLElement) || !('value' in entry)) return;
+            if (input instanceof HTMLInputElement && input.type === 'checkbox') {
+              input.checked = entry.value === true;
+            } else if (input instanceof HTMLElement && 'value' in input) {
+              input.value = String(entry.value ?? '');
+            }
+          });
+          markClean(owner);
+          showSettingsNotice(payload.notice || 'Setting reset.');
+        } else {
+          const panel = owner.closest('.panel');
+          if (panel) showPanelError(panel, payload?.error?.message || 'Could not reset this setting.');
+        }
+      }).catch(() => {
+        const panel = owner.closest('.panel');
+        if (panel) showPanelError(panel, 'Could not reset this setting. Check the connection and try again.');
+      }).finally(() => {
+        owner.dataset.submitting = 'false';
+      });
+    });
+  }
+
+  // Unsaved guard: leaving Configuration for Agent logs (or the page) with
+  // unsaved edits asks first; saved work is never at risk.
+  document.querySelectorAll('[data-settings-view-tabs] a').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      if (dirtyForms.size === 0) return;
+      const stay = !window.confirm('Leave unsaved settings? Your unsaved edits will be lost. Saved settings are unchanged.');
+      if (stay) event.preventDefault();
+      else dirtyForms.clear();
+    });
+  });
+  window.addEventListener('beforeunload', (event) => {
+    if (dirtyForms.size === 0) return;
+    event.preventDefault();
+  });
+
+  // Section navigation: arrows/Home/End move between section links without
+  // changing the page; Enter follows the link natively.
+  document.querySelectorAll('[data-settings-section-nav]').forEach((nav) => {
+    const links = () => [...nav.querySelectorAll('a')];
+    nav.addEventListener('keydown', (event) => {
+      const items = links();
+      const current = items.indexOf(document.activeElement);
+      if (current === -1) return;
+      let next = -1;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (current + 1) % items.length;
+      else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (current - 1 + items.length) % items.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = items.length - 1;
+      if (next === -1) return;
+      event.preventDefault();
+      items[next].focus();
+    });
+  });
+
+  // Agent logs: the list, filters and pagination are server-rendered over all
+  // stored results. This only checks storage availability so an outage reads
+  // as unavailable instead of empty.
+  const logsAvailability = document.querySelector('[data-logs-availability]');
+  if (logsAvailability) {
+    fetch(window.location.href, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null);
+        const unavailable = !response.ok || payload?.available === false;
+        if (unavailable) {
+          const message = payload?.error?.message || 'Agent log storage is unavailable. Saved results cannot be listed right now; try again later.';
+          logsAvailability.textContent = message;
+          logsAvailability.hidden = false;
+        } else {
+          logsAvailability.hidden = true;
+        }
+      })
+      .catch(() => { /* Keep the server-rendered list; do not invent an outage. */ });
   }
 
   document.addEventListener('click', (event) => {

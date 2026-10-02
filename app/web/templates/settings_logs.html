@@ -11,6 +11,7 @@
 </a>
 {% endblock %}
 {% block content %}
+<p class="settings-scope" role="note">Workspace settings apply to all channels. Channel profiles and System Prompts stay in each channel&rsquo;s Studio.</p>
 <nav class="settings-view-tabs" aria-label="Settings views">
   <a href="/settings">Configuration</a>
   <a class="active" href="/settings/logs" aria-current="page">Agent logs</a>
@@ -24,6 +25,30 @@
   </div>
 </section>
 
+<div class="banner warn" data-logs-availability hidden role="alert">Agent log storage is unavailable. Saved results cannot be listed right now; try again later.</div>
+
+<form method="get" action="/settings/logs" class="log-toolbar" data-logs-filter role="search" aria-label="Filter agent logs">
+  <label class="log-filter-field log-filter-search">Search<input type="search" name="q" value="{{ request.query_params.get('q', '') }}" maxlength="200" placeholder="Conversation, tool or result…" aria-label="Search logs"></label>
+  <label class="log-filter-field">Channel<input type="text" name="channel" value="{{ request.query_params.get('channel', '') }}" inputmode="numeric" placeholder="ID" aria-label="Channel ID" aria-describedby="log-channel-help"></label>
+  <label class="log-filter-field">Status
+    {% set current_status = request.query_params.get('status', '') %}
+    <select name="status" aria-label="Run status">
+      <option value="" {% if not current_status %}selected{% endif %}>All statuses</option>
+      <option value="queued" {% if current_status == 'queued' %}selected{% endif %}>Queued</option>
+      <option value="running" {% if current_status == 'running' %}selected{% endif %}>Running</option>
+      <option value="succeeded" {% if current_status == 'succeeded' %}selected{% endif %}>Succeeded</option>
+      <option value="failed" {% if current_status == 'failed' %}selected{% endif %}>Failed</option>
+      <option value="cancelled" {% if current_status == 'cancelled' %}selected{% endif %}>Cancelled</option>
+      <option value="interrupted" {% if current_status == 'interrupted' %}selected{% endif %}>Interrupted</option>
+    </select>
+  </label>
+  <div class="log-filter-actions">
+    <button class="btn small" type="submit">Apply</button>
+    <a class="btn ghost small" href="/settings/logs">Reset</a>
+  </div>
+</form>
+<p class="fine" id="log-channel-help">Filtering runs on the server across all stored results. Channel accepts a numeric channel ID; named channel selection is not available yet.</p>
+
 <div class="agent-log-list">
   {% for log in logs %}
   <article class="panel agent-log" data-reveal>
@@ -32,14 +57,25 @@
         <p class="section-kicker">{{ log.tool_name }}</p>
         <h2>{{ log.conversation_title or "Untitled conversation" }}</h2>
       </div>
-      <span class="pill {% if log.run_status == 'succeeded' %}ok{% endif %}">{{ log.run_status or "unknown" }}</span>
+      {% set run_state = log.run_status or "unknown" %}
+      <span class="pill {% if run_state == 'succeeded' %}ok{% elif run_state == 'failed' %}bad{% elif run_state in ('cancelled', 'interrupted') %}warn{% elif run_state in ('queued', 'running') %}info{% endif %}">{{ run_state }}</span>
     </header>
     <dl class="agent-log-meta">
       <div><dt>Time</dt><dd>{{ log.created_at_display or "—" }} UTC</dd></div>
-      <div><dt>Model</dt><dd>{{ log.actual_model or log.requested_model or "—" }}</dd></div>
+      <div><dt>Channel</dt><dd>{% if log.channel_id is not none %}#{{ log.channel_id }}{% else %}—{% endif %}</dd></div>
       <div><dt>Run</dt><dd><code>{{ log.run_id }}</code></dd></div>
       <div><dt>Sequence</dt><dd>{{ log.sequence }}</dd></div>
+      <div><dt>Requested model</dt><dd>{{ log.requested_model or "—" }}</dd></div>
+      <div><dt>Actual model</dt><dd>{{ log.actual_model or "—" }}</dd></div>
     </dl>
+    {% if log.diagnostics %}
+    <dl class="agent-log-diagnostics">
+      <div><dt>Error phase</dt><dd>{{ log.diagnostics.get('phase') or "—" }}</dd></div>
+      <div><dt>Error class</dt><dd>{{ log.diagnostics.get('exception_class') or "—" }}</dd></div>
+      <div><dt>Status</dt><dd>{{ log.diagnostics.get('status_code') if log.diagnostics.get('status_code') is not none else "—" }}</dd></div>
+      <div><dt>Provider code</dt><dd>{{ log.diagnostics.get('provider_code') if log.diagnostics.get('provider_code') is not none else "—" }}</dd></div>
+    </dl>
+    {% endif %}
     <details class="agent-log-result">
       <summary>View complete result</summary>
       <pre>{{ log.result_content }}</pre>
@@ -54,11 +90,14 @@
   {% endfor %}
 </div>
 
+{% set filter_q = request.query_params.get('q', '')|urlencode %}
+{% set filter_channel = request.query_params.get('channel', '')|urlencode %}
+{% set filter_status = request.query_params.get('status', '')|urlencode %}
 {% if page > 1 or has_next %}
 <nav class="log-pagination" aria-label="Agent log pages">
-  {% if page > 1 %}<a class="btn ghost small" href="/settings/logs?page={{ page - 1 }}">Newer</a>{% endif %}
+  {% if page > 1 %}<a class="btn ghost small" href="/settings/logs?q={{ filter_q }}&amp;channel={{ filter_channel }}&amp;status={{ filter_status }}&amp;page={{ page - 1 }}">Newer</a>{% endif %}
   <span>Page {{ page }}</span>
-  {% if has_next %}<a class="btn ghost small" href="/settings/logs?page={{ page + 1 }}">Older</a>{% endif %}
+  {% if has_next %}<a class="btn ghost small" href="/settings/logs?q={{ filter_q }}&amp;channel={{ filter_channel }}&amp;status={{ filter_status }}&amp;page={{ page + 1 }}">Older</a>{% endif %}
 </nav>
 {% endif %}
 {% endblock %}

@@ -394,16 +394,22 @@ def test_saved_setting_animation_contract():
     assert "save-confirmation-progress" in styles
 
 
-def test_settings_save_uses_partial_panel_update_without_page_reload():
+def test_settings_save_merges_canonical_json_without_remount():
+    # T45 supersedes the HTML-scrape panel replacement: saves POST the form,
+    # accept the canonical T51 JSON and merge it in place, so the panel node
+    # stays mounted (no remount blink) and scroll/focus never move.
     root = Path(__file__).resolve().parents[1]
     script = (root / "app/web/static/app.js").read_text(encoding="utf-8")
     assert "settingsStack.addEventListener('submit'" in script
     assert "body: new FormData(form)" in script
-    assert "new DOMParser()" in script
-    assert "response.redirected" in script
-    assert "panel.replaceChildren(...updatedContents)" in script
-    assert "activateSaveConfirmation(confirmation)" in script
+    assert "application/json" in script
+    assert "mergeProvenance" in script
+    assert "mergeSetupState" in script
+    assert "activateSaveConfirmation(" in script
+    assert "new DOMParser()" not in script
+    assert "panel.replaceChildren(" not in script
     assert "window.location.reload" not in script
+    assert "beforeunload" in script
     assert "just-saved" not in script
     assert "settings-panel-saved" not in (root / "app/web/static/style.css").read_text(encoding="utf-8")
 
