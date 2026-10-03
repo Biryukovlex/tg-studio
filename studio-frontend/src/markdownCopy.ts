@@ -78,6 +78,15 @@ export function htmlFromMarkdown(text: string): string {
 }
 
 /**
+ * Blank-post guard for Copy: a body with no publishable plain text (empty,
+ * whitespace-only, or markup without content) must not be copied, matching
+ * the server-side blank validation.
+ */
+export function isBlankDraftBody(body: string): boolean {
+  return plainFromMarkdown(body).trim() === "";
+}
+
+/**
  * Copy a rendered selection exactly the way a manual copy does.
  *
  * The browser serialises the selected DOM itself, so it writes every flavour

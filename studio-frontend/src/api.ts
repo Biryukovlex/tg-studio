@@ -323,3 +323,103 @@ export function asThreadMessages(messages: PersistedMessage[]) {
       }];
     });
 }
+
+export type StudioPostMetrics = {
+  views: number;
+  reactions: number;
+  comments: number;
+  shares: number;
+  collected_comments?: number;
+  updated_at?: string | null;
+};
+
+export type StudioPost = {
+  id: number;
+  message_id: number;
+  channel_id: number;
+  channel_identifier: string;
+  channel_title: string;
+  posted_at: string;
+  text: string;
+  formatting_entities: Array<Record<string, unknown>>;
+  formatted_html: string;
+  metrics: StudioPostMetrics;
+  source_url: string | null;
+};
+
+export async function fetchStudioPost(postId: number): Promise<StudioPost> {
+  if (!Number.isInteger(postId) || postId <= 0) {
+    throw new StudioApiError(404, { error: { code: "not_found", message: "Post not found.", retryable: false } });
+  }
+  return api<StudioPost>(`/api/posts/${encodeURIComponent(String(postId))}`);
+}
+
+/**
+ * T44 prefill contract (consumed by T52's Post Explorer handoff).
+ *
+ * The reader passes an authorized post/channel reference — never raw channel
+ * content in the URL — and Studio prefills the composer without sending:
+ *
+ * - Same-tab: `window.dispatchEvent(new CustomEvent("tg-studio:prefill",
+ *   { detail: { channel_id, text, post_id? } }))`.
+ * - Cross-page (`/post/{id}` -> `/studio`): T52 writes
+ *   `sessionStorage["tg-studio:prefill"] = JSON.stringify({ channel_id, text,
+ *   post_id? })`; Studio consumes (and removes) it once on load.
+ *
+ * Studio switches to the post's own channel under the usual unsaved-edit
+ * guard, never sends a message, and never moves another channel's chats,
+ * prompts, memory or drafts into the active conversation.
+ */
+export const PREFILL_EVENT = "tg-studio:prefill";
+export const PREFILL_STORAGE_KEY = "tg-studio:prefill";
+export const PREFILL_MAX_TEXT = 4000;
+
+export type StudioPrefill = {
+  channel_id: number;
+  text: string;
+  post_id?: number | string;
+};
+
+export function parsePrefillDetail(detail: unknown): StudioPrefill | null {
+  if (!detail || typeof detail !== "object") return null;
+  const record = detail as Record<string, unknown>;
+  const channelId = Number(record.channel_id);
+  const text = typeof record.text === "string" ? record.text : "";
+  if (!Number.isInteger(channelId) || channelId <= 0) return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const prefill: StudioPrefill = {
+    channel_id: channelId,
+    text: trimmed.slice(0, PREFILL_MAX_TEXT),
+  };
+  const postId = record.post_id;
+  if ((typeof postId === "number" && Number.isInteger(postId) && postId > 0) || typeof postId === "string") {
+    prefill.post_id = postId;
+  }
+  return prefill;
+}
+
+export function consumeStoredPrefill(storage?: Storage | undefined): StudioPrefill | null {
+  let store: Storage | undefined = storage;
+  if (store === undefined) {
+    try {
+      store = window.sessionStorage;
+    } catch {
+      return null;
+    }
+  }
+  if (!store) return null;
+  let raw: string | null;
+  try {
+    raw = store.getItem(PREFILL_STORAGE_KEY);
+    store.removeItem(PREFILL_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    return parsePrefillDetail(JSON.parse(raw) as unknown);
+  } catch {
+    return null;
+  }
+}

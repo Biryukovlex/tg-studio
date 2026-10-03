@@ -6,6 +6,7 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   type ToolCallMessagePartProps,
+  unstable_useComposerInput,
   useAuiState,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
@@ -15,7 +16,10 @@ import remarkGfm from "remark-gfm";
 import {
   api,
   asThreadMessages,
+  consumeStoredPrefill,
   csrfToken,
+  PREFILL_EVENT,
+  parsePrefillDetail,
   type ApiError,
   type Bootstrap,
   type Channel,
@@ -27,12 +31,13 @@ import {
   type RunEvent,
   type RunSummary,
   type RunUsage,
+  type StudioPrefill,
   StudioApiError,
   describeSearchOutcome,
 } from "./api";
 import { describeRunFailure } from "./runFailure";
 import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
-import { copyRenderedSelection, copyRichText, htmlFromMarkdown, plainFromMarkdown, telegramMarkupFromMarkdown } from "./markdownCopy";
+import { copyRenderedSelection, copyRichText, htmlFromMarkdown, isBlankDraftBody, plainFromMarkdown, telegramMarkupFromMarkdown } from "./markdownCopy";
 import ChannelProfileDialog from "./ChannelProfileDialog";
 import "./styles.css";
 
@@ -160,6 +165,41 @@ export function isActiveRun(run: RunSummary | null | undefined): boolean {
   return run?.status === "queued" || run?.status === "running";
 }
 
+export type StudioScope = {
+  channelId: number | null;
+  conversationId: string | null;
+  sequence: number;
+};
+
+/**
+ * Channel/conversation isolation guard for async reads and streamed events.
+ * A response that was requested under an older scope must never overwrite
+ * the newly selected channel/conversation: delayed results from A stay out
+ * of B. Sequence also covers same-scope refetches racing each other.
+ */
+export function isStaleScope(request: StudioScope, current: StudioScope): boolean {
+  if (request.sequence !== current.sequence) return true;
+  if (request.channelId !== current.channelId) return true;
+  if (request.conversationId !== current.conversationId) return true;
+  return false;
+}
+
+export type DraftPreview = { html: string; fromServer: boolean };
+
+/**
+ * Formatted Full post preview. Prefers the server-rendered sanitized
+ * Telegram HTML (`body_html`, derived from stored text/entities) for a clean
+ * saved draft; local edits and version views use the canonical Markdown
+ * conversion shared with clipboard HTML. The small prototype renderer is
+ * intentionally not shipped: commentary stays out of the publishable field.
+ */
+export function draftPreviewHtml(shownBody: string, draft: Draft | null, hasUnsavedEdits: boolean): DraftPreview {
+  if (draft && !hasUnsavedEdits && draft.body_html && draft.body_html.trim()) {
+    return { html: draft.body_html, fromServer: true };
+  }
+  return { html: htmlFromMarkdown(shownBody), fromServer: false };
+}
+
 async function studioAgentFetch(url: string, init: RequestInit): Promise<Response> {
   const response = await fetch(url, init);
   if (response.ok) return response;
@@ -243,6 +283,122 @@ function AgentActivity({ run, events, onStopRun }: { run: RunSummary | null; eve
   );
 }
 
+function channelLabel(channel: Channel): string {
+  return channel.title?.trim() || channel.identifier;
+}
+
+export function ChannelPicker({
+  channels,
+  selectedChannelId,
+  onChannelSelect,
+}: {
+  channels: Channel[];
+  selectedChannelId: number | null;
+  onChannelSelect: (channelId: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selected = channels.find((channel) => channel.id === selectedChannelId) ?? null;
+
+  useEffect(() => {
+    if (!open) return;
+    const selectedIndex = Math.max(0, channels.findIndex((channel) => channel.id === selectedChannelId));
+    menuRef.current?.querySelectorAll<HTMLButtonElement>("[role=option]")[selectedIndex]?.focus();
+    const onPointer = (event: PointerEvent) => {
+      if (
+        !menuRef.current?.contains(event.target as Node)
+        && !triggerRef.current?.contains(event.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, channels, selectedChannelId]);
+
+  const moveFocus = (delta: number) => {
+    const options = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("[role=option]") ?? []);
+    if (options.length === 0) return;
+    const at = options.indexOf(document.activeElement as HTMLButtonElement);
+    const next = (at + delta + options.length) % options.length;
+    options[next].focus();
+  };
+
+  return (
+    <div className="studio-channel-field">
+      <span className="studio-channel-caption" id="studio-channel-caption">Channel</span>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="studio-channel-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls="studio-channel-menu"
+        aria-label={selected ? `Studio channel: ${channelLabel(selected)}` : "Studio channel"}
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+            if (!open) {
+              event.preventDefault();
+              setOpen(true);
+            }
+          }
+        }}
+      >
+        <span className="studio-channel-value" id="studio-channel-value">{selected ? channelLabel(selected) : "Choose a channel"}</span>
+        <span className="studio-channel-chevron" aria-hidden="true">⌄</span>
+      </button>
+      {open && (
+        <div
+          ref={menuRef}
+          id="studio-channel-menu"
+          className="studio-channel-menu"
+          role="listbox"
+          aria-label="Studio channel"
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") { event.preventDefault(); moveFocus(1); }
+            else if (event.key === "ArrowUp") { event.preventDefault(); moveFocus(-1); }
+            else if (event.key === "Home") { event.preventDefault(); menuRef.current?.querySelector<HTMLButtonElement>("[role=option]")?.focus(); }
+            else if (event.key === "End") { event.preventDefault(); const items = menuRef.current?.querySelectorAll<HTMLButtonElement>("[role=option]"); items?.[items.length - 1]?.focus(); }
+          }}
+        >
+          {channels.map((channel) => (
+            <button
+              key={channel.id}
+              type="button"
+              role="option"
+              aria-selected={channel.id === selectedChannelId}
+              className={`studio-channel-option${channel.id === selectedChannelId ? " is-selected" : ""}`}
+              title={channel.identifier}
+              onClick={() => {
+                setOpen(false);
+                triggerRef.current?.focus();
+                onChannelSelect(channel.id);
+              }}
+            >
+              <span className="studio-channel-option-name">{channelLabel(channel)}</span>
+              <span className="studio-channel-option-id">{channel.identifier}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConversationRail({
   channels,
   selectedChannelId,
@@ -250,10 +406,6 @@ function ConversationRail({
   selected,
   onSelect,
   onNew,
-  onDelete,
-  deletingId,
-  onSettings,
-  onProfile,
   onChannelSelect,
 }: {
   channels: Channel[];
@@ -262,10 +414,6 @@ function ConversationRail({
   selected: Conversation | null;
   onSelect: (conversation: Conversation) => void;
   onNew: () => void;
-  onDelete: (conversation: Conversation) => void;
-  deletingId: string | null;
-  onSettings: () => void;
-  onProfile: () => void;
   onChannelSelect: (channelId: number) => void;
 }) {
   return (
@@ -277,20 +425,7 @@ function ConversationRail({
           <p className="studio-rail-title">Channel desk</p>
         </div>
       </div>
-      <label className="studio-channel-picker">
-        <span>Channel</span>
-        <select
-          aria-label="Studio channel"
-          value={selectedChannelId ?? ""}
-          onChange={(event) => onChannelSelect(Number(event.target.value))}
-        >
-          {channels.map((channel) => (
-            <option key={channel.id} value={channel.id}>
-              {channel.title?.trim() || channel.identifier}
-            </option>
-          ))}
-        </select>
-      </label>
+      <ChannelPicker channels={channels} selectedChannelId={selectedChannelId} onChannelSelect={onChannelSelect} />
       <select
         className="studio-mobile-conversation-select"
         aria-label="Studio conversation"
@@ -306,7 +441,7 @@ function ConversationRail({
       <button className="studio-new" type="button" onClick={onNew}>
         <span aria-hidden="true">＋</span> New conversation
       </button>
-      <div className="studio-conversations" role="list">
+      <div className="studio-conversations" role="list" aria-label="Conversations">
         {conversations.length === 0 ? (
           <p className="studio-empty-rail">Your working threads will appear here.</p>
         ) : (
@@ -315,6 +450,7 @@ function ConversationRail({
               <button
                 className="studio-conversation"
                 type="button"
+                title={conversation.title}
                 aria-current={selected?.id === conversation.id ? "page" : undefined}
                 onClick={() => onSelect(conversation)}
               >
@@ -324,30 +460,13 @@ function ConversationRail({
                   <small>{conversation.channel_identifier || conversation.channel_title}</small>
                 </span>
               </button>
-              <button
-                className="studio-conversation-delete"
-                type="button"
-                aria-label={`Delete conversation ${conversation.title}`}
-                title="Delete conversation"
-                disabled={deletingId !== null}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDelete(conversation);
-                }}
-              >
-                <span aria-hidden="true">{deletingId === conversation.id ? "…" : "×"}</span>
-              </button>
             </div>
           ))
         )}
       </div>
       <div className="studio-rail-foot">
         <span className="studio-status-dot" aria-hidden="true" />
-        <span>Private workspace</span>
-        <div className="studio-rail-foot-buttons">
-          <button type="button" onClick={onProfile}>Profile</button>
-          <button type="button" onClick={onSettings}>System Prompt</button>
-        </div>
+        <span>Private workspace · channel context stays separate</span>
       </div>
     </aside>
   );
@@ -362,10 +481,14 @@ function StudioSettings({ channelId, channelLabel, onClose }: { channelId: numbe
   useEffect(() => {
     dialog.current?.showModal();
     let alive = true;
-    void api<{ channel_id: number; system_prompt: string }>(`/studio/api/settings?channel_id=${encodeURIComponent(channelId)}`).then(value => {
+    const controller = new AbortController();
+    void api<{ channel_id: number; system_prompt: string }>(`/studio/api/settings?channel_id=${encodeURIComponent(channelId)}`, { signal: controller.signal }).then(value => {
       if (alive) { setPrompt(value.system_prompt); setLoading(false); }
-    }).catch(() => { if (alive) setNotice("Could not load the system prompt. Close and try again."); });
-    return () => { alive = false; };
+    }).catch((error: unknown) => {
+      if (!alive || (error instanceof DOMException && error.name === "AbortError")) return;
+      setNotice("Could not load the system prompt. Close and try again.");
+    });
+    return () => { alive = false; controller.abort(); };
   }, [channelId]);
   const save = async () => {
     setSaving(true); setNotice("");
@@ -385,46 +508,16 @@ function StudioSettings({ channelId, channelLabel, onClose }: { channelId: numbe
   </dialog>;
 }
 
-function renderInlineMarkdown(line: string, key: number) {
-  let text = line.replace(/!\[([^\]]*)\]\([^)]*\)/g, "");
-  text = text.replace(/<[a-zA-Z/][^>]*>/g, "");
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|`[^`]+`|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|\[([^\]]+)\]\([^)]+\)|> .+)/g;
-  let match: RegExpExecArray | null;
-  let idx = 0;
-  while ((match = pattern.exec(text)) !== null) {
-    const start = match.index;
-    if (start > lastIndex) parts.push(<span key={`t-${key}-${idx++}`}>{text.slice(lastIndex, start)}</span>);
-    const token = match[0];
-    if (token.startsWith("**")) parts.push(<strong key={`b-${key}-${idx++}`}>{token.slice(2, -2)}</strong>);
-    else if (token.startsWith("~~")) parts.push(<s key={`s-${key}-${idx++}`}>{token.slice(2, -2)}</s>);
-    else if (token.startsWith("`")) parts.push(<code key={`c-${key}-${idx++}`}>{token.slice(1, -1)}</code>);
-    else if (token.startsWith("[") && match[3]) parts.push(<a key={`a-${key}-${idx++}`} href={match[3]} target="_blank" rel="noopener noreferrer">{match[2]}</a>);
-    else if (token.startsWith("[") && match[4]) parts.push(<span key={`l-${key}-${idx++}`}>{match[4]}</span>);
-    else if (token.startsWith("*") && !token.startsWith("**")) parts.push(<em key={`i-${key}-${idx++}`}>{token.slice(1, -1)}</em>);
-    else if (token.startsWith("> ")) parts.push(<blockquote key={`q-${key}-${idx++}`}><span>{token.slice(2)}</span></blockquote>);
-    else parts.push(<span key={`u-${key}-${idx++}`}>{token}</span>);
-    lastIndex = pattern.lastIndex;
-  }
-  if (lastIndex < text.length) parts.push(<span key={`t-${key}-${idx}`}>{text.slice(lastIndex)}</span>);
-  if (parts.length === 0) return <span key={key}>{line}</span>;
-  return <span key={key}>{parts}</span>;
-}
-
-function DraftMarkdownPreview({ text }: { text: string }) {
-  if (!text.trim()) return <p />;
-  const lines = text.split("\n");
-  return (
-    <p>
-      {lines.map((line, i) => (
-        <span key={i}>
-          {renderInlineMarkdown(line, i)}
-          {i < lines.length - 1 && <br />}
-        </span>
-      ))}
-    </p>
-  );
+/**
+ * Formatted Full post preview. Uses the server-rendered sanitized Telegram
+ * HTML when available, otherwise the canonical Markdown conversion shared
+ * with clipboard HTML. The output is already escaped/sanitized upstream, so
+ * it is safe to inject; commentary and source-review notes never enter the
+ * publishable post field.
+ */
+function DraftPreview({ preview }: { preview: DraftPreview }) {
+  if (!preview.html) return <p />;
+  return <div className="studio-markdown" dangerouslySetInnerHTML={{ __html: preview.html }} />;
 }
 
 export const DRAFT_CHARACTER_LIMIT = 4096;
@@ -537,7 +630,9 @@ function DraftPanel({
   const [saveError, setSaveError] = useState("");
   const [copied, setCopied] = useState(false);
   const [copyNote, setCopyNote] = useState("");
-  const [previewOpen, setPreviewOpen] = useState(false);
+  // The artifact opens formatted (Full post preview, including the heading);
+  // raw-source editing is an explicit Edit action, never the default.
+  const [previewOpen, setPreviewOpen] = useState(true);
   const [conflict, setConflict] = useState<{ server: Draft; localBody: string; localTitle: string } | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   // Selecting a version in the selector shows it read-only; only Choose makes
@@ -547,11 +642,22 @@ function DraftPanel({
   const shownBody = viewingOld && viewedVersion ? viewedVersion.body : (draft?.body ?? "");
   const shownCounter = draftCounterState(shownBody, viewingOld ? viewedVersion?.character_count : draft?.character_count);
   const canSave = saveState === "unsaved" || saveState === "error";
+  const isBlankBody = isBlankDraftBody(shownBody);
+  const isCopyBlocked = shownCounter.overLimit || isBlankBody;
+  // Version views and unsaved edits render through the canonical Markdown
+  // conversion; a clean saved draft prefers its server-rendered Telegram HTML.
+  const preview = draftPreviewHtml(shownBody, viewingOld ? null : draft, saveState === "unsaved");
   const hydrated = useRef(false);
   const draftRef = useRef<Draft | null>(seedDraft);
   const saveStateRef = useRef(saveState);
   const localChange = useRef(0);
   const loadedConversation = useRef<string | null>(conversationId);
+  // Stale-read guard: every load carries its scope; delayed responses from a
+  // previous conversation (or an older refetch) are ignored, and the in-flight
+  // request is aborted on conversation change.
+  const loadSequence = useRef(0);
+  const loadScope = useRef<StudioScope>({ channelId: null, conversationId, sequence: 0 });
+  const loadAbort = useRef<AbortController | null>(null);
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
@@ -566,6 +672,15 @@ function DraftPanel({
       }
     }
     loadedConversation.current = conversationId;
+    loadAbort.current?.abort();
+    const controller = new AbortController();
+    loadAbort.current = controller;
+    const scope: StudioScope = {
+      channelId: null,
+      conversationId,
+      sequence: ++loadSequence.current,
+    };
+    loadScope.current = scope;
     if (!conversationId) {
       setDraft(null);
       setVersions([]);
@@ -579,24 +694,35 @@ function DraftPanel({
       setSaveError("");
       setCopyNote("");
       setCopied(false);
-      setPreviewOpen(false);
+      // A newly opened conversation starts formatted; edits are explicit.
+      setPreviewOpen(true);
     }
-    return api<{ draft: Draft | null; sources?: typeof sources }>(`/studio/api/conversations/${conversationId}/draft`)
+    return api<{ draft: Draft | null; sources?: typeof sources }>(`/studio/api/conversations/${conversationId}/draft`, { signal: controller.signal })
       .then((payload) => {
-        if (loadedConversation.current !== conversationId) return;
+        if (isStaleScope(scope, loadScope.current) || loadedConversation.current !== conversationId) return;
         setSources(payload.sources ?? []);
         setDraft((current) => {
           if (!conversationChanged && current && localChange.current > 0 && current.body !== payload.draft?.body) return current;
           return payload.draft;
         });
         if (payload.draft) {
+          const draftScope = scope;
+          const draftId = payload.draft.id;
           setSelectedVersion(payload.draft.current_version);
-          return api<{ versions: DraftVersion[] }>(`/studio/api/drafts/${payload.draft.id}/versions`).then((history) => setVersions(history.versions));
+          return api<{ versions: DraftVersion[] }>(`/studio/api/drafts/${draftId}/versions`, { signal: controller.signal }).then((history) => {
+            if (!isStaleScope(draftScope, loadScope.current)) setVersions(history.versions);
+          });
         }
         setVersions([]);
         setSelectedVersion(null);
       })
-      .finally(() => { hydrated.current = true; });
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (!isStaleScope(scope, loadScope.current)) setSaveState("error");
+      })
+      .finally(() => {
+        if (!isStaleScope(scope, loadScope.current)) hydrated.current = true;
+      });
   };
 
   useEffect(() => {
@@ -612,7 +738,8 @@ function DraftPanel({
     const poll = window.setInterval(() => {
       if (document.visibilityState === "hidden" || !hydrated.current || saveStateRef.current === "saving") return;
       void api<{ draft: Draft | null; sources?: typeof sources }>(`/studio/api/conversations/${conversationId}/draft`).then((payload) => {
-        if (loadedConversation.current !== conversationId) return;
+        // Ignore delayed responses once the conversation moved on.
+        if (loadedConversation.current !== conversationId || loadScope.current.conversationId !== conversationId) return;
         setSources(payload.sources ?? []);
         const next = payload.draft;
         const previous = draftRef.current;
@@ -711,7 +838,9 @@ function DraftPanel({
   };
 
   const copy = async () => {
-    if (!draft || shownCounter.overLimit) return;
+    // Blank or over-limit bodies never reach the clipboard: the button is
+    // disabled in both cases and this guard covers programmatic callers.
+    if (!draft || shownCounter.overLimit || isBlankDraftBody(shownBody)) return;
     // Both flavours come from the Markdown shown in the editor (the current
     // draft, or the version being viewed), saved or not.
     // text/plain carries Telegram's own markup (**bold**, __italic__), which
@@ -835,7 +964,7 @@ function DraftPanel({
         </div>
         <div className="studio-panel-actions">
           <span className={`studio-save-state is-${saveState}`} role="status">{saveState === "saving" ? "Saving…" : saveState === "unsaved" ? "Unsaved changes" : saveState === "conflict" ? "Needs review" : saveState === "error" ? "Retry needed" : "Saved"}</span>
-          <button type="button" className="studio-draft-close" onClick={onClose} aria-label="Close draft">×</button>
+          <button type="button" className="studio-draft-close" onClick={onClose}>Back to chat</button>
         </div>
       </div>
       {!draft ? (
@@ -847,19 +976,31 @@ function DraftPanel({
       ) : (
         <div className="studio-draft-content">
           <label className="studio-draft-title">Artifact title<input aria-label="Artifact title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /><span className="studio-draft-title-hint">Kept for search and cross-checking. Not copied to the post.</span></label>
-          {viewingOld && <p className="studio-draft-viewing" role="status">Viewing v{selectedVersion} (read-only). Choose makes it the current version.</p>}
+          {viewingOld && <p className="studio-draft-viewing" role="status">Viewing v{selectedVersion} (read-only). Restore makes it the current version.</p>}
           {previewOpen
-            ? <div className="studio-draft-preview" role="region" aria-label="Post preview"><div className="studio-markdown"><DraftMarkdownPreview text={shownBody} /></div></div>
-            : <textarea className="studio-draft-editor" aria-label="Telegram post — headline and body" value={shownBody} readOnly={viewingOld} onChange={(event) => edit("body", event.target.value)} />}
+            ? <div className="studio-draft-preview" role="region" aria-label="Full post preview"><DraftPreview preview={preview} /></div>
+            : <textarea className="studio-draft-editor" aria-label="Full post — headline and body" value={shownBody} readOnly={viewingOld} onChange={(event) => edit("body", event.target.value)} />}
           <div className={`studio-char-count ${shownCounter.overLimit ? "is-over" : shownCounter.warning ? "is-warning" : ""}`}>
-            <span>{shownCounter.count.toLocaleString()} / {DRAFT_CHARACTER_LIMIT.toLocaleString()} plain-text characters</span>
-            <span>{shownCounter.overLimit ? "Copy blocked" : shownCounter.warning ? "Near Telegram limit" : "Telegram ready"}</span>
+            <span>{shownCounter.count.toLocaleString()} / {DRAFT_CHARACTER_LIMIT.toLocaleString()} Telegram characters</span>
+            <span>{shownCounter.overLimit ? "Copy blocked · over Telegram limit" : isBlankBody ? "Copy blocked · post is blank" : shownCounter.warning ? "Near Telegram limit" : "Telegram ready"}</span>
           </div>
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}
           {clickableSources.length > 0 && <div className="studio-draft-notes"><strong>Sources</strong><div className="studio-source-chips">{clickableSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}</div></div>}
           <DraftPanelClaims draft={draft} sourceLinks={sourceLinks} />
-          <div className="studio-draft-toolbar"><button type="button" className="studio-copy" onClick={() => void copy()} disabled={shownCounter.overLimit}>{copied ? "Copied" : "Copy post"}</button><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit" : "Preview"}</button>{copyNote && <span className="studio-copy-note" role="status">{copyNote}</span>}<span className="studio-draft-save-group"><button type="button" className="studio-draft-save" onClick={() => saveNow(false)} disabled={!canSave || viewingOld} title="Overwrite the current version with your edits">Save</button><button type="button" className="studio-draft-save" onClick={() => saveNow(true)} disabled={!canSave || viewingOld} title="Keep the current version and add your edits as a new one">Save as new version</button></span><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) choose(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version || saveState === "saving"}>Choose</button></label></div>
+          <div className="studio-draft-toolbar"><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit post" : "Preview"}</button><span className="studio-draft-save-group"><button type="button" className="studio-draft-save" onClick={() => saveNow(false)} disabled={!canSave || viewingOld} title="Overwrite the current version with your edits">Save</button><button type="button" className="studio-draft-save" onClick={() => saveNow(true)} disabled={!canSave || viewingOld} title="Keep the current version and add your edits as a new one">Save as new version</button></span><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) choose(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version || saveState === "saving"} title="Make the viewed version the current one (no copy is created)">Restore</button></label></div>
           {saveError && <p className="studio-save-error" role="alert">{saveError}</p>}
+        </div>
+      )}
+      {draft && (
+        <div className="studio-draft-bottom">
+          <button
+            type="button"
+            className="studio-copy studio-copy-sticky"
+            onClick={() => void copy()}
+            disabled={isCopyBlocked}
+            title={shownCounter.overLimit ? "Shorten the post to copy it" : isBlankBody ? "Write the post before copying" : "Copy the full post for Telegram"}
+          >{copied ? "Copied" : "Copy full post"}</button>
+          {copyNote && <span className="studio-copy-note" role="status">{copyNote}</span>}
         </div>
       )}
     </aside>
@@ -1038,10 +1179,41 @@ function RunDetailsPanel({ run }: { run: RunSummary | null }) {
   );
 }
 
+/**
+ * Explorer-to-Studio handoff: writes the referenced post's prompt text into
+ * the composer without sending. Composer content the owner already typed is
+ * never overwritten; the caller surfaces a notice instead.
+ */
+function ComposerPrefillBridge({
+  pendingPrefill,
+  onPrefillResult,
+}: {
+  pendingPrefill: StudioPrefill | null;
+  onPrefillResult: (applied: boolean, prefill: StudioPrefill) => void;
+}) {
+  const { value, setText } = unstable_useComposerInput();
+  const seen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingPrefill) return;
+    const key = `${pendingPrefill.channel_id}:${String(pendingPrefill.post_id ?? "")}:${pendingPrefill.text.length}:${pendingPrefill.text.slice(0, 64)}`;
+    if (seen.current === key) return;
+    seen.current = key;
+    if (value.trim()) {
+      onPrefillResult(false, pendingPrefill);
+    } else {
+      setText(pendingPrefill.text);
+      onPrefillResult(true, pendingPrefill);
+    }
+  }, [pendingPrefill, value, setText, onPrefillResult]);
+  return null;
+}
+
 function StudioThread({
   conversation,
   seedRun,
   consent,
+  pendingPrefill,
+  onPrefillResult,
   onStopRun,
   onRunActivityChange,
   onRunFinished,
@@ -1049,6 +1221,8 @@ function StudioThread({
   conversation: Conversation;
   seedRun: RunSummary | null;
   consent: Bootstrap["consent"];
+  pendingPrefill: StudioPrefill | null;
+  onPrefillResult: (applied: boolean, prefill: StudioPrefill) => void;
   onStopRun: (runId: string) => Promise<void>;
   onRunActivityChange: (active: boolean) => void;
   onRunFinished: () => void;
@@ -1068,6 +1242,13 @@ function StudioThread({
   const activeRunId = useRef<string | null>(seedRun?.id ?? null);
   const [, setMessages] = useState<PersistedMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [prefillNotice, setPrefillNotice] = useState("");
+  const handlePrefillResult = useCallback((applied: boolean, prefill: StudioPrefill) => {
+    setPrefillNotice(applied
+      ? "Post reference added to the composer. Review it before sending."
+      : "The composer already has text, so the post reference was not inserted. Copy it from the reader instead.");
+    onPrefillResult(applied, prefill);
+  }, [onPrefillResult]);
   const [recoveredRun, setRecoveredRun] = useState<RunSummary | null>(seedRun);
   const [recoveredEvents, setRecoveredEvents] = useState<RunEvent[]>([]);
   const markRunFailed = useCallback((error: unknown) => {
@@ -1136,6 +1317,9 @@ function StudioThread({
         .then((payload) => {
           if (!alive) return;
           consecutiveErrors = 0;
+          // A delayed response for another conversation must not leak into
+          // this thread after a switch.
+          if (payload.run.conversation_id && payload.run.conversation_id !== conversation.id) return;
           setRecoveredRun(payload.run);
           if (payload.events.length > 0) {
             cursor = payload.events[payload.events.length - 1].sequence;
@@ -1195,6 +1379,10 @@ function StudioThread({
     }).catch(() => undefined);
 
     return () => {
+      // Leaving the conversation only detaches local listeners and timers;
+      // the server run keeps going and is reconciled on return. Cancellation
+      // is exclusively server-confirmed through the Stop control, so a route
+      // or conversation change never falsely reports a cancelled run.
       alive = false;
       subscription.unsubscribe();
       if (timer !== undefined) window.clearTimeout(timer);
@@ -1204,6 +1392,7 @@ function StudioThread({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <div className="studio-thread-wrap">
+        <ComposerPrefillBridge pendingPrefill={pendingPrefill} onPrefillResult={handlePrefillResult} />
         {loading && <div className="studio-loading" role="status">Restoring this conversation…</div>}
         <RunDetailsPanel run={recoveredRun} />
         {recoveredRun?.status === "failed" && (
@@ -1230,6 +1419,7 @@ function StudioThread({
             <ThreadPrimitive.Messages components={{ Message: StudioMessage }} />
           </ThreadPrimitive.Viewport>
           <div className="studio-composer-stack">
+            {prefillNotice && <p className="studio-prefill-notice" role="status">{prefillNotice}</p>}
             <AgentActivity run={recoveredRun} events={recoveredEvents} onStopRun={onStopRun} />
             <ComposerPrimitive.Root className="studio-composer">
               <ComposerPrimitive.Input
@@ -1250,6 +1440,160 @@ function StudioThread({
         </ThreadPrimitive.Root>
       </div>
     </AssistantRuntimeProvider>
+  );
+}
+
+export function MoreActionsMenu({
+  selected,
+  busy,
+  onRename,
+  onProfile,
+  onSettings,
+  onDelete,
+}: {
+  selected: Conversation | null;
+  busy: boolean;
+  onRename: () => void;
+  onProfile: () => void;
+  onSettings: () => void;
+  onDelete: (conversation: Conversation) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    menuRef.current?.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus();
+    const onPointer = (event: PointerEvent) => {
+      if (
+        !menuRef.current?.contains(event.target as Node)
+        && !triggerRef.current?.contains(event.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open ]);
+
+  const moveFocus = (delta: number) => {
+    const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])") ?? []);
+    if (items.length === 0) return;
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    items[(at + delta + items.length) % items.length].focus();
+  };
+
+  const act = (fn: () => void) => () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+    fn();
+  };
+
+  return (
+    <div className="studio-more-wrap">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="studio-more-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls="studio-more-menu"
+        onClick={() => setOpen((current) => !current)}
+      >More actions</button>
+      {open && (
+        <div
+          ref={menuRef}
+          id="studio-more-menu"
+          className="studio-more-menu"
+          role="menu"
+          aria-label="Conversation actions"
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") { event.preventDefault(); moveFocus(1); }
+            else if (event.key === "ArrowUp") { event.preventDefault(); moveFocus(-1); }
+            else if (event.key === "Home") { event.preventDefault(); menuRef.current?.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus(); }
+            else if (event.key === "End") { event.preventDefault(); const items = menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])"); items?.[items.length - 1]?.focus(); }
+          }}
+        >
+          <button type="button" role="menuitem" disabled={!selected} onClick={act(onRename)}>Rename conversation</button>
+          <button type="button" role="menuitem" onClick={act(onProfile)}>Channel profile</button>
+          <button type="button" role="menuitem" onClick={act(onSettings)}>System Prompt</button>
+          <button
+            type="button"
+            role="menuitem"
+            className="is-danger"
+            disabled={!selected || busy}
+            onClick={act(() => { if (selected) onDelete(selected); })}
+          >Delete conversation…</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Compact summary-only surface for the owner's other channels. Until the
+ * separately authorized owned-channel backend exists, cross-channel context
+ * stays unavailable: this panel shows names only (no archive counts,
+ * metrics, discussion, or inspected posts) and its context-use action is
+ * disabled with an honest reason. It never moves another channel's chats,
+ * prompts, memory, or drafts.
+ */
+export function MyChannels({
+  channels,
+  selectedChannelId,
+}: {
+  channels: Channel[];
+  selectedChannelId: number | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const others = channels.filter((channel) => channel.id !== selectedChannelId);
+  if (others.length === 0) return null;
+  return (
+    <section className="studio-my-channels" aria-label="My channels">
+      <button
+        type="button"
+        className="studio-my-channels-toggle"
+        aria-expanded={open}
+        aria-controls="studio-my-channels-body"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="studio-my-channels-copy">
+          <span className="studio-overline">Optional research</span>
+          <strong>My channels</strong>
+        </span>
+        <small>{others.length} other{others.length === 1 ? "" : "s"}</small>
+        <span className="studio-my-channels-chevron" aria-hidden="true">{open ? "⌃" : "⌄"}</span>
+      </button>
+      {open && (
+        <div id="studio-my-channels-body" className="studio-my-channels-body">
+          <p>Another channel you manage could inform this conversation once its eligibility review passes. Until that separately authorized backend exists, cross-channel context stays unavailable here.</p>
+          <ul>
+            {others.map((channel) => (
+              <li key={channel.id} className="studio-my-channels-card">
+                <div>
+                  <strong>{channelLabel(channel)}</strong>
+                  <span>{channel.identifier}</span>
+                </div>
+                <p>Profile summary unavailable in this build.</p>
+                <button type="button" disabled title="Cross-channel research is not available until its eligibility review and backend land">Use in this conversation</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1275,6 +1619,9 @@ function StudioApp() {
   const bootstrapRef = useRef<Bootstrap | null>(null);
   const selectedChannelRef = useRef<number | null>(selectedChannelId);
   const refreshSequence = useRef(0);
+  const refreshAbort = useRef<AbortController | null>(null);
+  const chatScroll = useRef(0);
+  const [pendingPrefill, setPendingPrefill] = useState<StudioPrefill | null>(null);
 
   useEffect(() => {
     bootstrapRef.current = bootstrap;
@@ -1293,12 +1640,18 @@ function StudioApp() {
   const refresh = useCallback((channelOverride?: number | null) => {
     const channelId = channelOverride === undefined ? selectedChannelRef.current : channelOverride;
     const requestSequence = ++refreshSequence.current;
+    refreshAbort.current?.abort();
+    const controller = new AbortController();
+    refreshAbort.current = controller;
     const url = channelId === null
       ? "/studio/api/bootstrap"
       : `/studio/api/bootstrap?channel_id=${encodeURIComponent(channelId)}`;
-    void api<Bootstrap>(url)
+    void api<Bootstrap>(url, { signal: controller.signal })
       .then((payload) => {
         if (requestSequence !== refreshSequence.current) return;
+        // A delayed bootstrap for a deselected channel must not overwrite
+        // the freshly selected desk.
+        if (channelId !== null && channelId !== selectedChannelRef.current) return;
         setBootstrap(payload);
         bootstrapRef.current = payload;
         setSelectedChannelId(payload.selected_channel_id);
@@ -1310,6 +1663,7 @@ function StudioApp() {
         );
       })
       .catch((reason: unknown) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
         if (requestSequence === refreshSequence.current) {
           showRequestError(reason, "Studio could not load.");
         }
@@ -1378,20 +1732,23 @@ function StudioApp() {
     refresh(channelId);
   }, [draftOpen, refresh]);
 
-  const createConversation = () => {
-    if (!selectedChannelId) return;
+  const createConversation = useCallback(() => {
+    const channelId = selectedChannelRef.current;
+    if (!channelId) return;
     setInlineError("");
     void api<{ conversation: Conversation }>("/studio/api/conversations", {
       method: "POST",
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
-      body: JSON.stringify({ channel_id: selectedChannelId }),
+      body: JSON.stringify({ channel_id: channelId }),
     })
       .then((payload) => {
+        // Ignore the late creation if the channel moved on meanwhile.
+        if (selectedChannelRef.current !== channelId) return;
         setSelected(payload.conversation);
         refresh();
       })
       .catch((reason: unknown) => showRequestError(reason, "Could not create conversation."));
-  };
+  }, [refresh, showRequestError]);
 
   const applyDeletedConversation = useCallback((conversation: Conversation) => {
     setSelected((current) => current?.id === conversation.id ? null : current);
@@ -1439,6 +1796,61 @@ function StudioApp() {
     void deleteRequest(conversation);
   };
 
+  // Explorer handoff contract (see api.ts): a same-tab prefill event or a
+  // stored cross-page reference selects the post's own channel and prefills
+  // the composer. Nothing is ever sent automatically.
+  useEffect(() => {
+    const stored = consumeStoredPrefill();
+    if (stored) setPendingPrefill(stored);
+    const onPrefill = (event: Event) => {
+      const prefill = parsePrefillDetail((event as CustomEvent<unknown>).detail);
+      if (prefill) setPendingPrefill(prefill);
+    };
+    window.addEventListener(PREFILL_EVENT, onPrefill);
+    return () => window.removeEventListener(PREFILL_EVENT, onPrefill);
+  }, []);
+
+  // Route a pending prefill to its own channel. Channel switches keep their
+  // unsaved-draft guard; if the target channel has no conversation yet, one
+  // empty conversation is opened so the composer exists. Nothing is sent.
+  useEffect(() => {
+    if (!pendingPrefill || !bootstrap) return;
+    if (pendingPrefill.channel_id !== selectedChannelId) {
+      selectChannel(pendingPrefill.channel_id);
+      return;
+    }
+    if (!selected && bootstrap.conversations.length === 0) {
+      createConversation();
+    }
+  }, [pendingPrefill, bootstrap, selectedChannelId, selected, selectChannel, createConversation]);
+
+  const handlePrefillResult = useCallback((_applied: boolean, _prefill: StudioPrefill) => {
+    setPendingPrefill(null);
+  }, []);
+
+  const openDraft = () => {
+    const viewport = document.querySelector(".studio-viewport");
+    chatScroll.current = viewport instanceof HTMLElement ? viewport.scrollTop : 0;
+    setDraftOpen(true);
+  };
+  const closeDraft = useCallback(() => setDraftOpen(false), []);
+
+  useEffect(() => {
+    document.body.classList.toggle("studio-draft-open", draftOpen);
+    if (!draftOpen) {
+      const top = chatScroll.current;
+      const restore = () => {
+        const viewport = document.querySelector(".studio-viewport");
+        if (viewport instanceof HTMLElement) viewport.scrollTop = top;
+      };
+      // The overlay unmounts first; restore on the next frame so Back
+      // returns to the same chat scroll.
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(restore);
+      else restore();
+    }
+    return () => document.body.classList.remove("studio-draft-open");
+  }, [draftOpen]);
+
   const waitForRunToFinish = useCallback(async (conversationId: string, runId: string) => {
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
@@ -1482,7 +1894,7 @@ function StudioApp() {
 
   return (
     <div className="studio-app">
-      <ConversationRail channels={bootstrap.channels} selectedChannelId={selectedChannelId} onChannelSelect={selectChannel} conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} onDelete={deleteConversation} deletingId={deletingId} onSettings={() => setSettingsOpen(true)} onProfile={() => setProfileOpen(true)} />
+      <ConversationRail channels={bootstrap.channels} selectedChannelId={selectedChannelId} onChannelSelect={selectChannel} conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} />
       {settingsOpen && selectedChannelId && <StudioSettings channelId={selectedChannelId} channelLabel={selectedChannelLabel} onClose={() => setSettingsOpen(false)} />}
       {profileOpen && selectedChannelId && (
         <ChannelProfileDialog
@@ -1497,24 +1909,32 @@ function StudioApp() {
         <header className="studio-topbar">
           <div>
             <p className="studio-overline">{selectedChannel?.identifier ?? "Channel"}</p>
-            {editingTitle ? <form className="studio-title-editor" onSubmit={(event) => { event.preventDefault(); rename(); }}><input autoFocus aria-label="Conversation title" maxLength={160} value={titleText} onChange={(event) => setTitleText(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditingTitle(false); }} /><button type="submit" disabled={!titleText.trim()}>Save</button><button type="button" onClick={() => setEditingTitle(false)}>Cancel</button></form> : <div className="studio-title-row"><h1>{selected?.title ?? "Content Studio"}</h1>{selected && <button type="button" aria-label="Rename conversation" onClick={() => { setTitleText(selected.title); setEditingTitle(true); }}>Rename</button>}</div>}
+            {editingTitle ? <form className="studio-title-editor" onSubmit={(event) => { event.preventDefault(); rename(); }}><input autoFocus aria-label="Conversation title" maxLength={160} value={titleText} onChange={(event) => setTitleText(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditingTitle(false); }} /><button type="submit" disabled={!titleText.trim()}>Save</button><button type="button" onClick={() => setEditingTitle(false)}>Cancel</button></form> : <div className="studio-title-row"><h1 title={selected?.title}>{selected?.title ?? "Content Studio"}</h1></div>}
             {titleError && <p role="alert">{titleError}</p>}
           </div>
-          <button type="button" className="studio-draft-toggle" onClick={() => setDraftOpen(true)}>Draft</button>
-          {selected && <button type="button" className="studio-delete-mobile" onClick={() => deleteConversation(selected)} disabled={deletingId !== null}>Delete</button>}
-          <button type="button" className="studio-settings-mobile" onClick={() => setProfileOpen(true)}>Profile</button>
-          <button type="button" className="studio-settings-mobile" onClick={() => setSettingsOpen(true)}>System Prompt</button>
+          <div className="studio-topbar-actions">
+            <button type="button" className="studio-draft-toggle" onClick={openDraft}>Draft</button>
+            <MoreActionsMenu
+              selected={selected}
+              busy={deletingId !== null}
+              onRename={() => { if (selected) { setTitleText(selected.title); setEditingTitle(true); } }}
+              onProfile={() => setProfileOpen(true)}
+              onSettings={() => setSettingsOpen(true)}
+              onDelete={deleteConversation}
+            />
+          </div>
           <div className="studio-topbar-meta"><span className="studio-status-dot" aria-hidden="true" /> Agent context connected</div>
         </header>
         <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
+        <MyChannels channels={bootstrap.channels} selectedChannelId={selectedChannelId} />
         {(inlineError || (error && bootstrap)) && <div className="studio-inline-error" role="alert"><span>{inlineError || error}</span>{deleteRetryConversation && <button type="button" onClick={() => void stopAndDelete()} disabled={deletingId !== null}>{deletingId === deleteRetryConversation.id ? "Stopping…" : "Stop run and delete"}</button>}<button type="button" className="studio-inline-error-dismiss" onClick={() => { setInlineError(""); setError(""); setDeleteRetryConversation(null); }} aria-label="Dismiss error">×</button></div>}
-        {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} consent={bootstrap.consent} onStopRun={cancelRun} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
+        {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} consent={bootstrap.consent} pendingPrefill={pendingPrefill && pendingPrefill.channel_id === selected.channel_id ? pendingPrefill : null} onPrefillResult={handlePrefillResult} onStopRun={cancelRun} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
       </main>
       <DraftPanel
         conversationId={selected?.id ?? null}
         seedDraft={bootstrap.draft}
         open={draftOpen}
-        onClose={() => setDraftOpen(false)}
+        onClose={closeDraft}
         onSelectConversation={(conversationId) => {
           const previous = bootstrap.conversations.find((item) => item.id === conversationId);
           if (previous) setSelected(previous);
