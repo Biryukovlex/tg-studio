@@ -170,7 +170,6 @@ export type StudioScope = {
   conversationId: string | null;
   sequence: number;
 };
-
 /**
  * Channel/conversation isolation guard for async reads and streamed events.
  * A response that was requested under an older scope must never overwrite
@@ -181,6 +180,40 @@ export function isStaleScope(request: StudioScope, current: StudioScope): boolea
   if (request.sequence !== current.sequence) return true;
   if (request.channelId !== current.channelId) return true;
   if (request.conversationId !== current.conversationId) return true;
+  return false;
+}
+
+/**
+ * Reconnection-safe event merge. Poll windows can overlap after a dropped
+ * connection or a slow response, so incoming events are deduplicated by
+ * sequence and re-sorted; only the newest `cap` are kept for rendering.
+ * Terminal delivery is separate: the run status in the payload settles
+ * pending activity, never this list.
+ */
+export function mergeRunEvents(current: RunEvent[], incoming: RunEvent[], cap = 24): RunEvent[] {
+  const seen = new Map<number, RunEvent>();
+  current.forEach((event) => {
+    if (Number.isInteger(event.sequence)) seen.set(event.sequence, event);
+  });
+  incoming.forEach((event) => {
+    if (Number.isInteger(event.sequence)) seen.set(event.sequence, event);
+  });
+  return [...seen.values()].sort((a, b) => a.sequence - b.sequence).slice(-Math.max(1, cap));
+}
+
+/** Setup blockers (consent, provider, readiness) get a Settings recovery path. */
+export function isSetupBlockerCode(code: string | null | undefined): boolean {
+  if (!code) return false;
+  return /consent|not_ready|not_configured|setup|provider/i.test(code);
+}
+
+/** Move keyboard focus to the message composer so a retry starts there. */
+export function focusComposer(): boolean {
+  const input = document.querySelector(".studio-composer input, .studio-composer textarea");
+  if (input instanceof HTMLElement) {
+    input.focus();
+    return true;
+  }
   return false;
 }
 
@@ -240,7 +273,7 @@ function describeAgentActivity(run: RunSummary, events: RunEvent[]): { label: st
   return { label: "Thinking through your request", detail: "Choosing the next useful action from your channel context.", stage: "thinking" };
 }
 
-function AgentActivity({ run, events, onStopRun }: { run: RunSummary | null; events: RunEvent[]; onStopRun: (runId: string) => Promise<void> }) {
+export function AgentActivity({ run, events, onStopRun }: { run: RunSummary | null; events: RunEvent[]; onStopRun: (runId: string) => Promise<void> }) {
   const active = isActiveRun(run);
   const [stopping, setStopping] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -1266,6 +1299,15 @@ function StudioThread({
   }, [onPrefillResult]);
   const [recoveredRun, setRecoveredRun] = useState<RunSummary | null>(seedRun);
   const [recoveredEvents, setRecoveredEvents] = useState<RunEvent[]>([]);
+  // Set when stored-event polling exhausts its retries. The live agent
+  // subscription stays attached; Reconnect re-runs discovery so the stored
+  // run, messages and draft reconcile and duplicate events stay suppressed.
+  const [linkDown, setLinkDown] = useState(false);
+  const [reconnectToken, setReconnectToken] = useState(0);
+  const reconnect = useCallback(() => {
+    setLinkDown(false);
+    setReconnectToken((token) => token + 1);
+  }, []);
   const markRunFailed = useCallback((error: unknown) => {
     const runId = activeRunId.current;
     if (!runId) return;
@@ -1338,7 +1380,7 @@ function StudioThread({
           setRecoveredRun(payload.run);
           if (payload.events.length > 0) {
             cursor = payload.events[payload.events.length - 1].sequence;
-            setRecoveredEvents((current) => [...current, ...payload.events].slice(-24));
+            setRecoveredEvents((current) => mergeRunEvents(current, payload.events));
           }
           if (payload.run.status === "queued" || payload.run.status === "running") {
             timer = window.setTimeout(() => poll(payload.run), 850);
@@ -1358,6 +1400,7 @@ function StudioThread({
           consecutiveErrors += 1;
           if (shouldStopPollingAfterErrors(consecutiveErrors)) {
             setRecoveredRun(null);
+            setLinkDown(true);
             onRunFinished();
             return;
           }
@@ -1367,10 +1410,12 @@ function StudioThread({
     };
 
     setRecoveredEvents([]);
+    setLinkDown(false);
     const subscription = agent.subscribe({
       onRunInitialized: ({ input }) => {
         if (!input.runId) return;
         activeRunId.current = input.runId;
+        setLinkDown(false);
         setRecoveredEvents([]);
         setRecoveredRun(buildRunHint(conversation.id, input.runId, "queued"));
       },
@@ -1402,7 +1447,7 @@ function StudioThread({
       subscription.unsubscribe();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [agent, conversation.id, markRunFailed, onRunFinished, runtime, seedRun?.id]);
+  }, [agent, conversation.id, markRunFailed, onRunFinished, runtime, seedRun?.id, reconnectToken]);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -1413,7 +1458,17 @@ function StudioThread({
         {recoveredRun?.status === "failed" && (
           <div className="studio-run-error" role="alert">
             <strong>{recoveredRun.error_message ?? "The agent could not complete this run."}</strong>
-            <span>Try again with the same request when you’re ready.</span>
+            <span>Try again with the same request when you’re ready. Your saved draft and chat history are kept.</span>
+            <div className="studio-run-error-actions">
+              <button type="button" onClick={() => focusComposer()}>Try again</button>
+              {isSetupBlockerCode(recoveredRun.error_code) && <a href="/settings">Check settings</a>}
+            </div>
+          </div>
+        )}
+        {linkDown && (
+          <div className="studio-link-down" role="alert">
+            <span>Connection lost while following this run. Stored messages are kept.</span>
+            <button type="button" onClick={reconnect}>Reconnect</button>
           </div>
         )}
         <ThreadPrimitive.Root className="studio-thread">

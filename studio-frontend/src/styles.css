@@ -381,3 +381,12 @@ button { color: inherit; }
 .studio-profile-evidence-reader { max-width: min(640px, 94vw); }
 .studio-profile-evidence-reader h4 { margin: 4px 0 0; font-size: 14px; }
 .studio-settings-actions { display: inline-flex; gap: 8px; margin-left: 12px; }
+
+/* Truthful run recovery (T48) */
+.studio-run-error-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.studio-run-error-actions button { border: 1px solid var(--studio-line); border-radius: 8px; padding: 7px 12px; color: var(--studio-soft); background: rgba(110, 231, 221, .06); font-size: 11px; font-weight: 800; cursor: pointer; }
+.studio-run-error-actions button:hover { border-color: rgba(110, 231, 221, .5); color: var(--studio-accent); }
+.studio-run-error-actions a { align-self: center; color: var(--studio-accent); font-size: 11px; font-weight: 700; }
+.studio-link-down { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid rgba(246, 184, 169, .35); border-radius: 13px; color: var(--studio-soft); background: rgba(91, 52, 52, .18); font-size: 11px; }
+.studio-link-down button { border: 1px solid rgba(246, 184, 169, .5); border-radius: 8px; padding: 7px 12px; color: #f6d4ca; background: transparent; font-size: 11px; font-weight: 800; cursor: pointer; }
+.studio-link-down button:hover { background: rgba(246, 184, 169, .12); }
