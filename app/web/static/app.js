@@ -210,7 +210,11 @@
     const progress = document.createElement('span');
     progress.className = 'save-confirmation-progress';
     progress.setAttribute('aria-hidden', 'true');
-    notice.append(copy, close, progress);
+    const icon = document.createElement('span');
+    icon.className = 'save-confirmation-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = '✓';
+    notice.append(icon, copy, close, progress);
     document.getElementById('main-content')?.prepend(notice);
     activateSaveConfirmation(notice);
   }

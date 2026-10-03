@@ -472,3 +472,32 @@ body { font-family:'Manrope Variable',Manrope,ui-sans-serif,system-ui,sans-serif
   .studio-topbar-actions, .studio-my-channels { position:static; }
   .studio-my-channels-body { position:absolute; top:calc(100% + 8px); right:16px; left:16px; width:auto; max-height:min(40dvh,calc(100dvh - 500px)); }
 }
+
+/* The conversation workspace starts at the top edge; no separate brand band. */
+.studio-wordmark { font-size:22px; font-weight:800; letter-spacing:.01em; text-decoration:none; }
+.studio-wordmark span { color:var(--studio-accent); }
+.studio-rail-head { min-height:60px; margin-bottom:0; }
+.studio-topbar { min-height:100px; padding:20px; }
+.studio-panel-heading { min-height:100px; }
+.studio-primer-profile { margin:0; padding:12px 20px; border:0; border-bottom:1px solid var(--studio-line); border-radius:0; background:transparent; box-shadow:none; gap:12px; }
+.studio-primer-profile .studio-overline { font-size:12px; letter-spacing:.04em; }
+.studio-primer-profile p { margin:2px 0 0; font-size:13px; }
+@media(max-width:680px) {
+  .studio-topbar { min-height:0; padding:12px 14px; }
+  .studio-topbar-actions { width:100%; justify-content:flex-start; margin:0; }
+  .studio-primer-profile { padding:10px 14px; }
+  .studio-primer-profile p { font-size:12px; }
+  .studio-primer-profile .studio-overline { font-size:12px; }
+  .studio-my-channels-body { position:fixed; top:auto; bottom:82px; max-height:min(55dvh,calc(100dvh - 150px)); }
+}
+
+@media(max-width:680px) {
+  .studio-rail { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; }
+  .studio-channel-field { grid-column:1; grid-row:1; padding:0; }
+  .studio-channel-caption { display:none; }
+  .studio-new { grid-column:2; grid-row:1; margin:0; }
+  .studio-mobile-conversation-select { grid-column:1 / -1; grid-row:2; width:100%; max-width:none; }
+  .studio-primer-profile { display:flex; align-items:center; justify-content:space-between; }
+  .studio-primer-profile > div { min-width:0; }
+  .studio-primer-profile button { flex:none; }
+}

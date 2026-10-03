@@ -56,10 +56,13 @@
     </aside>
 
     <div class="workspace">
-      <header class="brand-bar">
+      {% if ghost_mode == 'studio' %}
+      <header class="studio-mobile-brand">
         <a class="brand-wordmark" href="/" aria-label="{{ app_name }} home"><span>TG</span>Studio</a>
       </header>
+      {% endif %}
       <header class="topbar">
+        <a class="brand-wordmark" href="/" aria-label="{{ app_name }} home"><span>TG</span>Studio</a>
         <div class="page-heading">
           {% block pageheading %}
           <p class="eyebrow">Channel intelligence</p>

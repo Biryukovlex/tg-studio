@@ -205,16 +205,17 @@ async def _seed_logs(app):
 
 
 @pytest.mark.asyncio
-async def test_scope_notice_sits_above_both_tabs(tmp_path):
+async def test_scope_and_view_tabs_share_the_page_header(tmp_path):
     app, _, _ = _fake_settings_app(tmp_path)
     async with _client_for(app) as client:
         await _login(client)
         for path in ("/settings", "/settings/logs"):
             page = await client.get(path)
             assert page.status_code == 200
-            scope = page.text.index("settings-scope")
+            scope = page.text.index("data-settings-scope")
             tabs = page.text.index("settings-view-tabs")
-            assert scope < tabs, f"scope notice must precede the tabs on {path}"
+            assert scope < tabs < page.text.index('id="main-content"'), f"scope and tabs must share the header on {path}"
+            assert "All channels" in page.text and "profiles and prompts stay in Studio" in page.text
             assert "Configuration" in page.text and "Agent logs" in page.text
 
 

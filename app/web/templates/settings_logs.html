@@ -3,28 +3,15 @@
 {% block pageheading %}
 <p class="eyebrow">Workspace</p>
 <h1>Settings</h1>
+<p class="header-description" data-settings-scope role="note">All channels · profiles and prompts stay in Studio.</p>
 {% endblock %}
 {% block navactions %}
-<a class="action-btn primary-action" href="/studio">
-  <i class="mgc mgc-sparkles-2-core-regular" aria-hidden="true"></i>
-  <span>Back to Studio</span>
-</a>
-{% endblock %}
-{% block content %}
-<p class="settings-scope" role="note">Workspace settings apply to all channels. Channel profiles and System Prompts stay in each channel&rsquo;s Studio.</p>
-<nav class="settings-view-tabs" aria-label="Settings views">
+<nav class="settings-view-tabs" aria-label="Settings views" data-settings-view-tabs>
   <a href="/settings">Configuration</a>
   <a class="active" href="/settings/logs" aria-current="page">Agent logs</a>
 </nav>
-
-<section class="settings-intro agent-logs-intro" data-reveal>
-  <div>
-    <p class="section-kicker">Private diagnostics</p>
-    <h2>Tool result logs</h2>
-    <p>Complete tool outputs are stored in PostgreSQL and visible only to the workspace owner. They can contain channel text, web excerpts, URLs, and other private working context.</p>
-  </div>
-</section>
-
+{% endblock %}
+{% block content %}
 <div class="banner warn" data-logs-availability {% if logs_available %}hidden{% endif %} role="alert">Agent log storage is unavailable. Saved results cannot be listed right now; try again later.</div>
 
 <form method="get" action="/settings/logs" class="log-toolbar" data-logs-filter role="search" aria-label="Filter agent logs">
@@ -47,7 +34,7 @@
     <a class="btn ghost small" href="/settings/logs">Reset</a>
   </div>
 </form>
-<p class="fine" id="log-channel-help">Filtering runs on the server across all stored results. Channel accepts a numeric channel ID; named channel selection is not available yet.</p>
+<details class="log-help"><summary>About these logs</summary><p id="log-channel-help">Filter by numeric channel ID. Complete tool results are private to this workspace and may contain channel text, source excerpts and URLs.</p></details>
 
 <div class="agent-log-list">
   {% for log in logs %}

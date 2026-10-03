@@ -68,8 +68,14 @@ function StudioMarkdownText() {
   );
 }
 
-function StudioMessage() {
+export function StudioMessage() {
   const role = useAuiState((state) => state.message.role);
+  const hasContent = useAuiState((state) => state.message.content.some((part) =>
+    part.type === "text" ? Boolean(part.text.trim()) : part.type === "tool-call",
+  ));
+  // The run's Thinking indicator owns the pending state. Mount a response
+  // bubble only when there is text or tool activity to show.
+  if (role === "assistant" && !hasContent) return null;
 
   return (
     <MessagePrimitive.Root className="studio-message" data-role={role}>
@@ -455,7 +461,7 @@ function ConversationRail({
       <div className="studio-rail-head">
         <div className="studio-symbol" aria-hidden="true">✦</div>
         <div>
-          <p className="studio-overline">Content Studio</p>
+          <a className="studio-wordmark" href="/" aria-label="TG Studio home"><span>TG</span>Studio</a>
           <p className="studio-rail-title">Channel desk</p>
         </div>
       </div>
@@ -1101,8 +1107,8 @@ function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Boots
   const hasProfile = !!(profile && (profile.topics_text?.trim() || profile.editorial_text?.trim() || profile.style_text?.trim()));
   if (!hasProfile) {
     return (
-      <section className="studio-primer" aria-label="Channel profile status">
-        <p role="status">No channel profile yet. Build it from your posts or write the guidelines yourself.</p>
+      <section className="studio-primer studio-primer-profile" aria-label="Channel profile status">
+        <p role="status">No profile yet. Add your channel guidelines.</p>
         <button type="button" onClick={onProfile}>Profile</button>
       </section>
     );

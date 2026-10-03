@@ -3,19 +3,15 @@
 {% block pageheading %}
 <p class="eyebrow">Workspace</p>
 <h1>Settings</h1>
+<p class="header-description" data-settings-scope role="note">All channels · profiles and prompts stay in Studio.</p>
 {% endblock %}
 {% block navactions %}
-<a class="action-btn primary-action" href="/">
-  <i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>
-  <span>Back to overview</span>
-</a>
-{% endblock %}
-{% block content %}
-<p class="settings-scope" role="note">Workspace settings apply to all channels. Channel profiles and System Prompts stay in each channel&rsquo;s Studio.</p>
 <nav class="settings-view-tabs" aria-label="Settings views" data-settings-view-tabs>
   <a class="active" href="/settings" aria-current="page">Configuration</a>
   <a href="/settings/logs">Agent logs</a>
 </nav>
+{% endblock %}
+{% block content %}
 {% if save_notice %}
 <aside class="save-confirmation" data-save-confirmation data-section="{{ save_notice.section }}" role="status" aria-live="polite">
   <span class="save-confirmation-icon" aria-hidden="true">
@@ -31,9 +27,6 @@
   <span class="save-confirmation-progress" aria-hidden="true"></span>
 </aside>
 {% endif %}
-<section class="settings-intro" data-reveal>
-  <p>Manage your workspace connection, collection and writing preferences.</p>
-  </section>
 <div class="settings-layout">
   <nav class="section-tabs" aria-label="Settings sections" data-settings-section-nav>
     <a href="#telegram">Channels</a>
