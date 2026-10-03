@@ -19,7 +19,7 @@ def upgrade() -> None:
     op.execute(sa.text("ALTER TABLE telegram_connections ALTER COLUMN api_hash DROP NOT NULL"))
     connection = op.get_bind()
     rows = connection.execute(
-        sa.text("SELECT id, api_hash, encrypted_session FROM telegram_connections WHERE api_hash IS NOT NULL")
+        sa.text("SELECT id, api_hash FROM telegram_connections WHERE api_hash IS NOT NULL")
     ).mappings().all()
     if rows:
         settings = Settings()
@@ -30,24 +30,19 @@ def upgrade() -> None:
         if cipher is None:
             raise RuntimeError("Set TELEGRAM_SESSION_ENCRYPTION_KEY before migrating stored Telegram connections")
         for row in rows:
-            try:
-                session_string = cipher.decrypt(bytes(row["encrypted_session"]))
-            except (ValueError, TypeError) as exc:
-                raise RuntimeError(
-                    "Telegram connection cannot be decrypted; restore the matching key before migration"
-                ) from exc
+            # This migration encrypts API hashes only. Historical sessions may
+            # use keys unavailable to this deployment; preserve their ciphertext
+            # and key version. The normal connection loader rotates readable
+            # sessions when they are next used.
             connection.execute(
                 sa.text(
                     """UPDATE telegram_connections
-                          SET encrypted_session=:session, encrypted_api_hash=:api_hash,
-                              api_hash=NULL, session_key_version=:version
+                          SET encrypted_api_hash=:api_hash, api_hash=NULL
                         WHERE id=:id"""
                 ),
                 {
                     "id": row["id"],
-                    "session": cipher.encrypt(session_string),
                     "api_hash": cipher.encrypt(row["api_hash"]) if row["api_hash"] else None,
-                    "version": cipher.key_version,
                 },
             )
 

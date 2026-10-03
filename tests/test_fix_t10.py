@@ -200,6 +200,10 @@ def test_existing_connection_is_encrypted_on_upgrade_and_restored_on_downgrade()
 
     key = _fernet_key()
     cipher = SessionCipher(key)
+    historical_cipher = SessionCipher(_fernet_key())
+    sessions = [cipher.encrypt("synthetic-session"),
+                historical_cipher.encrypt("historical-session"), None]
+    row_ids = [uuid.uuid4() for _ in sessions]
     env = os.environ.copy()
     env["DATABASE_URL"] = database_url
     env["TELEGRAM_SESSION_ENCRYPTION_KEY"] = key
@@ -219,36 +223,45 @@ def test_existing_connection_is_encrypted_on_upgrade_and_restored_on_downgrade()
             await connection.close()
         migrate("upgrade 0013_collection_integrity")
         connection = await asyncpg.connect(url)
-        workspace_id, row_id = uuid.uuid4(), uuid.uuid4()
+        workspace_id = uuid.uuid4()
         try:
             await connection.execute(
                 "INSERT INTO workspaces(id, slug, name) VALUES ($1, $2, 'Synthetic')",
                 workspace_id, f"crypto-{workspace_id.hex}",
             )
-            await connection.execute(
-                "INSERT INTO telegram_connections(id, workspace_id, label, api_id, api_hash, encrypted_session) "
-                "VALUES ($1, $2, 'default', 42, 'synthetic-api-hash', $3)",
-                row_id, workspace_id, cipher.encrypt("synthetic-session"),
-            )
+            for index, (row_id, session) in enumerate(zip(row_ids, sessions)):
+                await connection.execute(
+                    "INSERT INTO telegram_connections(id, workspace_id, label, api_id, api_hash, encrypted_session) "
+                    "VALUES ($1, $2, $3, 42, 'synthetic-api-hash', $4)",
+                    row_id, workspace_id, f"synthetic-{index}", session,
+                )
         finally:
             await connection.close()
         migrate("upgrade 0014_session_crypto")
         connection = await asyncpg.connect(url)
         try:
-            row = await connection.fetchrow(
-                "SELECT api_hash, encrypted_api_hash, encrypted_session FROM telegram_connections WHERE id=$1", row_id
-            )
-            assert row["api_hash"] is None
-            assert cipher.decrypt(row["encrypted_api_hash"]) == "synthetic-api-hash"
-            assert cipher.decrypt(row["encrypted_session"]) == "synthetic-session"
+            for row_id, session in zip(row_ids, sessions):
+                row = await connection.fetchrow(
+                    "SELECT api_hash, encrypted_api_hash, encrypted_session, session_key_version "
+                    "FROM telegram_connections WHERE id=$1", row_id
+                )
+                assert row["api_hash"] is None
+                assert cipher.decrypt(row["encrypted_api_hash"]) == "synthetic-api-hash"
+                assert row["encrypted_session"] == session
+                assert row["session_key_version"] == "v1"
         finally:
             await connection.close()
         migrate("downgrade 0013_collection_integrity")
         connection = await asyncpg.connect(url)
         try:
-            assert await connection.fetchval(
-                "SELECT api_hash FROM telegram_connections WHERE id=$1", row_id
-            ) == "synthetic-api-hash"
+            for row_id, session in zip(row_ids, sessions):
+                row = await connection.fetchrow(
+                    "SELECT api_hash, encrypted_session, session_key_version "
+                    "FROM telegram_connections WHERE id=$1", row_id
+                )
+                assert row["api_hash"] == "synthetic-api-hash"
+                assert row["encrypted_session"] == session
+                assert row["session_key_version"] == "v1"
         finally:
             await connection.close()
 
