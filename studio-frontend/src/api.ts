@@ -188,6 +188,8 @@ export type ChannelProfile = {
   confidence?: string;
   style_profile?: Record<string, unknown>;
   editorial_rules?: Record<string, unknown>;
+  /** Supporting-post evidence (T37–T39 backend work exposes this when ready). */
+  evidence_post_ids?: number[];
 };
 
 export type ProfilePayload = {
@@ -204,6 +206,8 @@ export type ProfileDraft = {
   built_from_posts: number;
   limitations: string[];
   formatting_facts: Array<Record<string, unknown>>;
+  /** Supporting-post evidence (T37–T39 backend work exposes this when ready). */
+  evidence_post_ids?: number[];
 };
 
 export type Bootstrap = {

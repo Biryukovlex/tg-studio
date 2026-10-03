@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, csrfToken, type ChannelProfile, StudioApiError } from "./api";
+import { api, csrfToken, fetchStudioPost, type ChannelProfile, type StudioPost, StudioApiError } from "./api";
 
 type Props = {
   channelId: number;
@@ -34,6 +34,80 @@ export function extractConflictProfile(error: unknown): ChannelProfile | null {
   if (!(error instanceof StudioApiError)) return null;
   const server = (error.payload as unknown as { server_profile?: ChannelProfile }).server_profile;
   return server ?? null;
+}
+
+/**
+ * Supporting-post evidence for a built profile. The backend stores evidence
+ * post IDs with the analysis; until it exposes them on the profile payload
+ * (see handoff: add `evidence_post_ids` to the profile serializer) this
+ * section stays hidden rather than showing a dead control. When present,
+ * each entry opens the full sanitized post through the T51 read model —
+ * never an excerpt.
+ */
+export function evidenceIdsFrom(profile: ChannelProfile | null): number[] {
+  const ids = profile?.evidence_post_ids;
+  if (!Array.isArray(ids)) return [];
+  return ids.filter((id): id is number => Number.isInteger(id) && (id as number) > 0);
+}
+
+export function ProfileEvidence({ channelId, evidencePostIds }: { channelId: number; evidencePostIds: number[] }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [detail, setDetail] = useState<StudioPost | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  if (evidencePostIds.length === 0) return null;
+
+  const openEvidence = async (postId: number) => {
+    setLoading(true);
+    setError("");
+    setDetail(null);
+    try {
+      const post = await fetchStudioPost(postId);
+      if (post.channel_id !== channelId) {
+        setError("That post belongs to another channel, so it is not shown here.");
+        return;
+      }
+      setDetail(post);
+      dialogRef.current?.showModal();
+    } catch {
+      setError("Could not read that supporting post. Try again or open it from Post Explorer.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="studio-profile-evidence" aria-label="Supporting posts">
+      <h3>Supporting posts</h3>
+      <p>Successful channel posts behind this profile. Each opens the full post — never an excerpt.</p>
+      <ul>
+        {evidencePostIds.map((postId) => (
+          <li key={postId}>
+            <button type="button" onClick={() => void openEvidence(postId)} disabled={loading}>
+              Post #{postId}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="studio-profile-status is-error" role="alert">{error}</p>}
+      <dialog ref={dialogRef} className="studio-settings studio-profile-evidence-reader" aria-label="Supporting post">
+        <header>
+          <h4>Post {detail ? `#${detail.message_id}` : ""}</h4>
+          <button type="button" aria-label="Close supporting post" onClick={() => dialogRef.current?.close()}>Close</button>
+        </header>
+        {detail && (
+          <>
+            {/* formatted_html is server-sanitized Telegram HTML (T51 read model). */}
+            <div className="studio-markdown" dangerouslySetInnerHTML={{ __html: detail.formatted_html || "" }} />
+            <p className="studio-profile-meta">
+              {detail.metrics.views.toLocaleString()} views · {detail.metrics.reactions.toLocaleString()} reactions · {detail.metrics.comments.toLocaleString()} comments · {detail.metrics.shares.toLocaleString()} shares
+            </p>
+            {detail.source_url && <p><a href={detail.source_url} target="_blank" rel="noopener noreferrer">Open original in Telegram</a></p>}
+          </>
+        )}
+      </dialog>
+    </section>
+  );
 }
 
 function formatMeta(profile: ChannelProfile | null): string {
@@ -133,7 +207,9 @@ export function PreviewMarkdown({ text }: { text: string }) {
 
 export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [mode, setMode] = useState<"edit" | "preview">("edit");
+  // The profile opens formatted; raw-source editing is an explicit Edit
+  // action, never the default preview.
+  const [mode, setMode] = useState<"edit" | "preview">("preview");
   const [topics, setTopics] = useState("");
   const [editorial, setEditorial] = useState("");
   const [style, setStyle] = useState("");
@@ -153,9 +229,12 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
   useEffect(() => {
     dialogRef.current?.showModal();
     let alive = true;
-    void api<{ profile: ChannelProfile | null; can_build: boolean; build_blockers: Array<{ code: string; message: string }>; channel_id: number }>(`/studio/api/profile?channel_id=${encodeURIComponent(String(channelId))}`)
+    // A/B isolation: the in-flight load is aborted on channel switch and a
+    // delayed response for another channel never enters this dialog.
+    const controller = new AbortController();
+    void api<{ profile: ChannelProfile | null; can_build: boolean; build_blockers: Array<{ code: string; message: string }>; channel_id: number }>(`/studio/api/profile?channel_id=${encodeURIComponent(String(channelId))}`, { signal: controller.signal })
       .then((payload) => {
-        if (!alive) return;
+        if (!alive || payload.channel_id !== channelId) return;
         const p = payload.profile;
         setProfile(p);
         setCanBuild(payload.can_build);
@@ -175,12 +254,12 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
           setStatusIsError(false);
         }
       })
-      .catch(() => {
-        if (!alive) return;
+      .catch((error: unknown) => {
+        if (!alive || (error instanceof DOMException && error.name === "AbortError")) return;
         setStatus("Could not load profile. Close and try again.");
         setStatusIsError(true);
       });
-    return () => { alive = false; };
+    return () => { alive = false; controller.abort(); };
   }, [channelId]);
 
   const closeWithConfirm = () => {
@@ -208,7 +287,8 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
       setTopics(d.topics_text ?? "");
       setEditorial(d.editorial_text ?? "");
       setStyle(d.style_text ?? "");
-      setMode("edit");
+      // A fresh build opens formatted; edits stay an explicit action.
+      setMode("preview");
       const usedLocalFallback = d.limitations?.some((item) => item.includes("built locally"));
       setStatus(usedLocalFallback
         ? "The model could not return a valid profile, so this draft was built locally from channel statistics. Review it before saving."
@@ -319,6 +399,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
         </div>
       </header>
       <p className="studio-profile-meta">{formatMeta(profile)}</p>
+      <ProfileEvidence channelId={channelId} evidencePostIds={evidenceIdsFrom(profile)} />
 
       {mode === "edit" ? (
         <>

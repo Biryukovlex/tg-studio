@@ -472,9 +472,10 @@ function ConversationRail({
   );
 }
 
-function StudioSettings({ channelId, channelLabel, onClose }: { channelId: number; channelLabel: string; onClose: () => void }) {
+export function StudioSettings({ channelId, channelLabel, onClose }: { channelId: number; channelLabel: string; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [prompt, setPrompt] = useState("");
+  const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
@@ -483,27 +484,41 @@ function StudioSettings({ channelId, channelLabel, onClose }: { channelId: numbe
     let alive = true;
     const controller = new AbortController();
     void api<{ channel_id: number; system_prompt: string }>(`/studio/api/settings?channel_id=${encodeURIComponent(channelId)}`, { signal: controller.signal }).then(value => {
-      if (alive) { setPrompt(value.system_prompt); setLoading(false); }
+      if (alive) { setPrompt(value.system_prompt); setInitialPrompt(value.system_prompt); setLoading(false); }
     }).catch((error: unknown) => {
       if (!alive || (error instanceof DOMException && error.name === "AbortError")) return;
       setNotice("Could not load the system prompt. Close and try again.");
     });
     return () => { alive = false; controller.abort(); };
   }, [channelId]);
+  // Channel-scoped and separately named: edits here never leave this
+  // channel, and closing with unsaved edits asks first. The server is
+  // last-writer-wins, so every failure path keeps the local text.
+  const dirty = initialPrompt !== null && prompt !== initialPrompt;
+  const closeWithConfirm = () => {
+    if (dirty && !window.confirm("Discard unsaved System Prompt changes?")) return;
+    onClose();
+  };
   const save = async () => {
     setSaving(true); setNotice("");
     try {
       await api("/studio/api/settings", { method: "PATCH", headers: { "content-type": "application/json", "x-csrf-token": csrfToken() }, body: JSON.stringify({ channel_id: channelId, system_prompt: prompt }) });
+      setInitialPrompt(prompt);
       setNotice(`Saved for ${channelLabel}. It applies to this channel's conversations only.`);
     } catch { setNotice("Could not save. Your text is preserved; try again."); }
     finally { setSaving(false); }
   };
-  return <dialog className="studio-settings" ref={dialog} aria-labelledby="studio-settings-title" onCancel={onClose} onClose={onClose}>
-    <header><h2 id="studio-settings-title">System Prompt</h2><button type="button" aria-label="Close System Prompt" onClick={onClose}>Close</button></header>
+  const clear = () => {
+    if (prompt !== "" && !window.confirm("Clear the System Prompt? Save to apply the empty prompt.")) return;
+    setPrompt("");
+    setNotice("Cleared locally. Save to apply the empty prompt.");
+  };
+  return <dialog className="studio-settings" ref={dialog} aria-labelledby="studio-settings-title" onCancel={(event) => { event.preventDefault(); closeWithConfirm(); }} onClose={onClose}>
+    <header><h2 id="studio-settings-title">System Prompt</h2><button type="button" aria-label="Close System Prompt" onClick={closeWithConfirm}>Close</button></header>
     <label htmlFor="studio-system-prompt">System Prompt</label>
     <p>Standing instructions for <strong>{channelLabel}</strong>: voice, editorial preferences, topics and source criteria. They never apply to another channel. Security rules still apply.</p>
     <textarea id="studio-system-prompt" autoFocus value={prompt} maxLength={12000} disabled={loading} onChange={event => { setPrompt(event.target.value); setNotice(""); }} placeholder="How should the Studio agent work with you?" />
-    <footer><span>{prompt.length.toLocaleString()} / 12,000 · Leave empty to use defaults.</span><button type="button" className="studio-copy" disabled={loading || saving} onClick={() => void save()}>{saving ? "Saving…" : "Save instructions"}</button></footer>
+    <footer><span>{prompt.length.toLocaleString()} / 12,000 · Leave empty to use defaults.{dirty ? " Unsaved changes." : ""}</span><span className="studio-settings-actions"><button type="button" disabled={loading || saving || prompt === ""} onClick={clear}>Clear</button><button type="button" className="studio-copy" disabled={loading || saving} onClick={() => void save()}>{saving ? "Saving…" : "Save instructions"}</button></span></footer>
     {notice && <p role="status">{notice}</p>}
   </dialog>;
 }

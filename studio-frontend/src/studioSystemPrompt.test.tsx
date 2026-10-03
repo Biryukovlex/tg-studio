@@ -1,0 +1,89 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { StudioSettings } from "./main";
+
+function stubSettingsFetch(prompt: string, onPatch?: (body: unknown) => unknown) {
+  vi.stubGlobal("fetch", vi.fn(async (url: unknown, init?: RequestInit) => {
+    const target = String(url);
+    if (init?.method === "PATCH" && target.includes("/studio/api/settings")) {
+      if (onPatch) return onPatch(JSON.parse(String(init.body))) as unknown as Response;
+      return {
+        ok: true,
+        status: 200,
+        redirected: false,
+        headers: { get: () => "application/json" },
+        json: async () => ({ channel_id: 7, system_prompt: prompt }),
+      } as unknown as Response;
+    }
+    return {
+      ok: true,
+      status: 200,
+      redirected: false,
+      headers: { get: () => "application/json" },
+      json: async () => ({ channel_id: 7, system_prompt: prompt }),
+    } as unknown as Response;
+  }));
+}
+
+describe("StudioSettings channel prompt", () => {
+  beforeEach(() => {
+    HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+  });
+
+  it("stays channel-scoped with the 12,000-character bound", async () => {
+    stubSettingsFetch("Be brief.");
+    render(<StudioSettings channelId={7} channelLabel="@chan" onClose={() => {}} />);
+    const box = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    expect(box.value).toBe("Be brief.");
+    expect(box.getAttribute("maxlength")).toBe("12000");
+    expect(screen.getByText(/applies to this channel's conversations only|never apply to another channel/i)).toBeDefined();
+  });
+
+  it("guards unsaved edits on close and keeps text on save failure", async () => {
+    stubSettingsFetch("Be brief.", () => {
+      throw new Error("network down");
+    });
+    const onClose = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<StudioSettings channelId={7} channelLabel="@chan" onClose={onClose} />);
+    const box = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "Be brief and kind." } });
+    expect(screen.getByText(/Unsaved changes/)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Close System Prompt" }));
+    expect(confirm).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    confirm.mockRestore();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save instructions" }));
+    await screen.findByText(/Your text is preserved/);
+    // Local edits survive the failed save.
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("Be brief and kind.");
+  });
+
+  it("clears explicitly and saves the empty prompt", async () => {
+    const seen: unknown[] = [];
+    stubSettingsFetch("Be brief.", (body: unknown) => {
+      seen.push(body);
+      return {
+        ok: true,
+        status: 200,
+        redirected: false,
+        headers: { get: () => "application/json" },
+        json: async () => ({ channel_id: 7, system_prompt: "" }),
+      } as unknown as Response;
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<StudioSettings channelId={7} channelLabel="@chan" onClose={() => {}} />);
+    await screen.findByRole("textbox");
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Save instructions" }));
+    await waitFor(() => {
+      expect(seen).toHaveLength(1);
+    });
+    expect(seen[0]).toMatchObject({ channel_id: 7, system_prompt: "" });
+    confirm.mockRestore();
+  });
+});

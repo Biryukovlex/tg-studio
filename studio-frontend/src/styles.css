@@ -369,3 +369,15 @@ button { color: inherit; }
 @media (max-width: 680px) {
   .studio-my-channels { margin: 10px 12px 0; }
 }
+
+/* Profile evidence and System Prompt actions (T53) */
+.studio-profile-evidence { display: grid; gap: 8px; margin: 0 22px 4px; padding: 12px 14px; border: 1px solid var(--studio-line); border-radius: 12px; background: rgba(7, 19, 29, .5); }
+.studio-profile-evidence h3 { margin: 0; font-size: 12px; }
+.studio-profile-evidence > p { margin: 0; color: var(--studio-muted); font-size: 11px; line-height: 1.5; }
+.studio-profile-evidence ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.studio-profile-evidence li button { border: 1px solid var(--studio-line); border-radius: 8px; padding: 7px 10px; color: var(--studio-soft); background: transparent; font-size: 11px; font-weight: 700; cursor: pointer; }
+.studio-profile-evidence li button:hover:not(:disabled) { border-color: rgba(110, 231, 221, .5); color: var(--studio-accent); }
+.studio-profile-evidence li button:disabled { opacity: .5; cursor: wait; }
+.studio-profile-evidence-reader { max-width: min(640px, 94vw); }
+.studio-profile-evidence-reader h4 { margin: 4px 0 0; font-size: 14px; }
+.studio-settings-actions { display: inline-flex; gap: 8px; margin-left: 12px; }
