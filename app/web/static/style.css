@@ -1350,3 +1350,68 @@ html[data-mascot-paused] .ghost-scene *::after {
   .chart-points, .chart-summary { padding-inline: 16px; }
   .scope-note { padding-inline: 0; }
 }
+
+/* Post Explorer, reader dialog and Studio handoff (T52) */
+.explorer-filters { display: grid; gap: 14px; padding: 4px 22px 0; }
+.explorer-row { display: flex; flex-wrap: wrap; gap: 14px 20px; }
+.explorer-search { display: grid; gap: 7px; flex: 2 1 220px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.explorer-search input { min-height: 44px; width: 100%; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: var(--text); }
+.explorer-sort { display: grid; gap: 7px; flex: 1 1 160px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.explorer-sort select { min-width: 0; width: 100%; }
+.explorer-channels, .explorer-ranges { margin: 0; padding: 0; border: 0; }
+.explorer-channels legend, .explorer-ranges legend { padding: 0; color: var(--muted); font-size: 11px; font-weight: 600; }
+.explorer-ranges legend span { color: var(--faint); font-weight: 450; }
+.explorer-checks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
+.explorer-check { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 99px; color: var(--soft-text); font-size: 11px; cursor: pointer; }
+.explorer-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--cyan); }
+.explorer-check:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+.explorer-range-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 7px; }
+.explorer-range-grid label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.explorer-range-grid input { min-height: 44px; width: 100%; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: var(--text); }
+.explorer-actions { display: flex; gap: 10px; }
+.explorer-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 22px 0; }
+.explorer-chips:empty { display: none; }
+.chip { border: 1px solid rgba(25, 210, 236, .4); border-radius: 99px; padding: 7px 12px; background: rgba(25, 210, 236, .07); color: var(--soft-text); font-size: 11px; cursor: pointer; }
+.chip:hover { border-color: var(--cyan); }
+.link-btn { padding: 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.link-btn:hover { color: var(--cyan); text-decoration: underline; text-underline-offset: 3px; }
+.explorer-open { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Reader dialog: independent scroll, Escape closes natively, focus returns
+   to the opener so list position and keyboard context are restored. */
+.reader-dialog { width: min(760px, 94vw); max-height: min(88dvh, 900px); padding: 0; border: 1px solid var(--line-strong); border-radius: 14px; background: #0a1723; color: var(--text); }
+.reader-dialog::backdrop { background: rgba(3, 8, 14, .66); }
+.reader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 22px 0; }
+.reader-head h2 { margin: 4px 0 0; font-size: 17px; letter-spacing: -.02em; }
+.reader-body { display: grid; gap: 12px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 22px; }
+.reader-body h3 { margin: 8px 0 0; font-size: 13px; }
+.reader-post-meta { margin: 0; color: var(--muted); font-size: 11px; }
+.reader-metrics { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; padding: 0; list-style: none; color: var(--soft-text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.reader-source { margin: 0; font-size: 12px; }
+.reader-source a { color: var(--cyan); }
+.reader-snapshots, .reader-discussion { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.reader-snapshots li, .reader-discussion li { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(7, 19, 29, .5); }
+.reader-comment-head { margin: 0 0 4px; color: var(--muted); font-size: 10px; }
+.reader-discussion p { margin: 0; }
+.reader-foot { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 22px 20px; }
+
+@media (max-width: 860px) {
+  .explorer-range-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .explorer-filters { padding-inline: 16px; }
+  .explorer-chips { padding-inline: 16px; }
+  /* Phone cards: rows become readable cards instead of a panning table. */
+  .explorer-table { min-width: 0; }
+  .explorer-table colgroup, .explorer-table thead { display: none; }
+  .explorer-table, .explorer-table tbody, .explorer-table tr, .explorer-table td { display: block; width: 100%; }
+  .explorer-table tr { margin: 0 16px 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(7, 19, 29, .5); }
+  .explorer-table tbody { display: grid; }
+  .posts-panel .table-scroll { overflow-x: visible; }
+  .explorer-table td { padding: 2px 0; border: 0; }
+  .explorer-table .date-cell { color: var(--muted); font-size: 10px; }
+  .explorer-table .channel-cell { color: var(--teal); font-size: 11px; font-weight: 700; }
+  .explorer-table .post-text { margin: 4px 0; font-size: 13px; }
+  .explorer-table .number-cell { display: inline-block; width: auto; margin-right: 14px; font-size: 11px; }
+  .explorer-table .actions-col { margin-top: 8px; }
+}

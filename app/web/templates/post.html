@@ -9,6 +9,11 @@
   <i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>
   <span>Back to overview</span>
 </a>
+<button type="button" class="action-btn" data-explore-post data-channel-id="{{ row.channel_id }}" data-post-id="{{ row.id }}" data-channel-label="{{ row.identifier }}">
+  <i class="mgc mgc-content-ai-core-regular" aria-hidden="true"></i>
+  <span>Explore in Studio</span>
+</button>
+<p class="field-error" data-explore-error role="alert" hidden></p>
 {% if row.link != '#' %}
 <a class="action-btn" href="{{ row.link }}" target="_blank" rel="noopener">
   <i class="mgc mgc-route-core-regular" aria-hidden="true"></i>
@@ -91,6 +96,7 @@
     <div>
       <p class="section-kicker">Raw archive</p>
       <h2>Snapshots <span>(latest first)</span></h2>
+      <p class="scope-note">Collection times (UTC) — the Overview chart uses publication dates instead.</p>
     </div>
   </div>
   <div class="table-scroll">

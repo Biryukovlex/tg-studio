@@ -145,13 +145,66 @@
 <section class="panel posts-panel" id="posts" data-reveal>
   <div class="panel-heading posts-heading">
     <div>
-      <h2>All posts</h2>
-      <p class="scope-note">Stored history for this channel scope — not limited to the chart window. Header exports cover the same stored history (up to 100,000 rows).</p>
+      <h2>Post Explorer</h2>
+      <p class="scope-note">Stored history for this channel scope — not limited to the chart window. Header exports cover the same stored history (up to 100,000 rows). Explorer filters never change Studio context.</p>
     </div>
-    <span class="row-count">{{ k.posts|int }} tracked</span>
+    <span class="row-count" data-explorer-count>{{ k.posts|int }} tracked</span>
   </div>
+  <form class="explorer-filters" data-explorer-form>
+    <div class="explorer-row">
+      <label class="explorer-search">
+        <span>Search</span>
+        <input type="search" name="q" maxlength="200" placeholder="Search post text" aria-label="Search post text">
+      </label>
+      <label class="explorer-sort">
+        <span>Sort</span>
+        <span class="select-shell">
+          <select name="sort" id="explorerSort" aria-label="Sort posts">
+            <option value="date" selected>Newest first</option>
+            <option value="views">Views</option>
+            <option value="reactions">Reactions</option>
+            <option value="comments">Comments</option>
+            <option value="shares">Shares</option>
+          </select>
+        </span>
+      </label>
+    </div>
+    <fieldset class="explorer-channels" aria-label="Channels">
+      <legend>Channels</legend>
+      <div class="explorer-checks">
+        {% for c in channels %}
+        <label class="explorer-check">
+          <input type="checkbox" name="channels" value="{{ c.id }}"{% if current_channel == c.id %} checked{% elif current_channel %} disabled{% endif %}>
+          <span>{{ c.title or c.identifier }}</span>
+        </label>
+        {% endfor %}
+        {% if not channels %}<span class="empty-hint">No channels yet.</span>{% endif %}
+      </div>
+    </fieldset>
+    <fieldset class="explorer-ranges" aria-label="Metric ranges">
+      <legend>Metric ranges <span>(optional min/max each)</span></legend>
+      <div class="explorer-range-grid">
+        {% for metric in ['views', 'reactions', 'comments', 'shares'] %}
+        <label>
+          <span>{{ metric|capitalize }} min</span>
+          <input type="number" name="min_{{ metric }}" min="0" max="2147483647" inputmode="numeric" aria-label="Minimum {{ metric }}">
+        </label>
+        <label>
+          <span>{{ metric|capitalize }} max</span>
+          <input type="number" name="max_{{ metric }}" min="0" max="2147483647" inputmode="numeric" aria-label="Maximum {{ metric }}">
+        </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <div class="explorer-actions">
+      <button type="submit" class="btn small">Apply filters</button>
+      <button type="button" class="btn ghost small" data-explorer-clear>Clear</button>
+    </div>
+    <p class="field-error" data-explorer-error role="alert" hidden></p>
+  </form>
+  <div class="explorer-chips" data-explorer-chips aria-live="polite"></div>
   <div class="table-scroll">
-    <table class="tbl posts-table">
+    <table class="tbl posts-table explorer-table">
       <colgroup>
         <col class="col-date">
         {% if not current_channel %}<col class="col-channel">{% endif %}
@@ -164,17 +217,17 @@
       </colgroup>
       <thead>
         <tr>
-          <th>Date (UTC)</th>
-          {% if not current_channel %}<th>Channel</th>{% endif %}
-          <th>Post</th>
-          <th><a class="sort-link{% if order == 'views' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=views{{ ('&' ~ cohort_query) if cohort_query else '' }}&page=1"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>Views / 24h</a></th>
-          <th><a class="sort-link{% if order == 'reactions' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=reactions{{ ('&' ~ cohort_query) if cohort_query else '' }}&page=1"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i>Reactions</a></th>
-          <th><a class="sort-link{% if order == 'comments' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=comments{{ ('&' ~ cohort_query) if cohort_query else '' }}&page=1"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i>Comments</a></th>
-          <th><a class="sort-link{% if order == 'shares' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=shares{{ ('&' ~ cohort_query) if cohort_query else '' }}&page=1"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i>Shares</a></th>
-          <th class="actions-col">Details</th>
+          <th scope="col">Date (UTC)</th>
+          {% if not current_channel %}<th scope="col">Channel</th>{% endif %}
+          <th scope="col">Post</th>
+          <th scope="col"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>Views</th>
+          <th scope="col"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i>Reactions</th>
+          <th scope="col"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i>Comments</th>
+          <th scope="col"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i>Shares</th>
+          <th scope="col" class="actions-col">Details</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody data-explorer-rows>
         {% for r in rows %}
         <tr>
           <td class="date-cell">{{ r.posted_at|dt }}</td>
@@ -196,7 +249,7 @@
     </table>
   </div>
   {% if total_pages > 1 %}
-  <nav class="log-pagination posts-pagination" aria-label="Post pages">
+  <nav class="log-pagination posts-pagination" aria-label="Post pages" data-explorer-pages>
     {% if page > 1 %}
     <a class="btn ghost small" href="?{{ page_query }}&page=1" aria-label="First post page">First</a>
     <a class="btn ghost small" href="?{{ page_query }}&page={{ page - 1 }}" rel="prev">← Previous</a>
@@ -215,8 +268,26 @@
     <span>Page {{ page }} of {{ total_pages }} · Showing {{ first_row }}–{{ last_row }} of {{ total_rows }}</span>
   </nav>
   {% elif total_rows %}
-  <p class="log-pagination posts-pagination" aria-live="polite">Showing {{ first_row }}–{{ last_row }} of {{ total_rows }}</p>
+  <p class="log-pagination posts-pagination" aria-live="polite" data-explorer-pages>Showing {{ first_row }}–{{ last_row }} of {{ total_rows }}</p>
   {% endif %}
 </section>
+
+<dialog id="postReader" class="reader-dialog" aria-labelledby="readerTitle" data-reader>
+  <div class="reader-head">
+    <div>
+      <p class="section-kicker">Post reader</p>
+      <h2 id="readerTitle">Post</h2>
+    </div>
+    <button type="button" class="btn ghost small" data-reader-close>Close</button>
+  </div>
+  <div class="reader-body" data-reader-body></div>
+  <div class="reader-foot">
+    <button type="button" class="btn ghost small" data-reader-prev>← Previous</button>
+    <button type="button" class="btn ghost small" data-reader-next>Next →</button>
+    <button type="button" class="btn small" data-reader-explore>Explore in Studio</button>
+    <a class="btn ghost small" data-reader-full href="/post/0">Full page</a>
+  </div>
+  <p class="field-error" data-reader-error role="alert" hidden></p>
+</dialog>
 
 {% endblock %}

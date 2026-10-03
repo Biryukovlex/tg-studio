@@ -764,7 +764,487 @@
     }
   }
 
-  const postCanvas = document.getElementById('postChart');
+  // Post Explorer (T52): server-backed search, one sort, channel subset and
+  // metric ranges over /api/explorer. Filters narrow the Overview channel
+  // scope and never transfer Studio context. A sequence guard drops delayed
+  // responses so rapid filter changes cannot overwrite newer results.
+  const EXPLORER_PAGE_SIZE = 20;
+  const EXPLORER_METRICS = ['views', 'reactions', 'comments', 'shares'];
+  const PREFILL_STORAGE_KEY = 'tg-studio:prefill';
+  const PREFILL_MAX_TEXT = 4000;
+
+  function explorerError(message) {
+    const node = document.querySelector('[data-explorer-error]');
+    if (!node) return;
+    if (!message) {
+      node.textContent = '';
+      node.hidden = true;
+      return;
+    }
+    node.textContent = message;
+    node.hidden = false;
+  }
+
+  const explorerForm = document.querySelector('[data-explorer-form]');
+  if (explorerForm) {
+    const rowsBody = document.querySelector('[data-explorer-rows]');
+    const pagesNav = document.querySelector('[data-explorer-pages]');
+    const chipsBox = document.querySelector('[data-explorer-chips]');
+    const countNode = document.querySelector('[data-explorer-count]');
+    const searchInput = explorerForm.querySelector('input[name="q"]');
+    const sortSelect = explorerForm.querySelector('select[name="sort"]');
+    let explorerSequence = 0;
+    let resultIds = [];
+    let currentPage = 1;
+    let totalPages = 1;
+
+    function readExplorerState(page) {
+      const q = (searchInput?.value || '').trim();
+      if (q.length > 200) return { error: 'Search must be at most 200 characters.' };
+      const channels = [...explorerForm.querySelectorAll('input[name="channels"]:checked')]
+        .map((box) => box.value)
+        .filter((value) => /^\d+$/.test(value));
+      const sort = sortSelect?.value || 'date';
+      if (!['date', 'views', 'reactions', 'comments', 'shares'].includes(sort)) {
+        return { error: 'Sort must be newest, views, reactions, comments or shares.' };
+      }
+      const bounds = {};
+      for (const metric of EXPLORER_METRICS) {
+        const rawMin = (explorerForm.querySelector(`input[name="min_${metric}"]`)?.value || '').trim();
+        const rawMax = (explorerForm.querySelector(`input[name="max_${metric}"]`)?.value || '').trim();
+        const low = rawMin === '' ? null : Number(rawMin);
+        const high = rawMax === '' ? null : Number(rawMax);
+        if ((rawMin !== '' && (!Number.isInteger(low) || low < 0)) || (rawMax !== '' && (!Number.isInteger(high) || high < 0))) {
+          return { error: `Invalid ${metric} range: bounds must be whole numbers from 0 up.` };
+        }
+        if (low !== null && high !== null && low > high) {
+          return { error: `Invalid ${metric} range: min must not exceed max.` };
+        }
+        if (low !== null) bounds[`min_${metric}`] = low;
+        if (high !== null) bounds[`max_${metric}`] = high;
+      }
+      return { q, channels, sort, bounds, page: Math.max(1, page || 1) };
+    }
+
+    function explorerQuery(state) {
+      const params = new URLSearchParams();
+      if (state.q) params.set('q', state.q);
+      if (state.channels.length > 0) params.set('channels', state.channels.join(','));
+      params.set('sort', state.sort);
+      Object.entries(state.bounds).forEach(([key, value]) => params.set(key, String(value)));
+      params.set('page', String(state.page));
+      params.set('page_size', String(EXPLORER_PAGE_SIZE));
+      return params.toString();
+    }
+
+    function textCell(text, className) {
+      const cell = document.createElement('td');
+      cell.className = className;
+      cell.textContent = text;
+      return cell;
+    }
+
+    function metricCell(row, metric) {
+      const cell = document.createElement('td');
+      cell.className = 'number-cell';
+      cell.setAttribute('aria-label', `${metric}: ${format.format(Number(row[metric]) || 0)}`);
+      cell.textContent = format.format(Number(row[metric]) || 0);
+      if (metric === 'comments' && row.collected_comments !== undefined) {
+        const archived = document.createElement('span');
+        archived.className = 'archived-count';
+        archived.textContent = `${format.format(Number(row.collected_comments) || 0)} archived`;
+        cell.append(' ', archived);
+      }
+      return cell;
+    }
+
+    function renderExplorerRows(rows) {
+      if (!rowsBody) return;
+      rowsBody.textContent = '';
+      resultIds = rows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id));
+      if (rows.length === 0) {
+        const empty = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 8;
+        cell.className = 'empty-state';
+        cell.textContent = 'No posts match these filters. Adjust or clear them to recover.';
+        empty.append(cell);
+        rowsBody.append(empty);
+        return;
+      }
+      const showChannel = Boolean(document.querySelector('.explorer-table .col-channel'));
+      rows.forEach((row) => {
+        const tr = document.createElement('tr');
+        tr.append(textCell(String(row.posted_at || '').slice(0, 16), 'date-cell'));
+        if (showChannel) {
+          tr.append(textCell(String(row.identifier || row.channel_identifier || ''), 'channel-cell'));
+        }
+        const excerpt = (row.text || '(media post)').slice(0, 140);
+        const postCell = document.createElement('td');
+        postCell.className = 'post-text';
+        const openButton = document.createElement('button');
+        openButton.type = 'button';
+        openButton.className = 'link-btn explorer-open';
+        openButton.textContent = excerpt;
+        openButton.setAttribute('aria-label', `Read post ${row.message_id || row.id}`);
+        openButton.addEventListener('click', () => openReader(Number(row.id), openButton));
+        postCell.append(openButton);
+        tr.append(postCell);
+        EXPLORER_METRICS.forEach((metric) => tr.append(metricCell(row, metric)));
+        const actions = document.createElement('td');
+        actions.className = 'actions-col';
+        const fullLink = document.createElement('a');
+        fullLink.className = 'icon-btn';
+        fullLink.href = `/post/${encodeURIComponent(String(row.id))}`;
+        fullLink.setAttribute('aria-label', 'Open full post page');
+        fullLink.title = 'Open full post page';
+        fullLink.textContent = '↗';
+        actions.append(fullLink);
+        tr.append(actions);
+        rowsBody.append(tr);
+      });
+    }
+
+    function renderChips(state) {
+      if (!chipsBox) return;
+      chipsBox.textContent = '';
+      const chips = [];
+      if (state.q) chips.push({ label: `Search: ${state.q}`, clear: () => { if (searchInput) searchInput.value = ''; } });
+      if (state.channels.length > 0) {
+        chips.push({
+          label: `Channels: ${state.channels.length} selected`,
+          clear: () => explorerForm.querySelectorAll('input[name="channels"]:checked').forEach((box) => { box.checked = false; }),
+        });
+      }
+      if (state.sort !== 'date') {
+        chips.push({ label: `Sort: ${state.sort}`, clear: () => { if (sortSelect) sortSelect.value = 'date'; } });
+      }
+      Object.entries(state.bounds).forEach(([key, value]) => {
+        chips.push({
+          label: `${key.replace('_', ' ')}: ${value}`,
+          clear: () => {
+            const input = explorerForm.querySelector(`input[name="${key}"]`);
+            if (input) input.value = '';
+          },
+        });
+      });
+      chips.forEach((chip) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'chip';
+        button.textContent = `${chip.label} ×`;
+        button.setAttribute('aria-label', `Remove filter ${chip.label}`);
+        button.addEventListener('click', () => {
+          chip.clear();
+          loadExplorer(1, true);
+          explorerForm.querySelector('[type="submit"]')?.focus();
+        });
+        chipsBox.append(button);
+      });
+    }
+
+    function renderPages(page, pages, total) {
+      currentPage = page;
+      totalPages = pages;
+      if (countNode) {
+        countNode.textContent = `${format.format(total)} ${total === 1 ? 'post' : 'posts'} · page ${page} of ${pages}`;
+      }
+      if (!pagesNav) return;
+      pagesNav.textContent = '';
+      pagesNav.setAttribute('aria-label', 'Post pages');
+      const addButton = (label, target, attrs) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn ghost small';
+        button.textContent = label;
+        Object.entries(attrs || {}).forEach(([key, value]) => button.setAttribute(key, value));
+        button.addEventListener('click', () => loadExplorer(target, true));
+        pagesNav.append(button);
+      };
+      if (page > 1) addButton('← Previous', page - 1, { rel: 'prev' });
+      const info = document.createElement('span');
+      info.textContent = `Page ${page} of ${pages} · ${format.format(total)} posts`;
+      info.setAttribute('aria-live', 'polite');
+      pagesNav.append(info);
+      if (page < pages) addButton('Next →', page + 1, { rel: 'next' });
+    }
+
+    async function loadExplorer(page, moveFocus) {
+      const state = readExplorerState(page);
+      if (state.error) {
+        explorerError(state.error);
+        return;
+      }
+      explorerError(null);
+      const sequence = ++explorerSequence;
+      let payload = null;
+      try {
+        const response = await fetch(`/api/explorer?${explorerQuery(state)}`, {
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
+        });
+        payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(payload?.error?.message || 'Post Explorer is unavailable right now.');
+        }
+      } catch (error) {
+        if (sequence !== explorerSequence) return;
+        explorerError(error instanceof Error ? error.message : 'Could not load the Post Explorer. Check the connection and try again.');
+        return;
+      }
+      if (sequence !== explorerSequence || !payload) return;
+      renderExplorerRows(payload.rows || []);
+      renderChips(state);
+      renderPages(payload.page || 1, payload.total_pages || 1, payload.total || 0);
+      if (moveFocus && countNode) {
+        countNode.setAttribute('tabindex', '-1');
+        countNode.focus({ preventScroll: true });
+      }
+    }
+
+    explorerForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      loadExplorer(1, true);
+    });
+    explorerForm.querySelector('[data-explorer-clear]')?.addEventListener('click', () => {
+      explorerForm.reset();
+      explorerError(null);
+      loadExplorer(1, false);
+      searchInput?.focus();
+    });
+    loadExplorer(1, false);
+  }
+
+  // Post reader (T52): full safe Telegram formatting, discussion, latest
+  // metrics with separately labelled collection snapshots, validated source
+  // link, previous/next, Escape/focus return and list restoration. Closing
+  // keeps the Explorer list, scroll and focus where they were.
+  const readerDialog = document.querySelector('[data-reader]');
+  const readerBody = document.querySelector('[data-reader-body]');
+  const readerError = document.querySelector('[data-reader-error]');
+  const readerFullLink = document.querySelector('[data-reader-full]');
+  let readerOpener = null;
+  let readerIds = [];
+  let readerIndex = -1;
+  let readerSequence = 0;
+
+  function readerShowError(message) {
+    if (!readerError) return;
+    if (!message) {
+      readerError.textContent = '';
+      readerError.hidden = true;
+      return;
+    }
+    readerError.textContent = message;
+    readerError.hidden = false;
+  }
+
+  function readerPromptText(detail) {
+    const excerpt = String(detail.text || '(media post)').slice(0, 2000);
+    return `Explore this post from ${detail.channel_identifier || 'the channel'} (published ${String(detail.posted_at || '').slice(0, 10)}):\n\n${excerpt}`;
+  }
+
+  function renderReaderDetail(detail) {
+    if (!readerBody) return;
+    if (readerDialog) {
+      if (detail.channel_id) readerDialog.dataset.channelId = String(detail.channel_id);
+      else delete readerDialog.dataset.channelId;
+    }
+    readerBody.textContent = '';
+    const heading = document.createElement('p');
+    heading.className = 'reader-post-meta';
+    heading.textContent = `Post ${detail.message_id} · ${detail.channel_title || detail.channel_identifier || ''} · published ${String(detail.posted_at || '').slice(0, 16)} UTC`;
+    readerBody.append(heading);
+    // formatted_html is rendered server-side from stored text plus entities
+    // through the sanitized Telegram converter, so it is safe to inject.
+    // Plain excerpts elsewhere always use textContent, never innerHTML.
+    const body = document.createElement('div');
+    body.className = 'detail-post-body';
+    body.setAttribute('role', 'article');
+    if (detail.formatted_html) {
+      body.innerHTML = detail.formatted_html;
+    } else {
+      body.textContent = detail.text || '(media post)';
+    }
+    readerBody.append(body);
+    const metrics = document.createElement('ul');
+    metrics.className = 'reader-metrics';
+    ['views', 'reactions', 'comments', 'shares'].forEach((metric) => {
+      const item = document.createElement('li');
+      item.textContent = `${metric}: ${format.format(Number(detail.metrics?.[metric]) || 0)}`;
+      metrics.append(item);
+    });
+    readerBody.append(metrics);
+    if (detail.source_url) {
+      const source = document.createElement('p');
+      source.className = 'reader-source';
+      const link = document.createElement('a');
+      link.href = detail.source_url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'Open original post in Telegram';
+      source.append(link);
+      readerBody.append(source);
+    }
+    const snapTitle = document.createElement('h3');
+    snapTitle.textContent = 'Collection snapshots';
+    readerBody.append(snapTitle);
+    const snapNote = document.createElement('p');
+    snapNote.className = 'scope-note';
+    snapNote.textContent = 'Snapshot timestamps are collection times; the Overview chart uses publication dates.';
+    readerBody.append(snapNote);
+    const snaps = document.createElement('ul');
+    snaps.className = 'reader-snapshots';
+    (detail.snapshots || []).forEach((snap) => {
+      const item = document.createElement('li');
+      item.textContent = `Collected ${String(snap.taken_at || '').slice(0, 16)} UTC — ${format.format(snap.views || 0)} views, ${format.format(snap.reactions || 0)} reactions, ${format.format(snap.comments || 0)} comments, ${format.format(snap.shares || 0)} shares`;
+      snaps.append(item);
+    });
+    if ((detail.snapshots || []).length === 0) {
+      const item = document.createElement('li');
+      item.textContent = 'No snapshots recorded.';
+      snaps.append(item);
+    }
+    readerBody.append(snaps);
+    const discussTitle = document.createElement('h3');
+    discussTitle.textContent = 'Discussion';
+    readerBody.append(discussTitle);
+    const discussion = document.createElement('ul');
+    discussion.className = 'reader-discussion';
+    (detail.discussion || []).forEach((comment) => {
+      const item = document.createElement('li');
+      const head = document.createElement('p');
+      head.className = 'reader-comment-head';
+      head.textContent = `${comment.sender_name || 'Unknown'} · ${String(comment.posted_at || '').slice(0, 16)} UTC`;
+      const text = document.createElement('p');
+      text.textContent = comment.text || '(empty comment)';
+      item.append(head, text);
+      discussion.append(item);
+    });
+    if ((detail.discussion || []).length === 0) {
+      const item = document.createElement('li');
+      item.textContent = 'No comments collected for this post.';
+      discussion.append(item);
+    }
+    readerBody.append(discussion);
+    if (readerFullLink) readerFullLink.href = `/post/${encodeURIComponent(String(detail.id))}`;
+    const title = document.getElementById('readerTitle');
+    if (title) title.textContent = `Post ${detail.message_id} from ${detail.channel_identifier || 'the channel'}`;
+  }
+
+  async function openReader(postId, opener) {
+    if (!readerDialog || !Number.isInteger(postId) || postId <= 0) return;
+    readerOpener = opener instanceof HTMLElement ? opener : null;
+    const sequence = ++readerSequence;
+    readerShowError(null);
+    const known = readerIds.indexOf(postId);
+    readerIndex = known === -1 ? -1 : known;
+    try {
+      const response = await fetch(`/api/posts/${encodeURIComponent(String(postId))}`, {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.error?.message || 'This post could not be read.');
+      }
+      if (sequence !== readerSequence) return;
+      renderReaderDetail(payload);
+      updateReaderNav();
+      if (typeof readerDialog.showModal === 'function' && !readerDialog.open) {
+        readerDialog.showModal();
+      }
+      readerDialog.querySelector('[data-reader-close]')?.focus();
+    } catch (error) {
+      if (sequence !== readerSequence) return;
+      readerShowError(error instanceof Error ? error.message : 'This post could not be read. Try again or open the full page.');
+    }
+  }
+
+  function updateReaderNav() {
+    const prev = readerDialog?.querySelector('[data-reader-prev]');
+    const next = readerDialog?.querySelector('[data-reader-next]');
+    if (prev) prev.disabled = readerIds.length === 0 || readerIndex <= 0;
+    if (next) next.disabled = readerIds.length === 0 || readerIndex < 0 || readerIndex >= readerIds.length - 1;
+  }
+
+  function stepReader(delta) {
+    if (readerIds.length === 0 || readerIndex < 0) return;
+    const next = readerIndex + delta;
+    if (next < 0 || next >= readerIds.length) return;
+    openReader(readerIds[next], readerOpener);
+  }
+
+  if (readerDialog) {
+    readerDialog.querySelector('[data-reader-close]')?.addEventListener('click', () => readerDialog.close());
+    readerDialog.querySelector('[data-reader-prev]')?.addEventListener('click', () => stepReader(-1));
+    readerDialog.querySelector('[data-reader-next]')?.addEventListener('click', () => stepReader(1));
+    readerDialog.querySelector('[data-reader-explore]')?.addEventListener('click', () => {
+      const title = document.getElementById('readerTitle')?.textContent || 'a post';
+      const bodyText = readerBody?.querySelector('.detail-post-body')?.textContent || '';
+      const full = readerFullLink?.getAttribute('href') || '';
+      const idMatch = full.match(/\/post\/(\d+)/);
+      const payload = {
+        channel_id: Number(readerDialog.dataset.channelId || 0) || undefined,
+        post_id: idMatch ? Number(idMatch[1]) : undefined,
+        text: `Explore ${title}:\n\n${bodyText.slice(0, 2000)}`,
+      };
+      if (!payload.channel_id || !payload.text.trim()) {
+        readerShowError('Studio handoff needs the post’s channel. Open the full page and try again.');
+        return;
+      }
+      if (payload.text.length > PREFILL_MAX_TEXT) payload.text = payload.text.slice(0, PREFILL_MAX_TEXT);
+      try {
+        window.sessionStorage.setItem(PREFILL_STORAGE_KEY, JSON.stringify(payload));
+      } catch {
+        readerShowError('Browser storage is unavailable, so the post reference could not be handed to Studio.');
+        return;
+      }
+      window.location.href = '/studio';
+    });
+    // Escape closes natively; always return focus to the opener so list
+    // position and keyboard context are restored.
+    readerDialog.addEventListener('close', () => {
+      readerShowError(null);
+      if (readerOpener && document.contains(readerOpener)) readerOpener.focus();
+      readerOpener = null;
+    });
+  }
+
+  // Standalone post page handoff: stores an authorized post/channel
+  // reference and navigates to Studio, which prefills the composer without
+  // sending. Raw channel content never travels in the URL.
+  document.querySelectorAll('[data-explore-post]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const channelId = Number(button.getAttribute('data-channel-id') || 0);
+      const postId = Number(button.getAttribute('data-post-id') || 0);
+      const label = button.getAttribute('data-channel-label') || 'the channel';
+      const article = document.querySelector('.detail-post-body');
+      const excerpt = (article?.textContent || '').trim().slice(0, 2000);
+      const errorNode = document.querySelector('[data-explore-error]');
+      const fail = (message) => {
+        if (!errorNode) return;
+        errorNode.textContent = message;
+        errorNode.hidden = false;
+      };
+      if (!Number.isInteger(channelId) || channelId <= 0 || !Number.isInteger(postId) || postId <= 0 || !excerpt) {
+        fail('Studio handoff needs this post’s channel and text. Reload and try again.');
+        return;
+      }
+      const payload = {
+        channel_id: channelId,
+        post_id: postId,
+        text: `Explore this post from ${label}:\n\n${excerpt}`.slice(0, PREFILL_MAX_TEXT),
+      };
+      try {
+        window.sessionStorage.setItem(PREFILL_STORAGE_KEY, JSON.stringify(payload));
+      } catch {
+        fail('Browser storage is unavailable, so the post reference could not be handed to Studio.');
+        return;
+      }
+      window.location.href = '/studio';
+    });
+  });
   if (postCanvas && typeof window.Chart !== 'undefined') {
     const data = parseChartData(postCanvas);
     if (data && Array.isArray(data.labels)) {
