@@ -141,7 +141,8 @@ def test_manual_accessibility_and_reduced_motion_contract_is_present():
     styles = (ROOT / "studio-frontend/src/styles.css").read_text(encoding="utf-8")
     assert ":focus-visible" in styles
     assert "prefers-reduced-motion: reduce" in styles
-    assert "aria-label=\"Telegram post — headline and body\"" in source
+    # T44: Full post (not "Telegram post") in artifact label
+    assert "aria-label=\"Full post" in source
     assert "aria-label=\"Draft version\"" in source
     assert "aria-expanded={open}" in source
     assert "overflow-x: hidden" in styles

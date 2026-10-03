@@ -9,28 +9,29 @@ def test_m5_artifact_panel_contract_is_built_and_responsive():
     source = (ROOT / "studio-frontend/src/main.tsx").read_text(encoding="utf-8")
     styles = (ROOT / "studio-frontend/src/styles.css").read_text(encoding="utf-8")
     bundle = (ROOT / "app/web/static/studio-dist/assets/studio.js").read_text(encoding="utf-8")
-    # T17: copy only body, one button, Artifact title label
-    assert "Copy post" in source
+    # T44: Copy is "Copy full post" (sticky in phone Draft, toolbar on desktop)
+    assert "Copy full post" in source
     assert "Artifact title" in source
     assert "Kept for search and cross-checking. Not copied to the post." in source
     assert 'aria-label="Artifact title"' in source
-    assert "Copy full post" not in source
+    # Old "Copy post" string removed
+    assert "Copy post" not in source
     assert "Copy for Telegram" not in source
-    # Heading must not contain a copy button; only toolbar inside draft-content has it
+    # Heading must not contain a copy button; only toolbar + sticky bar have it
     heading = re.search(r"studio-panel-heading.*?</div>\s*</div>", source, flags=re.DOTALL)
     if heading:
         assert "studio-copy" not in heading.group(0)
-    # Draft content toolbar has the single copy button
-    assert source.count('"Copy post"') == 1 or source.count("'Copy post'") == 1 or "Copy post" in source
-    assert "Array.from(draft.body).length" in source or "plainFromMarkdown" in source or "character_count" in source
+    # Draft content toolbar has the copy button; sticky bar adds another on phone
+    assert source.count('"Copy full post"') >= 1
+    assert "plainFromMarkdown" in source or "character_count" in source
     assert "postText" not in source
     assert "draft_conflict" in source or "Keep my text" in source
     assert "Choose" in source and "Save as new version" in source and "Source" in source
     assert "studio-draft.is-open" in styles
     assert "prefers-reduced-motion" in styles
-    assert "Copy post" in bundle
+    assert "Copy full post" in bundle
     assert "Artifact title" in bundle
-    assert "Copy full post" not in bundle
+    assert "Copy post" not in bundle
     assert "Copy for Telegram" not in bundle
     assert "Discard unsaved draft changes?" in source
     assert "studio-save-error" in source
@@ -88,7 +89,8 @@ def test_studio_shell_keeps_the_composer_inside_the_viewport():
     assert ".studio-page .workspace > footer" in shared_styles
     main_rule = re.search(r"\.studio-main\s*\{([^}]*)\}", studio_styles)
     assert main_rule is not None
-    assert "grid-template-rows: auto auto minmax(0, 1fr)" in main_rule.group(1)
+    # T44: added row for MyChannels panel
+    assert "grid-template-rows: auto auto auto minmax(0, 1fr)" in main_rule.group(1)
     app_rule = re.search(r"\.studio-app\s*\{([^}]*)\}", studio_styles)
     assert app_rule is not None
     assert "height: 100%" in app_rule.group(1)
@@ -110,7 +112,9 @@ def test_idle_studio_does_not_poll_an_empty_draft_and_has_a_favicon():
 
 def test_artifact_panel_does_not_offer_publish_action():
     source = (ROOT / "studio-frontend/src/main.tsx").read_text(encoding="utf-8").lower()
-    assert "publish" not in source
+    # "publish" appears only in comments about the "publishable post field" boundary;
+    # no publish route, agent tool, or UI action exists
+    assert "publish" not in source.replace("publishable", "")
 
 
 def test_assistant_messages_render_safe_gfm_while_user_messages_stay_literal():

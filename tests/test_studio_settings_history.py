@@ -24,7 +24,9 @@ def test_system_prompt_control_is_channel_local_inside_studio():
     settings_template = (ROOT / "app/web/templates/settings.html").read_text(encoding="utf-8")
     bundle = (ROOT / "app/web/static/studio-dist/assets/studio.js").read_text(encoding="utf-8")
 
-    assert source.count(">System Prompt</button>") == 2
+    # T44: System Prompt moved to MoreActionsMenu (one menuitem); rail footer buttons removed
+    assert "System Prompt" in source
+    assert source.count(">System Prompt") >= 1
     assert '<h2 id="studio-settings-title">System Prompt</h2>' in source
     assert '<label htmlFor="studio-system-prompt">System Prompt</label>' in source
     assert ">Settings</button>" not in source

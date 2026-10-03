@@ -126,12 +126,17 @@ async def test_delete_route_requires_csrf_blocks_active_runs_and_removes_history
 def test_conversation_delete_ui_contract_is_confirmed_and_accessible():
     source = (ROOT / "studio-frontend/src/main.tsx").read_text(encoding="utf-8")
     styles = (ROOT / "studio-frontend/src/styles.css").read_text(encoding="utf-8")
+    # T44: Delete moved to anchored More actions menu (keyboard accessible)
     assert "window.confirm" in source
     assert "permanently" in source
     assert 'method: "DELETE"' in source
     assert "/studio/api/conversations/${encodeURIComponent(conversation.id)}" in source
-    assert "aria-label={`Delete conversation ${conversation.title}`}" in source
-    assert ".studio-conversation-delete" in styles
+    # Menu item in MoreActionsMenu has is-danger class and role=menuitem
+    assert "role=\"menuitem\"" in source
+    assert "is-danger" in source
+    assert "Delete conversation" in source
+    # Old inline delete button class removed
+    assert ".studio-conversation-delete" not in styles
 
 
 @pytest.mark.integration
