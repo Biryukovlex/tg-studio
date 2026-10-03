@@ -40,10 +40,63 @@
     revealItems.forEach((item) => observer.observe(item));
   }
 
-  document.querySelectorAll('[data-auto-submit] select').forEach((select) => {
-    select.addEventListener('change', () => {
-      document.body.classList.add('is-navigating');
-      select.form.requestSubmit();
+  document.querySelectorAll('[data-auto-submit]').forEach((node) => {
+    const selects = node instanceof HTMLSelectElement ? [node] : [...node.querySelectorAll('select')];
+    selects.forEach((select) => {
+      select.addEventListener('change', () => {
+        document.body.classList.add('is-navigating');
+        select.form.requestSubmit();
+      });
+    });
+  });
+
+  // Overview date range (T46): inclusive UTC From/To scope cards and graph.
+  // Invalid ranges stay unapplied and the last applied range is kept; an
+  // empty range means available history. The server re-validates and answers
+  // 422 for anything that slips through, so no partial range ever applies.
+  document.querySelectorAll('[data-date-range-form]').forEach((form) => {
+    const fromInput = form.querySelector('input[name="from"]');
+    const toInput = form.querySelector('input[name="to"]');
+    const error = form.querySelector('[data-date-error]');
+    const lastFrom = form.dataset.lastFrom || '';
+    const lastTo = form.dataset.lastTo || '';
+    const showError = (message) => {
+      if (!error) return;
+      error.textContent = message;
+      error.hidden = false;
+    };
+    const clearError = () => {
+      if (!error) return;
+      error.textContent = '';
+      error.hidden = true;
+    };
+    const isRealDate = (value) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const year = Number(value.slice(0, 4));
+      if (year < 1970 || year > 2100) return false;
+      const date = new Date(`${value}T00:00:00Z`);
+      return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+    };
+    form.addEventListener('submit', (event) => {
+      // Channel auto-submit bypasses Apply only when the dates are already valid.
+      const from = (fromInput?.value || '').trim();
+      const to = (toInput?.value || '').trim();
+      if (!from && !to) {
+        clearError();
+        return;
+      }
+      let message = '';
+      if (from && !isRealDate(from)) message = 'From must be a real calendar date (YYYY-MM-DD, 1970–2100).';
+      else if (to && !isRealDate(to)) message = 'To must be a real calendar date (YYYY-MM-DD, 1970–2100).';
+      else if (from && to && from > to) message = 'From must not be after To. The last applied range is kept.';
+      if (message) {
+        event.preventDefault();
+        if (fromInput) fromInput.value = lastFrom;
+        if (toInput) toInput.value = lastTo;
+        showError(message);
+      } else {
+        clearError();
+      }
     });
   });
 
@@ -494,6 +547,11 @@
     }
   }
 
+  // Overview chart (T46): one selected metric in its KPI accent, Day/Week/Month
+  // buckets summed per bucket, Daily posts or Cumulative-in-window modes.
+  // Monotone interpolation passes through exact values without implying
+  // negative values or invented daily growth. Keyboard point buttons and an
+  // exact text summary expose every value; no data-table disclosure exists.
   const trendCanvas = document.getElementById('trendChart');
   if (trendCanvas && typeof window.Chart !== 'undefined') {
     const data = parseChartData(trendCanvas);
@@ -501,76 +559,208 @@
       const motionOK = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const styles = getComputedStyle(document.documentElement);
       const chartColors = {
-        reach: styles.getPropertyValue('--cyan').trim(),
-        reactions: styles.getPropertyValue('--coral').trim(),
-        comments: styles.getPropertyValue('--teal').trim(),
-        shares: styles.getPropertyValue('--blue').trim(),
+        views: styles.getPropertyValue('--cyan').trim() || '#19d2ec',
+        reactions: styles.getPropertyValue('--coral').trim() || '#ff716a',
+        comments: styles.getPropertyValue('--teal').trim() || '#24d4b8',
+        shares: styles.getPropertyValue('--blue').trim() || '#5b91ff',
         muted: styles.getPropertyValue('--muted').trim(),
         grid: styles.getPropertyValue('--chart-grid').trim(),
       };
-      const trendChart = new window.Chart(trendCanvas, {
-        type: 'line',
-        data: {
-          labels: data.labels,
-          datasets: [
-            { label: 'Reach / Views', data: data.views, borderColor: chartColors.reach, backgroundColor: 'rgba(26, 211, 238, .10)', fill: true, tension: 0.36, borderWidth: 2.5, pointRadius: 2, pointHoverRadius: 6 },
-            { label: 'Reactions', data: data.reactions, borderColor: chartColors.reactions, tension: 0.36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
-            { label: 'Comments', data: data.comments, borderColor: chartColors.comments, tension: 0.36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
-            { label: 'Shares', data: data.shares, borderColor: chartColors.shares, tension: 0.36, borderWidth: 2, pointRadius: 1.5, pointHoverRadius: 5 },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: { mode: 'index', intersect: false },
-          animation: motionOK ? { duration: 1400, easing: 'easeOutQuart' } : false,
-          plugins: {
-            legend: { position: 'top', align: 'start', labels: { color: chartColors.muted, boxWidth: 24, boxHeight: 2, padding: 24, usePointStyle: false, font: { family: 'Manrope Variable', size: 12, weight: 550 } } },
-            tooltip: { backgroundColor: '#0d1a27', borderColor: 'rgba(119, 151, 177, .3)', borderWidth: 1, titleColor: '#f4f8fb', bodyColor: '#a6b5c3', padding: 12, displayColors: true },
-          },
-          scales: {
-            x: { ticks: { color: chartColors.muted, maxTicksLimit: 12, font: { family: 'Manrope Variable', size: 11 } }, grid: { display: false }, border: { display: false } },
-            y: { beginAtZero: true, ticks: { color: chartColors.muted, padding: 12, font: { family: 'Manrope Variable', size: 11 } }, grid: { color: chartColors.grid, borderDash: [4, 5] }, border: { display: false } },
-          },
-        },
-      });
-
-      const rawSeries = {
-        labels: [...data.labels],
-        values: [data.views, data.reactions, data.comments, data.shares].map((s) => [...s]),
+      const chartFills = {
+        views: 'rgba(26, 211, 238, .10)',
+        reactions: 'rgba(255, 113, 106, .10)',
+        comments: 'rgba(36, 212, 184, .10)',
+        shares: 'rgba(91, 145, 255, .10)',
       };
-      function groupedIndexes(period) {
-        if (period === 'day') return rawSeries.labels.map((_, i) => i);
-        const lastByPeriod = new Map();
-        rawSeries.labels.forEach((label, index) => {
-          const date = new Date(`${label}T00:00:00Z`);
-          let key;
-          if (period === 'month') {
-            key = label.slice(0, 7);
-          } else {
-            const mondayOffset = (date.getUTCDay() + 6) % 7;
-            date.setUTCDate(date.getUTCDate() - mondayOffset);
-            key = date.toISOString().slice(0, 10);
-          }
-          lastByPeriod.set(key, index);
-        });
-        return [...lastByPeriod.values()];
+      const chartMetricNames = { views: 'Views', reactions: 'Reactions', comments: 'Comments', shares: 'Shares' };
+      const scopeLabel = trendCanvas.dataset.chartScope || '';
+      const number = (value) => format.format(Number(value) || 0);
+      const dayLabel = (iso) => {
+        const date = new Date(`${iso}T00:00:00Z`);
+        if (Number.isNaN(date.getTime())) return iso;
+        return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(date);
+      };
+      const monthLabel = (key) => {
+        const date = new Date(`${key}-01T00:00:00Z`);
+        if (Number.isNaN(date.getTime())) return key;
+        return new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
+      };
+
+      const state = { metric: 'views', mode: 'daily', period: 'day', point: 0 };
+      const metricSelect = document.getElementById('chartMetric');
+      if (metricSelect && metricSelect instanceof HTMLSelectElement) {
+        state.metric = chartMetricNames[metricSelect.value] ? metricSelect.value : 'views';
       }
+
+      function bucketed() {
+        const daily = (Array.isArray(data[state.metric]) ? data[state.metric] : []).map((v) => Math.max(0, Number(v) || 0));
+        const running = [];
+        let total = 0;
+        daily.forEach((v) => { total += v; running.push(total); });
+        const buckets = new Map();
+        data.labels.forEach((label, index) => {
+          let key = label;
+          let text = label;
+          if (state.period === 'month') {
+            key = String(label).slice(0, 7);
+            text = monthLabel(key);
+          } else if (state.period === 'week') {
+            const date = new Date(`${label}T00:00:00Z`);
+            if (!Number.isNaN(date.getTime())) {
+              date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+              key = date.toISOString().slice(0, 10);
+              text = `Week of ${dayLabel(key)}`;
+            }
+          }
+          const entry = buckets.get(key) || { label: text, total: 0, last: index };
+          entry.total += daily[index] || 0;
+          entry.last = index;
+          buckets.set(key, entry);
+        });
+        const labels = [];
+        const values = [];
+        buckets.forEach((entry) => {
+          labels.push(entry.label);
+          values.push(state.mode === 'cumulative' ? running[entry.last] : entry.total);
+        });
+        return { labels, values };
+      }
+
+      const summary = document.querySelector('[data-chart-summary]');
+      const readout = document.querySelector('[data-chart-readout]');
+      const prevButton = document.querySelector('[data-chart-prev]');
+      const nextButton = document.querySelector('[data-chart-next]');
+      let trendChart = null;
+      if (data.labels.length > 0) {
+        trendChart = new window.Chart(trendCanvas, {
+          type: 'line',
+          data: { labels: [], datasets: [{ label: chartMetricNames[state.metric], data: [], borderColor: chartColors[state.metric], backgroundColor: chartFills[state.metric], fill: true, cubicInterpolationMode: 'monotone', borderWidth: 2.5, pointRadius: 2, pointHoverRadius: 6 }] },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            animation: motionOK ? { duration: 1400, easing: 'easeOutQuart' } : false,
+            plugins: {
+              legend: { position: 'top', align: 'start', labels: { color: chartColors.muted, boxWidth: 24, boxHeight: 2, padding: 24, usePointStyle: false, font: { family: 'Manrope Variable', size: 12, weight: 550 } } },
+              tooltip: { backgroundColor: '#0d1a27', borderColor: 'rgba(119, 151, 177, .3)', borderWidth: 1, titleColor: '#f4f8fb', bodyColor: '#a6b5c3', padding: 12, displayColors: true },
+            },
+            scales: {
+              x: { ticks: { color: chartColors.muted, maxTicksLimit: 12, font: { family: 'Manrope Variable', size: 11 } }, grid: { display: false }, border: { display: false } },
+              y: { beginAtZero: true, suggestedMin: 0, ticks: { color: chartColors.muted, padding: 12, font: { family: 'Manrope Variable', size: 11 } }, grid: { color: chartColors.grid, borderDash: [4, 5] }, border: { display: false } },
+            },
+          },
+        });
+      }
+
+      function currentPoints() {
+        const { labels, values } = bucketed();
+        return labels.map((label, index) => ({ label, value: values[index] }));
+      }
+
+      function renderChart() {
+        const points = currentPoints();
+        state.point = points.length === 0 ? 0 : Math.min(state.point, points.length - 1);
+        const metricName = chartMetricNames[state.metric];
+        const modeSuffix = state.mode === 'cumulative' ? ' (cumulative in window)' : '';
+        if (trendChart) {
+          trendChart.data.labels = points.map((p) => p.label);
+          trendChart.data.datasets[0].label = `${metricName}${modeSuffix}`;
+          trendChart.data.datasets[0].data = points.map((p) => p.value);
+          trendChart.data.datasets[0].borderColor = chartColors[state.metric];
+          trendChart.data.datasets[0].backgroundColor = chartFills[state.metric];
+          trendChart.update(motionOK ? undefined : 'none');
+        }
+        if (summary) {
+          if (points.length === 0) {
+            summary.textContent = `${metricName} · ${scopeLabel}: no posts in this window.`;
+          } else {
+            const total = points.reduce((sum, p) => sum + p.value, 0);
+            const shown = state.mode === 'cumulative'
+              ? points[points.length - 1].value
+              : total;
+            let peak = points[0];
+            points.forEach((p) => { if (p.value > peak.value) peak = p; });
+            const peakText = state.mode === 'cumulative'
+              ? `ending at ${number(shown)}`
+              : `peak ${number(peak.value)} on ${peak.label}`;
+            summary.textContent = `${metricName} · ${scopeLabel}: ${points.length} ${points.length === 1 ? 'point' : 'points'}, ${number(shown)} total ${state.metric}${modeSuffix}; ${peakText}.`;
+          }
+        }
+        renderReadout();
+      }
+
+      function renderReadout() {
+        const points = currentPoints();
+        if (!readout) return;
+        if (points.length === 0) {
+          readout.textContent = 'No chart points in this window.';
+          trendCanvas.setAttribute('aria-label', 'Empty performance chart. No posts in this window.');
+          return;
+        }
+        const point = points[state.point];
+        const metricName = chartMetricNames[state.metric];
+        const modeSuffix = state.mode === 'cumulative' ? ', cumulative in window' : '';
+        readout.textContent = `${point.label}: ${number(point.value)} ${state.metric}${modeSuffix} (point ${state.point + 1} of ${points.length}).`;
+        trendCanvas.setAttribute('aria-label', `Performance chart, ${metricName}. Current point: ${readout.textContent}`);
+        if (trendChart) {
+          try {
+            trendChart.setActiveElements([{ datasetIndex: 0, index: state.point }]);
+            trendChart.update(motionOK ? undefined : 'none');
+          } catch { /* Highlighting is decorative; the readout stays exact. */ }
+        }
+      }
+
+      function markActive(selector, attr, value) {
+        document.querySelectorAll(selector).forEach((item) => {
+          const selected = item.getAttribute(attr) === value;
+          item.classList.toggle('active', selected);
+          item.setAttribute('aria-pressed', String(selected));
+        });
+      }
+
+      if (metricSelect) {
+        metricSelect.addEventListener('change', () => {
+          if (chartMetricNames[metricSelect.value]) {
+            state.metric = metricSelect.value;
+            state.point = 0;
+            renderChart();
+          }
+        });
+      }
+      document.querySelectorAll('[data-chart-mode]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.mode = button.getAttribute('data-chart-mode') === 'cumulative' ? 'cumulative' : 'daily';
+          state.point = 0;
+          markActive('[data-chart-mode]', 'data-chart-mode', state.mode);
+          renderChart();
+        });
+      });
       document.querySelectorAll('[data-chart-period]').forEach((button) => {
         button.addEventListener('click', () => {
-          const indexes = groupedIndexes(button.dataset.chartPeriod);
-          trendChart.data.labels = indexes.map((i) => rawSeries.labels[i]);
-          trendChart.data.datasets.forEach((dataset, si) => {
-            dataset.data = indexes.map((i) => rawSeries.values[si][i]);
-          });
-          document.querySelectorAll('[data-chart-period]').forEach((item) => {
-            const selected = item === button;
-            item.classList.toggle('active', selected);
-            item.setAttribute('aria-pressed', String(selected));
-          });
-          trendChart.update(motionOK ? undefined : 'none');
+          const period = button.getAttribute('data-chart-period');
+          state.period = period === 'week' || period === 'month' ? period : 'day';
+          state.point = 0;
+          markActive('[data-chart-period]', 'data-chart-period', state.period);
+          renderChart();
         });
       });
+      if (prevButton) {
+        prevButton.addEventListener('click', () => {
+          const total = currentPoints().length;
+          if (total === 0) return;
+          state.point = (state.point - 1 + total) % total;
+          renderReadout();
+        });
+      }
+      if (nextButton) {
+        nextButton.addEventListener('click', () => {
+          const total = currentPoints().length;
+          if (total === 0) return;
+          state.point = (state.point + 1) % total;
+          renderReadout();
+        });
+      }
+      renderChart();
     }
   }
 

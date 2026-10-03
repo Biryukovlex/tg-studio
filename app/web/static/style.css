@@ -1306,3 +1306,47 @@ html[data-mascot-paused] .ghost-scene *::after {
   .agent-log-meta { grid-template-columns: 1fr; }
   .agent-log-diagnostics { grid-template-columns: 1fr; padding-inline: 16px; }
 }
+
+/* Overview date range, chart controls and scope notes (T46) */
+.date-fieldset { margin: 0; padding: 0; border: 0; }
+.date-fieldset legend { padding: 0; color: var(--muted); font-size: 11px; font-weight: 600; }
+.date-fieldset legend span { color: var(--faint); font-weight: 450; }
+.date-inputs { display: flex; align-items: flex-end; gap: 10px; margin-top: 7px; }
+.date-inputs label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.filter-form input[type="date"] {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  color-scheme: dark;
+  outline: none;
+}
+.filter-form input[type="date"]:hover { background: var(--surface-raised); }
+.filter-form input[type="date"]:focus { border-color: var(--cyan); box-shadow: var(--focus); }
+.history-link { align-self: center; color: var(--cyan); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.field-error { margin: 8px 0 0; color: var(--coral); font-size: 11px; }
+.sync-block { display: grid; gap: 4px; justify-items: end; text-align: right; }
+.sync-note { margin: 0; max-width: 420px; color: var(--faint); font-size: 10px; line-height: 1.5; }
+.scope-note { margin: 0 0 12px; color: var(--muted); font-size: 11px; }
+.empty-hint { margin: 0; padding: 0 22px 20px; color: var(--muted); font-size: 12px; }
+.empty-hint a { color: var(--cyan); }
+.chart-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 20px; padding: 4px 22px 0; }
+.chart-metric-field { display: grid; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.chart-metric-field select { min-width: 160px; }
+.chart-points { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 22px; }
+.chart-readout { margin: 0; color: var(--soft-text); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart-summary { margin: 0; padding: 12px 22px 18px; color: var(--muted); font-size: 11px; }
+
+@media (max-width: 860px) {
+  .sync-block { justify-items: start; text-align: left; }
+}
+@media (max-width: 680px) {
+  .date-inputs { flex-wrap: wrap; }
+  .date-inputs label { flex: 1 1 140px; min-width: 0; }
+  .filter-form input[type="date"] { width: 100%; }
+  .chart-controls { padding-inline: 16px; }
+  .chart-points, .chart-summary { padding-inline: 16px; }
+  .scope-note { padding-inline: 0; }
+}

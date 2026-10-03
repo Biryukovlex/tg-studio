@@ -78,7 +78,7 @@ async def test_dashboard_paginates_posts_and_uses_supervised_refresh(tmp_path):
         assert "page post 1" in first.text
         assert "page post 101" not in first.text
         assert "All posts" in first.text
-        assert "Performance by post date" in first.text
+        assert "Performance by publication date" in first.text
         assert "Showing 1–100 of 250" in first.text
         assert "Page 1 of 3" in first.text
         assert 'aria-label="Last post page"' in first.text
@@ -98,7 +98,9 @@ async def test_dashboard_paginates_posts_and_uses_supervised_refresh(tmp_path):
         assert beyond_last.status_code == 200
         assert "Page 3 of 3" in beyond_last.text
         assert "page post 201" in beyond_last.text
-        assert 'aria-label="Chart window"' in first.text
+        assert 'aria-label="Date range"' in first.text
+        assert 'name="from"' in first.text
+        assert 'name="to"' in first.text
         refresh = await client.post("/refresh", follow_redirects=False)
         assert refresh.status_code == 303
         assert collector.scheduled == ["web"]

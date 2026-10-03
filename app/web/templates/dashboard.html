@@ -1,12 +1,27 @@
 {% extends "base.html" %}
 {% block content %}
+{% set applied_from = request.query_params.get('from', '') %}
+{% set applied_to = request.query_params.get('to', '') %}
+{% set has_cohort = applied_from != '' or applied_to != '' %}
+{% if has_cohort %}
+{% set cohort_query = (('&from=' ~ applied_from) if applied_from != '' else '') ~ ((('&to=' ~ applied_to) if applied_to != '' else '')) %}
+{% set scope_label = 'Posts published ' ~ (applied_from if applied_from != '' else '…') ~ ' – ' ~ (applied_to if applied_to != '' else '…') ~ ' (UTC)' %}
+{% elif days == 'all' %}
+{% set cohort_query = '' %}
+{% set scope_label = 'All stored history' %}
+{% else %}
+{% set cohort_query = '' %}
+{% set scope_label = 'Posts published in the last ' ~ days ~ ' days (UTC)' %}
+{% endif %}
+{% set page_query = 'order=' ~ order ~ cohort_query %}
 
 <section class="control-row" data-reveal>
-  <form method="get" action="/" class="filter-form" data-auto-submit>
+  <form method="get" action="/" class="filter-form" data-date-range-form
+      data-last-from="{{ applied_from }}" data-last-to="{{ applied_to }}">
     <label>
       <span>Channel</span>
       <span class="select-shell">
-        <select name="channel" aria-label="Channel">
+        <select name="channel" aria-label="Channel" data-auto-submit>
           <option value="">All channels</option>
           {% for c in channels %}
           <option value="{{ c.id }}" {% if current_channel == c.id %}selected{% endif %}>
@@ -16,25 +31,47 @@
         </select>
       </span>
     </label>
-    <label>
-      <span>Chart window</span>
-      <span class="select-shell">
-        <select name="days" aria-label="Chart window">
-          {% for value, label in [('7', 'Last 7 days'), ('14', 'Last 14 days'), ('30', 'Last 30 days'), ('90', 'Last 90 days'), ('all', 'All history')] %}
-          <option value="{{ value }}" {% if days == value %}selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-      </span>
-    </label>
+    <fieldset class="date-fieldset" aria-label="Date range">
+      <legend>Date range <span>(UTC publication dates)</span></legend>
+      <div class="date-inputs">
+        <label>
+          <span>From</span>
+          <input type="date" name="from" value="{{ applied_from }}" min="1970-01-01" max="2100-12-31" aria-label="From date, inclusive UTC publication date">
+        </label>
+        <label>
+          <span>To</span>
+          <input type="date" name="to" value="{{ applied_to }}" min="1970-01-01" max="2100-12-31" aria-label="To date, inclusive UTC publication date">
+        </label>
+        <button type="submit" class="btn small">Apply dates</button>
+        <a class="history-link" href="/{% if current_channel %}?channel={{ current_channel }}{% endif %}">Available history</a>
+      </div>
+      <p class="field-error" data-date-error role="alert" hidden></p>
+    </fieldset>
     <input type="hidden" name="order" value="{{ order }}">
     <input type="hidden" name="page" value="1">
   </form>
-  <p class="update-meta">
-    Last update: <strong>{{ k.last_poll|dt or 'Never' }} UTC</strong>
-    <span aria-hidden="true">•</span>
-    {{ k.posts|int }} posts tracked
-  </p>
+  <div class="sync-block">
+    <p class="update-meta">
+      Last update: <strong>{{ k.last_poll|dt or 'Never' }} UTC</strong>
+      <span aria-hidden="true">•</span>
+      {{ k.posts|int }} posts tracked
+    </p>
+    <p class="sync-note">Sync now schedules a collection run; numbers update after the run finishes. A redirect alone is never reported as completion, and stored data is kept after a failed run.</p>
+  </div>
 </section>
+
+<p class="scope-note" aria-live="off">KPI totals: {{ scope_label }} · latest known metrics.</p>
+{% if not channels %}
+<section class="panel" data-reveal>
+  <div class="panel-heading"><div><h2>No channels yet</h2></div></div>
+  <p class="empty-hint">Add a channel in Settings to start collecting posts.</p>
+</section>
+{% elif has_cohort and (k.posts|int == 0) %}
+<section class="panel" data-reveal>
+  <div class="panel-heading"><div><h2>No posts in this window</h2></div></div>
+  <p class="empty-hint">Nothing was published {{ scope_label }}. <a href="/{% if current_channel %}?channel={{ current_channel }}{% endif %}">Show available history</a> or pick different dates.</p>
+</section>
+{% endif %}
 
 <section class="metrics-grid" aria-label="Channel totals">
   <article class="metric-card metric-reach" data-reveal>
@@ -70,21 +107,46 @@
 <section class="panel chart-panel" id="performance" data-reveal>
   <div class="panel-heading">
     <div>
-      <h2>Performance by post date <span>(current totals, cumulative, UTC)</span></h2>
+      <h2>Performance by publication date <span>(UTC)</span></h2>
+      <p class="scope-note">Chart window: {{ scope_label }}. The chart window is independent of the Post Explorer and export scope below.</p>
     </div>
+  </div>
+  <div class="chart-controls" role="group" aria-label="Chart controls">
+    <label class="chart-metric-field">
+      <span>Metric</span>
+      <span class="select-shell">
+        <select id="chartMetric" aria-label="Chart metric">
+          <option value="views" selected>Views</option>
+          <option value="reactions">Reactions</option>
+          <option value="comments">Comments</option>
+          <option value="shares">Shares</option>
+        </select>
+      </span>
+    </label>
     <div class="chart-periods" role="group" aria-label="Chart aggregation">
       <button class="chart-period active" type="button" data-chart-period="day" aria-pressed="true">Day</button>
       <button class="chart-period" type="button" data-chart-period="week" aria-pressed="false">Week</button>
       <button class="chart-period" type="button" data-chart-period="month" aria-pressed="false">Month</button>
     </div>
+    <div class="chart-periods" role="group" aria-label="Chart mode">
+      <button class="chart-period chart-mode active" type="button" data-chart-mode="daily" aria-pressed="true">Daily posts</button>
+      <button class="chart-period chart-mode" type="button" data-chart-mode="cumulative" aria-pressed="false">Cumulative in window</button>
+    </div>
   </div>
-  <div class="chart-wrap"><canvas id="trendChart" data-chart='{{ chart|tojson }}'></canvas></div>
+  <div class="chart-wrap"><canvas id="trendChart" data-chart='{{ chart|tojson }}' data-chart-scope="{{ scope_label }}" role="img" aria-label="Performance chart. Use the previous and next point buttons for exact values."></canvas></div>
+  <div class="chart-points">
+    <button type="button" class="btn ghost small" data-chart-prev>← Previous point</button>
+    <button type="button" class="btn ghost small" data-chart-next>Next point →</button>
+    <p class="chart-readout" role="status" aria-live="polite" data-chart-readout></p>
+  </div>
+  <p class="chart-summary" data-chart-summary>Views · {{ scope_label }}: {{ k.posts|int }} posts, {{ k.views|num }} total views.</p>
 </section>
 
 <section class="panel posts-panel" id="posts" data-reveal>
   <div class="panel-heading posts-heading">
     <div>
       <h2>All posts</h2>
+      <p class="scope-note">Stored history for this channel scope — not limited to the chart window. Header exports cover the same stored history (up to 100,000 rows).</p>
     </div>
     <span class="row-count">{{ k.posts|int }} tracked</span>
   </div>
@@ -105,10 +167,10 @@
           <th>Date (UTC)</th>
           {% if not current_channel %}<th>Channel</th>{% endif %}
           <th>Post</th>
-          <th><a class="sort-link{% if order == 'views' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=views&days={{ days }}&page=1"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>Views / 24h</a></th>
-          <th><a class="sort-link{% if order == 'reactions' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=reactions&days={{ days }}&page=1"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i>Reactions</a></th>
-          <th><a class="sort-link{% if order == 'comments' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=comments&days={{ days }}&page=1"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i>Comments</a></th>
-          <th><a class="sort-link{% if order == 'shares' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=shares&days={{ days }}&page=1"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i>Shares</a></th>
+          <th><a class="sort-link{% if order == 'views' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=views{{ ('&' ~ cohort_query) if cohort_query else '' }}&page=1"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>Views / 24h</a></th>
+          <th><a class="sort-link{% if order == 'reactions' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=reactions{{ ('&' ~ cohort_query) if cohort_query else '' }}&page=1"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i>Reactions</a></th>
+          <th><a class="sort-link{% if order == 'comments' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=comments{{ ('&' ~ cohort_query) if cohort_query else '' }}&page=1"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i>Comments</a></th>
+          <th><a class="sort-link{% if order == 'shares' %} active{% endif %}" href="?{% if current_channel %}channel={{ current_channel }}&{% endif %}order=shares{{ ('&' ~ cohort_query) if cohort_query else '' }}&page=1"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i>Shares</a></th>
           <th class="actions-col">Details</th>
         </tr>
       </thead>
@@ -133,8 +195,6 @@
       </tbody>
     </table>
   </div>
-  {% set page_query = 'order=' ~ order ~ '&days=' ~ days %}
-  {% if current_channel %}{% set page_query = 'channel=' ~ current_channel ~ '&' ~ page_query %}{% endif %}
   {% if total_pages > 1 %}
   <nav class="log-pagination posts-pagination" aria-label="Post pages">
     {% if page > 1 %}
