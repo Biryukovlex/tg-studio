@@ -20,11 +20,11 @@ class _AsyncFacade:
     async def get_channels(self):
         return await self._database.get_channels()
 
-    async def kpis(self, channel_id=None):
-        return await self._database.kpis(channel_id)
+    async def kpis(self, channel_id=None, **kwargs):
+        return await self._database.kpis(channel_id, **kwargs)
 
-    async def timeseries_totals(self, days, channel_id=None):
-        return await self._database.timeseries_totals(days, channel_id)
+    async def timeseries_totals(self, days, channel_id=None, **kwargs):
+        return await self._database.timeseries_totals(days, channel_id, **kwargs)
 
     async def latest_stats(self, **kwargs):
         return await self._database.latest_stats(**kwargs)

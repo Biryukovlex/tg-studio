@@ -390,3 +390,54 @@ button { color: inherit; }
 .studio-link-down { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid rgba(246, 184, 169, .35); border-radius: 13px; color: var(--studio-soft); background: rgba(91, 52, 52, .18); font-size: 11px; }
 .studio-link-down button { border: 1px solid rgba(246, 184, 169, .5); border-radius: 8px; padding: 7px 12px; color: #f6d4ca; background: transparent; font-size: 11px; font-weight: 800; cursor: pointer; }
 .studio-link-down button:hover { background: rgba(246, 184, 169, .12); }
+
+/* Studio consumes the same finalized shell and type scale as the web screens. */
+:root { --studio-bg:#06101a; --studio-line:#2a4355; --studio-muted:#a5bac4; --studio-soft:#d5e3e8; }
+body { font-family:'Manrope Variable',Manrope,ui-sans-serif,system-ui,sans-serif; }
+.studio-app { grid-template-columns:260px minmax(280px,1fr) min(var(--studio-draft-width,360px),calc(100% - 540px)); }
+.studio-rail { padding:20px 18px; gap:16px; background:#0b1b28; }
+.studio-rail-head { padding:0; }
+.studio-symbol, .studio-rail-title { display:none; }
+.studio-rail-head .studio-overline { font-size:12px; }
+.studio-channel-caption { font-size:12px; letter-spacing:0; text-transform:none; }
+.studio-channel-trigger { font-size:13px; min-height:44px; }
+.studio-new { min-height:44px; font-size:13px; }
+.studio-rail-foot { display:grid; gap:12px; font-size:12px; padding:14px 0 0; }
+.studio-rail-foot a { display:block; padding:10px 12px; border:1px solid var(--studio-line); border-radius:9px; text-decoration:none; color:var(--studio-soft); }
+.studio-main { display:flex; flex-direction:column; background:var(--studio-bg); }
+.studio-topbar { flex:none; align-items:center; gap:12px; padding:18px 20px; min-height:84px; }
+.studio-topbar h1 { font-size:16px; font-weight:750; letter-spacing:-.02em; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.studio-topbar .studio-overline { font-size:11px; text-transform:none; letter-spacing:0; color:var(--studio-muted); }
+.studio-topbar-actions { padding:0; gap:8px; }
+.studio-thread-wrap, .studio-no-thread { flex:1; min-height:0; }
+.studio-primer { flex:none; margin:12px 20px; padding:12px 14px; }
+.studio-primer .studio-topic-chips { display:none; }
+.studio-thread { padding:8px 20px 18px; }
+.studio-my-channels { position:relative; margin:0; border:0; border-radius:0; overflow:visible; background:none; }
+.studio-my-channels-toggle { width:auto; min-height:34px; padding:8px 10px; border:1px solid var(--studio-line); border-radius:9px; gap:6px; }
+.studio-my-channels-copy strong { font-size:11px; }
+.studio-my-channels-toggle small { display:none; }
+.studio-my-channels-body { position:absolute; right:0; top:calc(100% + 8px); z-index:40; width:300px; max-width:calc(100vw - 32px); max-height:50dvh; overflow:auto; padding:16px; background:#102534; border:1px solid var(--studio-line); border-radius:12px; box-shadow:var(--studio-shadow); }
+.studio-welcome { pointer-events:auto; padding:24px 12px; }
+.studio-welcome h2 { max-width:500px; font-size:clamp(22px,2vw,31px); line-height:1.25; }
+.studio-prompts button { padding:8px 10px; border:1px solid var(--studio-line); border-radius:99px; color:var(--studio-soft); background:#102534; font-size:12px; cursor:pointer; }
+.studio-composer { box-shadow:none; border-radius:12px; }
+.studio-panel-heading { padding:18px; min-height:84px; }
+.studio-panel-heading h2 { font-size:16px; }
+.studio-draft-empty { padding:20px; }
+.studio-viewport > :first-child { margin-top:0; }
+.studio-viewport > .studio-welcome { margin:auto; }
+@media (max-width:1080px) { .studio-app { grid-template-columns:230px minmax(0,1fr); } }
+@media (max-width:680px) {
+  .studio-app { display:flex; }
+  .studio-rail { padding:10px 14px; }
+  .studio-rail-head, .studio-rail-foot { display:none; }
+  .studio-topbar { padding:12px 14px; min-height:72px; gap:8px; }
+  .studio-topbar-actions { gap:5px; }
+  .studio-topbar h1 { max-width:100%; }
+  .studio-topbar-actions button { font-size:10px; padding:8px; }
+  .studio-my-channels-copy strong { font-size:10px; }
+  .studio-primer { margin:10px 12px; }
+  .studio-thread { padding:8px 12px 14px; }
+  .studio-welcome h2 { font-size:22px; }
+}

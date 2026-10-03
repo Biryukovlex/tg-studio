@@ -131,10 +131,10 @@ class FakeDB:
         self._persist_called = (label, api_id, api_hash, session_string)
         return __import__("uuid").uuid4()
 
-    async def kpis(self, channel_id=None):
+    async def kpis(self, channel_id=None, **kwargs):
         return {"posts": 0, "views": 0, "reactions": 0, "comments": 0, "shares": 0, "last_poll": None, "collected_comments": 0}
 
-    async def timeseries_totals(self, days=None, channel_id=None):
+    async def timeseries_totals(self, days=None, channel_id=None, **kwargs):
         return {"days": [], "views": [], "reactions": [], "comments": [], "shares": [], "posts_per_day": []}
 
     async def latest_stats(self, channel_id=None, limit=500, order="date"):

@@ -89,7 +89,7 @@ def test_shell_has_single_ghost_and_static_wordmark():
     assert 'data-ghost-mode="{{ ghost_mode }}"' in base
     assert "tgstudio-ghost-{{ ghost_mode }}.svg" in base
     assert 'class="brand-wordmark"' in base
-    assert ">TG Studio</a>" in base
+    assert "<span>TG</span>Studio</a>" in base
     assert 'aria-label="Replay ghost animation"' in base
     # Per-page action mode without backend changes.
     assert "startswith('/studio')" in base

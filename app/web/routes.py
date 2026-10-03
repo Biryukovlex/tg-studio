@@ -230,6 +230,13 @@ def _parse_cohort(request: Request) -> tuple[object | None, object | None, JSONR
     return (raw_from.strip() or None, raw_to.strip() or None, None)
 
 
+def _overview_cohort(from_date, to_date, days):
+    if from_date is not None or to_date is not None or days is None:
+        return from_date, to_date
+    today = datetime.now(timezone.utc).date()
+    return (today - timedelta(days=days - 1)).isoformat(), today.isoformat()
+
+
 def _strict_channel(value: str | int | None) -> int | None:
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
@@ -501,6 +508,8 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
             return cohort_error
         use_cohort = from_param is not None or to_param is not None
         window_days, window_value = _history_window(days)
+        from_param, to_param = _overview_cohort(from_param, to_param, window_days)
+        use_cohort = from_param is not None or to_param is not None
         current_page = _page_number(page)
         page_size = 100
         channels = await (db.get_channels())
@@ -513,7 +522,8 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
             if "from_date" in str(exc) or "to_date" in str(exc):
                 return _json_error("unavailable", "Date-cohort queries are unavailable for this storage backend.", 503)
             raise
-        total_rows = max(0, int(k.get("posts", 0) or 0))
+        history_totals = await db.kpis(channel_id) if use_cohort else k
+        total_rows = max(0, int(history_totals.get("posts", 0) or 0))
         total_pages = max(1, (total_rows + page_size - 1) // page_size)
         current_page = min(current_page, total_pages)
         offset = (current_page - 1) * page_size
@@ -585,6 +595,8 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
             "current_channel": channel_id,
             "order": stats_order,
             "days": window_value,
+            "applied_from": from_param or "",
+            "applied_to": to_param or "",
             "msg": msg,
             "k": k,
             "rows": rows,
@@ -617,6 +629,8 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
         from_param, to_param, cohort_error = _parse_cohort(request)
         if cohort_error is not None:
             return cohort_error
+        window_days, _ = _history_window(request.query_params.get("days", "14"))
+        from_param, to_param = _overview_cohort(from_param, to_param, window_days)
         try:
             try:
                 k = await (db.kpis(channel_id, from_date=from_param, to_date=to_param))
@@ -628,7 +642,7 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
                 ts = await (
                     db.timeseries_totals(days=None, channel_id=channel_id, from_date=from_param, to_date=to_param)
                     if (from_param is not None or to_param is not None)
-                    else db.timeseries_totals(days=14, channel_id=channel_id)
+                    else db.timeseries_totals(days=window_days, channel_id=channel_id)
                 )
             except TypeError as exc:
                 if "from_date" in str(exc) or "to_date" in str(exc):

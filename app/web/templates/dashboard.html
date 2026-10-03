@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-{% set applied_from = request.query_params.get('from', '') %}
-{% set applied_to = request.query_params.get('to', '') %}
+{% set applied_from = applied_from|default(request.query_params.get('from', '')) %}
+{% set applied_to = applied_to|default(request.query_params.get('to', '')) %}
 {% set has_cohort = applied_from != '' or applied_to != '' %}
 {% if has_cohort %}
 {% set cohort_query = (('&from=' ~ applied_from) if applied_from != '' else '') ~ ((('&to=' ~ applied_to) if applied_to != '' else '')) %}
@@ -13,7 +13,7 @@
 {% set cohort_query = '' %}
 {% set scope_label = 'Posts published in the last ' ~ days ~ ' days (UTC)' %}
 {% endif %}
-{% set page_query = 'order=' ~ order ~ cohort_query %}
+{% set page_query = 'channel=' ~ (current_channel or '') ~ '&order=' ~ order ~ cohort_query %}
 
 <section class="control-row" data-reveal>
   <form method="get" action="/" class="filter-form" data-date-range-form
@@ -22,7 +22,7 @@
       <span>Channel</span>
       <span class="select-shell">
         <select data-ui-dropdown name="channel" aria-label="Channel" data-auto-submit>
-          <option value="">All channels</option>
+          <option value="">All active channels</option>
           {% for c in channels %}
           <option value="{{ c.id }}" {% if current_channel == c.id %}selected{% endif %}>
             {{ c.title or c.identifier }}
@@ -31,8 +31,10 @@
         </select>
       </span>
     </label>
+    <details class="date-popover">
+      <summary><span class="control-caption">Date range</span><span class="date-range-value">{{ applied_from ~ ' – ' ~ applied_to if applied_from and applied_to else 'Available history' }} <span aria-hidden="true">⌄</span></span></summary>
     <fieldset class="date-fieldset" aria-label="Date range">
-      <legend>Date range <span>(UTC publication dates)</span></legend>
+      <legend>Publication dates · UTC</legend>
       <div class="date-inputs">
         <label>
           <span>From</span>
@@ -43,10 +45,12 @@
           <input type="date" name="to" value="{{ applied_to }}" min="1970-01-01" max="2100-12-31" aria-label="To date, inclusive UTC publication date">
         </label>
         <button type="submit" class="btn small">Apply dates</button>
-        <a class="history-link" href="/{% if current_channel %}?channel={{ current_channel }}{% endif %}">Available history</a>
+        <a class="history-link" href="/?days=all{% if current_channel %}&channel={{ current_channel }}{% endif %}">Available history</a>
       </div>
       <p class="field-error" data-date-error role="alert" hidden></p>
     </fieldset>
+    </details>
+    <input type="hidden" name="days" value="{{ days }}">
     <input type="hidden" name="order" value="{{ order }}">
     <input type="hidden" name="page" value="1">
   </form>
@@ -56,11 +60,11 @@
       <span aria-hidden="true">•</span>
       {{ k.posts|int }} posts tracked
     </p>
-    <p class="sync-note">Sync now schedules a collection run; numbers update after the run finishes. A redirect alone is never reported as completion, and stored data is kept after a failed run.</p>
+    <p class="sync-note">Latest known metrics · selected publication dates · UTC</p>
   </div>
 </section>
 
-<p class="scope-note" aria-live="off">KPI totals: {{ scope_label }} · latest known metrics.</p>
+
 {% if not channels %}
 <section class="panel" data-reveal>
   <div class="panel-heading"><div><h2>No channels yet</h2></div></div>
@@ -69,37 +73,40 @@
 {% elif has_cohort and (k.posts|int == 0) %}
 <section class="panel" data-reveal>
   <div class="panel-heading"><div><h2>No posts in this window</h2></div></div>
-  <p class="empty-hint">Nothing was published {{ scope_label }}. <a href="/{% if current_channel %}?channel={{ current_channel }}{% endif %}">Show available history</a> or pick different dates.</p>
+  <p class="empty-hint">Nothing was published {{ scope_label }}. <a href="/?days=all{% if current_channel %}&channel={{ current_channel }}{% endif %}">Show available history</a> or pick different dates.</p>
 </section>
 {% endif %}
 
 <section class="metrics-grid" aria-label="Channel totals">
   <article class="metric-card metric-reach" data-reveal>
-    <div class="metric-icon"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i></div>
     <div>
-      <div class="metric-value" data-count="{{ k.views|int }}">{{ k.views|num }}</div>
-      <div class="metric-label">Reach / Views</div>
+      <div class="metric-label">Views · selected dates</div>
+      <div class="metric-value">{{ k.views|num }}</div>
+      <div class="metric-context">{{ k.posts|num }} posts · latest known totals</div>
     </div>
   </article>
   <article class="metric-card metric-reactions" data-reveal>
-    <div class="metric-icon"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i></div>
     <div>
-      <div class="metric-value" data-count="{{ k.reactions|int }}">{{ k.reactions|num }}</div>
-      <div class="metric-label">Reactions</div>
+      <div class="metric-label">Reactions · selected dates</div>
+      <div class="metric-value">{{ k.reactions|num }}</div>
+
+      <div class="metric-context">{{ k.posts|num }} posts · latest known totals</div>
     </div>
   </article>
   <article class="metric-card metric-comments" data-reveal>
-    <div class="metric-icon"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i></div>
     <div>
-      <div class="metric-value" data-count="{{ k.comments|int }}">{{ k.comments|num }}</div>
-      <div class="metric-label">Comments <span>· {{ k.collected_comments|num }} archived</span></div>
+      <div class="metric-label">Comments · selected dates</div>
+      <div class="metric-value">{{ k.comments|num }}</div>
+
+      <div class="metric-context">{{ k.posts|num }} posts · latest known totals</div>
     </div>
   </article>
   <article class="metric-card metric-shares" data-reveal>
-    <div class="metric-icon"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i></div>
     <div>
-      <div class="metric-value" data-count="{{ k.shares|int }}">{{ k.shares|num }}</div>
-      <div class="metric-label">Shares</div>
+      <div class="metric-label">Shares · selected dates</div>
+      <div class="metric-value">{{ k.shares|num }}</div>
+
+      <div class="metric-context">{{ k.posts|num }} posts · latest known totals</div>
     </div>
   </article>
 </section>
@@ -107,8 +114,8 @@
 <section class="panel chart-panel" id="performance" data-reveal>
   <div class="panel-heading">
     <div>
-      <h2>Performance by publication date <span>(UTC)</span></h2>
-      <p class="scope-note">Chart window: {{ scope_label }}. The chart window is independent of the Post Explorer and export scope below.</p>
+      <h2>Post performance</h2>
+      <p class="scope-note">Latest known totals grouped by publication date · UTC. {{ scope_label }}.</p>
     </div>
   </div>
   <div class="chart-controls" role="group" aria-label="Chart controls">
@@ -123,15 +130,8 @@
         </select>
       </span>
     </label>
-    <div class="chart-periods" role="group" aria-label="Chart aggregation">
-      <button class="chart-period active" type="button" data-chart-period="day" aria-pressed="true">Day</button>
-      <button class="chart-period" type="button" data-chart-period="week" aria-pressed="false">Week</button>
-      <button class="chart-period" type="button" data-chart-period="month" aria-pressed="false">Month</button>
-    </div>
-    <div class="chart-periods" role="group" aria-label="Chart mode">
-      <button class="chart-period chart-mode active" type="button" data-chart-mode="daily" aria-pressed="true">Daily posts</button>
-      <button class="chart-period chart-mode" type="button" data-chart-mode="cumulative" aria-pressed="false">Cumulative in window</button>
-    </div>
+    <label><span>View</span><select data-ui-dropdown id="chartMode" aria-label="Chart mode"><option value="daily" data-chart-mode="daily">Daily posts</option><option value="cumulative" data-chart-mode="cumulative">Cumulative in window</option></select></label>
+    <label><span>Group by</span><select data-ui-dropdown id="chartPeriod" aria-label="Chart aggregation"><option value="day" data-chart-period="day">Day</option><option value="week" data-chart-period="week">Week</option><option value="month" data-chart-period="month">Month</option></select></label>
   </div>
   <div class="chart-wrap"><canvas id="trendChart" data-chart='{{ chart|tojson }}' data-chart-scope="{{ scope_label }}" role="img" aria-label="Performance chart. Use the previous and next point buttons for exact values."></canvas></div>
   <div class="chart-points">
@@ -146,7 +146,7 @@
   <div class="panel-heading posts-heading">
     <div>
       <h2>Post Explorer</h2>
-      <p class="scope-note">Stored history for this channel scope — not limited to the chart window. Header exports cover the same stored history (up to 100,000 rows). Explorer filters never change Studio context.</p>
+      <p class="scope-note">Find what resonated. Read the post behind the numbers.</p>
     </div>
     <span class="row-count" data-explorer-count>{{ k.posts|int }} tracked</span>
   </div>
@@ -169,6 +169,7 @@
         </span>
       </label>
     </div>
+    <details class="explorer-filter-popover"><summary class="btn ghost small">Filters <span aria-hidden="true">⌄</span></summary><div class="explorer-filter-body">
     <fieldset class="explorer-channels" aria-label="Channels">
       <legend>Channels</legend>
       <div class="explorer-checks">
@@ -200,50 +201,29 @@
       <button type="submit" class="btn small">Apply filters</button>
       <button type="button" class="btn ghost small" data-explorer-clear>Clear</button>
     </div>
+    </div></details>
     <p class="field-error" data-explorer-error role="alert" hidden></p>
   </form>
   <div class="explorer-chips" data-explorer-chips aria-live="polite"></div>
   <div class="table-scroll">
     <table class="tbl posts-table explorer-table">
-      <colgroup>
-        <col class="col-date">
-        {% if not current_channel %}<col class="col-channel">{% endif %}
-        <col class="col-post">
-        <col class="col-views">
-        <col class="col-reactions">
-        <col class="col-comments">
-        <col class="col-shares">
-        <col class="col-actions">
-      </colgroup>
-      <thead>
-        <tr>
-          <th scope="col">Date (UTC)</th>
-          {% if not current_channel %}<th scope="col">Channel</th>{% endif %}
-          <th scope="col">Post</th>
-          <th scope="col"><i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>Views</th>
-          <th scope="col"><i class="mgc mgc-wave-core-regular" aria-hidden="true"></i>Reactions</th>
-          <th scope="col"><i class="mgc mgc-three-circles-core-regular" aria-hidden="true"></i>Comments</th>
-          <th scope="col"><i class="mgc mgc-git-branch-2-core-regular" aria-hidden="true"></i>Shares</th>
-          <th scope="col" class="actions-col">Details</th>
-        </tr>
-      </thead>
+      <colgroup><col class="col-post"><col class="col-views"><col class="col-reactions"><col class="col-comments"><col class="col-shares"></colgroup>
+      <thead><tr><th scope="col">Post · published ↓</th><th scope="col">Views</th><th scope="col">Reactions</th><th scope="col">Comments</th><th scope="col">Shares</th></tr></thead>
       <tbody data-explorer-rows>
         {% for r in rows %}
         <tr>
-          <td class="date-cell">{{ r.posted_at|dt }}</td>
-          {% if not current_channel %}<td class="channel-cell">{{ r.identifier }}</td>{% endif %}
           <td class="post-text">
-            <a href="{{ r.link }}" target="_blank" rel="noopener">{{ (r.text or '(media post)')[:90] }}</a>
+            <a href="/post/{{ r.id }}">{{ (r.text or '(media post)')[:140] }}</a>
+            <span class="post-meta">{{ r.identifier }} · {{ r.posted_at|dt }} UTC</span>
           </td>
           <td class="number-cell">{{ r.views|num }} {% if r.views_delta and r.views_delta > 0 %}<span class="delta up">+{{ r.views_delta|num }}</span>{% else %}<span class="delta">–</span>{% endif %}</td>
           <td class="number-cell">{{ r.reactions|num }}</td>
           <td class="number-cell"><a class="metric-link" href="/post/{{ r.id }}#comments">{{ r.comments|num }}</a><span class="archived-count">{{ r.collected_comments|num }} archived</span></td>
           <td class="number-cell">{{ r.shares|num }}</td>
-          <td class="actions-col"><a class="icon-btn" href="/post/{{ r.id }}" aria-label="View post details" title="View post details"><i class="mgc mgc-route-core-regular" aria-hidden="true"></i></a></td>
         </tr>
         {% endfor %}
         {% if not rows %}
-        <tr><td colspan="8" class="empty-state">Nothing collected yet — wait for the first sync cycle.</td></tr>
+        <tr><td colspan="5" class="empty-state">Nothing collected yet — wait for the first sync cycle.</td></tr>
         {% endif %}
       </tbody>
     </table>

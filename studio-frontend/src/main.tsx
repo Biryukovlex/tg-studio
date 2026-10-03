@@ -498,10 +498,7 @@ function ConversationRail({
           ))
         )}
       </div>
-      <div className="studio-rail-foot">
-        <span className="studio-status-dot" aria-hidden="true" />
-        <span>Private workspace · channel context stays separate</span>
-      </div>
+      <div className="studio-rail-foot"><span>Channel context stays separate</span><a href="/settings">Workspace settings</a></div>
     </aside>
   );
 }
@@ -1079,7 +1076,7 @@ function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Boots
       .then(() =>
         // Consent changes what the primer shows, so reload the bootstrap
         // payload instead of leaving the consent card on screen.
-        api<Bootstrap>("/studio/api/bootstrap")
+        api<Bootstrap>(`/studio/api/bootstrap?channel_id=${encodeURIComponent(bootstrap.selected_channel_id ?? "")}`)
           .then((next) => onBootstrap(next))
           .catch(() => setMessage("Consent granted. Reload the page to continue.")),
       )
@@ -1485,8 +1482,8 @@ function StudioThread({
                 <h2>What should we make clearer today?</h2>
                 <p>I’ll start with the selected channel’s history and keep the working context in this conversation.</p>
                 <div className="studio-prompts" aria-label="Suggested prompts">
-                  <span>“Show me what performs best”</span>
-                  <span>“Help me find a fresh angle”</span>
+                  <button type="button" onClick={() => { runtime.thread.composer.setText("Show me what performs best"); focusComposer(); }}>Show me what performs best</button>
+                  <button type="button" onClick={() => { runtime.thread.composer.setText("Help me find a fresh angle"); focusComposer(); }}>Help me find a fresh angle</button>
                 </div>
               </div>
               </ThreadPrimitive.Empty>
@@ -1645,7 +1642,6 @@ export function MyChannels({
         onClick={() => setOpen((current) => !current)}
       >
         <span className="studio-my-channels-copy">
-          <span className="studio-overline">Optional research</span>
           <strong>My channels</strong>
         </span>
         <small>{others.length} other{others.length === 1 ? "" : "s"}</small>
@@ -1653,7 +1649,7 @@ export function MyChannels({
       </button>
       {open && (
         <div id="studio-my-channels-body" className="studio-my-channels-body">
-          <p>Another channel you manage could inform this conversation once its eligibility review passes. Until that separately authorized backend exists, cross-channel context stays unavailable here.</p>
+          <p>Your other channels. Research across channels is not available yet.</p>
           <ul>
             {others.map((channel) => (
               <li key={channel.id} className="studio-my-channels-card">
@@ -1661,8 +1657,8 @@ export function MyChannels({
                   <strong>{channelLabel(channel)}</strong>
                   <span>{channel.identifier}</span>
                 </div>
-                <p>Profile summary unavailable in this build.</p>
-                <button type="button" disabled title="Cross-channel research is not available until its eligibility review and backend land">Use in this conversation</button>
+                <p>Open this channel’s Studio to view its profile.</p>
+                <button type="button" disabled title="Research across channels is not available yet">Use in this conversation</button>
               </li>
             ))}
           </ul>
@@ -2009,6 +2005,7 @@ function StudioApp() {
           </div>
           <div className="studio-topbar-actions">
             <button type="button" className="studio-draft-toggle" onClick={openDraft}>Draft</button>
+            <MyChannels channels={bootstrap.channels} selectedChannelId={selectedChannelId} />
             <MoreActionsMenu
               selected={selected}
               busy={deletingId !== null}
@@ -2018,10 +2015,8 @@ function StudioApp() {
               onDelete={deleteConversation}
             />
           </div>
-          <div className="studio-topbar-meta"><span className="studio-status-dot" aria-hidden="true" /> Agent context connected</div>
         </header>
         <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
-        <MyChannels channels={bootstrap.channels} selectedChannelId={selectedChannelId} />
         {(inlineError || (error && bootstrap)) && <div className="studio-inline-error" role="alert"><span>{inlineError || error}</span>{deleteRetryConversation && <button type="button" onClick={() => void stopAndDelete()} disabled={deletingId !== null}>{deletingId === deleteRetryConversation.id ? "Stopping…" : "Stop run and delete"}</button>}<button type="button" className="studio-inline-error-dismiss" onClick={() => { setInlineError(""); setError(""); setDeleteRetryConversation(null); }} aria-label="Dismiss error">×</button></div>}
         {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} consent={bootstrap.consent} pendingPrefill={pendingPrefill && pendingPrefill.channel_id === selected.channel_id ? pendingPrefill : null} onPrefillResult={handlePrefillResult} onStopRun={cancelRun} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
       </main>

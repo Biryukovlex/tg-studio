@@ -343,8 +343,9 @@ async def test_cohort_half_open_boundary_and_chart_kpi_agreement(client, app, ch
     assert int(kpis["views"]) == 60
     series = await db.timeseries_totals(days=None, channel_id=cohort_channel, from_date="2026-09-06", to_date="2026-09-07")
     assert series["days"] == ["2026-09-06", "2026-09-07"]
-    # Same cohort powers chart and KPIs: final cumulative equals KPI totals.
-    assert series["views"][-1] == int(kpis["views"])
+    # Same cohort powers chart and KPIs: daily buckets sum to KPI totals.
+    assert sum(series["views"]) == int(kpis["views"])
+    assert series["views"] == [30, 30]
     assert series["posts_per_day"] == [2, 1]
     # Sparse/empty: single-day cohort and empty cohort.
     single = await db.timeseries_totals(days=None, channel_id=cohort_channel, from_date="2026-09-06", to_date="2026-09-06")

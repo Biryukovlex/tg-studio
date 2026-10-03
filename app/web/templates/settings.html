@@ -32,14 +32,16 @@
 </aside>
 {% endif %}
 <section class="settings-intro" data-reveal>
-  <p>Values saved here are stored in the workspace database and override <strong>.env</strong>. Tags under each field show where the current value comes from.</p>
+  <p>Manage your workspace connection, collection and writing preferences.</p>
+  </section>
+<div class="settings-layout">
   <nav class="section-tabs" aria-label="Settings sections" data-settings-section-nav>
-    <a href="#telegram">Telegram</a>
+    <a href="#telegram">Channels</a>
+    <a href="#connection">Telegram connection</a>
     <a href="#collection">Collection</a>
-    <a href="#studio">Studio</a>
-    <a href="#research">Research</a>
+    <a href="#studio">Studio model</a>
+    <a href="#research">Web research</a>
   </nav>
-</section>
 
 <div class="settings-stack">
   <!-- Telegram -->
@@ -48,9 +50,17 @@
       <div>
         <p class="section-kicker">Telegram</p>
         <h2>Channels</h2>
-        <p class="panel-note">Public @username, t.me link, or numeric id. Deactivate stops collection but keeps the archive; Delete data permanently removes the channel and its complete archive and Studio workspace.</p>
+        <p class="panel-note">Keep collection and writing context under your control.</p>
       </div>
-      <span class="row-count">{{ channels|length }} channel{% if channels|length != 1 %}s{% endif %}</span>
+      <div class="channel-heading-actions"><span class="row-count">{{ channels|length }} channel{% if channels|length != 1 %}s{% endif %}</span>
+      <details class="channel-add-popover" {% if errors.identifier %}open{% endif %}><summary class="btn small">＋ Add channel</summary>
+    <form method="post" action="/settings/channels/add" class="inline-add">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="text" name="identifier" placeholder="@channel, https://t.me/channel or -100…" aria-label="Channel to add" required value="{{ values.identifier if values.identifier is defined else '' }}">
+      {% if errors.identifier %}<p class="field-error">{{ errors.identifier }}</p>{% endif %}
+      <button type="submit" class="btn small">Add channel</button>
+    </form>
+      </details></div>
     </div>
     <div class="table-scroll settings-table-wrap">
       <table class="tbl settings-table">
@@ -79,7 +89,7 @@
             </td>
             <td class="actions-col">
               <div class="channel-actions">
-                <a class="btn ghost small" href="/studio">Open Studio</a>
+                <a class="btn ghost small" href="/studio?channel={{ c.id }}">Open Studio</a>
                 {% if c.active %}<form method="post" action="/settings/channels/{{ c.id }}/deactivate" class="inline-form">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                   <button type="submit" class="btn ghost small">Deactivate</button>
@@ -90,6 +100,16 @@
                 </form>{% endif %}
                 <button type="button" class="btn ghost small danger" data-delete-dialog-open="delete-channel-{{ c.id }}">Delete data</button>
               </div>
+
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="empty-state">No channels yet. Add the first one below.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+{% for c in channels %}
               <dialog class="delete-channel-dialog" id="delete-channel-{{ c.id }}" {% if errors.channel_delete and values.delete_channel_id == c.id %}open{% endif %}>
                 <div class="delete-dialog-copy">
                   <p class="section-kicker">Permanent deletion</p>
@@ -107,21 +127,14 @@
                   </div>
                 </form>
               </dialog>
-            </td>
-          </tr>
-          {% else %}
-          <tr><td colspan="6" class="empty-state">No channels yet. Add the first one below.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+{% endfor %}
     <div class="channel-cards" data-channel-cards>
       {% for c in channels %}
       <article class="channel-card">
         <div class="card-top">
           <div>
-            <strong>{{ c.identifier }}</strong>
-            {% if c.title %}<div class="fine">{{ c.title }}</div>{% endif %}
+            <strong>{{ c.title or c.identifier }}</strong>
+            <div class="fine">{{ c.identifier }}</div>
           </div>
           {% if not c.active %}
           <span class="pill"><i class="mgc mgc-pause-circle-core-regular" aria-hidden="true"></i>Deactivated</span>
@@ -133,11 +146,11 @@
         </div>
         <div class="counts">
           <span><b>{{ c.data_summary.posts }}</b>Posts</span>
-          <span><b>{{ c.data_summary.comments }}</b>Comments</span>
+          <span><b>{{ c.data_summary.comments }}</b>Comments archived</span>
           <span><b>{{ c.data_summary.conversations }}</b>Studio chats</span>
         </div>
         <div class="action-row">
-          <a class="btn ghost small" href="/studio">Open Studio</a>
+          <a class="btn ghost small" href="/studio?channel={{ c.id }}">Open Studio</a>
           {% if c.active %}<form method="post" action="/settings/channels/{{ c.id }}/deactivate" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <button type="submit" class="btn ghost small">Deactivate</button>
@@ -152,20 +165,17 @@
       {% else %}
       <div class="empty-reference">
         <h3>No channels yet</h3>
-        <p>Add the first one below to start collecting and open its Studio.</p>
+        <p>Add a channel to start collecting and open its Studio.</p>
       </div>
       {% endfor %}
     </div>
-    <form method="post" action="/settings/channels/add" class="inline-add">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-      <input type="text" name="identifier" placeholder="@channel, https://t.me/channel or -100…" aria-label="Channel to add" required value="{{ values.identifier if values.identifier is defined else '' }}">
-      {% if errors.identifier %}<p class="field-error">{{ errors.identifier }}</p>{% endif %}
-      <button type="submit" class="btn small">Add channel</button>
-    </form>
 
+
+  </section>
+  <section class="panel" id="connection" data-reveal>
     <div class="subsection-heading">
       <div>
-        <h3>Connection</h3>
+        <h2>Telegram connection</h2>
         <p class="panel-note">The user account the collector reads channels with.</p>
       </div>
       <p class="status-line" data-connection-status>
@@ -243,7 +253,7 @@
           <p class="field-help">Minutes between syncs. 1 to 1440.</p>
         </div>
         <div class="field-control">
-          <input type="number" id="poll_minutes" name="poll_minutes" {% set pm = ws_dict['collection.poll_minutes'].value if ws_dict['collection.poll_minutes'] is defined else 15 %}value="{{ values.poll_minutes if values.poll_minutes is defined else (pm|int if pm == pm|int else pm) }}" min="1" max="1440" step="1" {% if errors.poll_minutes %}aria-invalid="true" aria-describedby="poll_minutes_msg"{% endif %}>
+          <div class="collection-value"><input type="number" id="poll_minutes" name="poll_minutes" {% set pm = ws_dict['collection.poll_minutes'].value if ws_dict['collection.poll_minutes'] is defined else 15 %}value="{{ values.poll_minutes if values.poll_minutes is defined else (pm|int if pm == pm|int else pm) }}" min="1" max="1440" step="1" {% if errors.poll_minutes %}aria-invalid="true" aria-describedby="poll_minutes_msg"{% endif %}><span>minutes</span></div>
           {% if errors.poll_minutes %}<p class="field-error" id="poll_minutes_msg">{{ errors.poll_minutes }}</p>{% endif %}
           <p class="field-source" data-provenance-for="collection.poll_minutes">
             {% set src = ws_dict['collection.poll_minutes'].source if ws_dict['collection.poll_minutes'] is defined else 'default' %}
@@ -259,7 +269,7 @@
           <p class="field-help">Age of posts eligible for future syncs. 100 means posts from the last 100 days; 0 means any age. Existing older posts stay archived.</p>
         </div>
         <div class="field-control">
-          <input type="number" id="track_days" name="track_days" value="{{ values.track_days if values.track_days is defined else (ws_dict['collection.track_days'].value if ws_dict['collection.track_days'] is defined else '30') }}" min="0" max="3650" step="1" {% if errors.track_days %}aria-invalid="true"{% endif %}>
+          <div class="collection-value"><input type="number" id="track_days" name="track_days" value="{{ values.track_days if values.track_days is defined else (ws_dict['collection.track_days'].value if ws_dict['collection.track_days'] is defined else '30') }}" min="0" max="3650" step="1" {% if errors.track_days %}aria-invalid="true"{% endif %}><span>days</span></div>
           {% if errors.track_days %}<p class="field-error">{{ errors.track_days }}</p>{% endif %}
           <p class="field-source" data-provenance-for="collection.track_days">
             {% set src = ws_dict['collection.track_days'].source if ws_dict['collection.track_days'] is defined else 'default' %}
@@ -275,7 +285,7 @@
           <p class="field-help">Maximum Telegram messages inspected per channel in each sync, including whole-history rescans. This is not a stored-post cap. 0 = unlimited.</p>
         </div>
         <div class="field-control">
-          <input type="number" id="backfill_limit" name="backfill_limit" value="{{ values.backfill_limit if values.backfill_limit is defined else (ws_dict['collection.backfill_limit'].value if ws_dict['collection.backfill_limit'] is defined else '200') }}" min="0" max="100000" step="1" {% if errors.backfill_limit %}aria-invalid="true"{% endif %}>
+          <div class="collection-value"><input type="number" id="backfill_limit" name="backfill_limit" value="{{ values.backfill_limit if values.backfill_limit is defined else (ws_dict['collection.backfill_limit'].value if ws_dict['collection.backfill_limit'] is defined else '200') }}" min="0" max="100000" step="1" {% if errors.backfill_limit %}aria-invalid="true"{% endif %}><span>messages</span></div>
           {% if errors.backfill_limit %}<p class="field-error">{{ errors.backfill_limit }}</p>{% endif %}
           <p class="field-source" data-provenance-for="collection.backfill_limit">
             {% set src = ws_dict['collection.backfill_limit'].source if ws_dict['collection.backfill_limit'] is defined else 'default' %}
@@ -445,5 +455,6 @@
       <input type="hidden" name="key" value="research.blocked_domains">
     </form>
   </section>
+</div>
 </div>
 {% endblock %}

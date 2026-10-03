@@ -211,7 +211,7 @@ def test_explorer_panel_has_one_sort_no_sortable_headers_or_scores():
     assert "data-explorer-count" in source
     assert "data-explorer-rows" in source
     assert "data-explorer-error" in source
-    assert "Explorer filters never change Studio context" in source
+    assert 'class="explorer-filter-popover"' in source
 
 
 def test_reader_dialog_skeleton_and_handoff_contract():

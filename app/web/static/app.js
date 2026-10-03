@@ -50,6 +50,20 @@
     });
   });
 
+  // Compact filter popovers dismiss without changing the applied values.
+  document.querySelectorAll('.date-popover, .explorer-filter-popover, .channel-add-popover').forEach((popover) => {
+    document.addEventListener('click', (event) => {
+      if (!popover.contains(event.target)) popover.removeAttribute('open');
+    });
+    popover.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        popover.removeAttribute('open');
+        popover.querySelector('summary')?.focus();
+      }
+    });
+  });
+
   // Overview date range (T46): inclusive UTC From/To scope cards and graph.
   // Invalid ranges stay unapplied and the last applied range is kept; an
   // empty range means available history. The server re-validates and answers
@@ -240,7 +254,7 @@
     const notices = [...document.querySelectorAll('[data-restart-notice]')];
     let banner = notices.find((node) => !node.hasAttribute('data-idle')) || null;
     let idle = notices.find((node) => node.hasAttribute('data-idle')) || null;
-    const telegramPanel = document.getElementById('telegram');
+    const telegramPanel = document.getElementById('connection');
     if (restart && !banner && telegramPanel) {
       banner = document.createElement('div');
       banner.className = 'banner warn restart-banner';
@@ -355,7 +369,7 @@
         submitter.disabled = true;
         submitter.classList.add('is-busy');
       }
-      form.querySelector('[data-settings-save-error]')?.remove();
+      panel.querySelector('[data-settings-save-error]')?.remove();
 
       try {
         const response = await fetch(action, {
@@ -433,6 +447,7 @@
       }).then(async (response) => {
         const payload = await response.json().catch(() => null);
         if (response.ok && payload?.ok === true) {
+          owner.closest('.panel')?.querySelector('[data-settings-save-error]')?.remove();
           mergeProvenance(owner, payload.fields);
           mergeSetupState(payload);
           const fields = payload.fields || {};
@@ -480,6 +495,27 @@
   // changing the page; Enter follows the link natively.
   document.querySelectorAll('[data-settings-section-nav]').forEach((nav) => {
     const links = () => [...nav.querySelectorAll('a')];
+    const panels = [...document.querySelectorAll('.settings-stack > section')];
+    function selectSection() {
+      const requested = location.hash.slice(1);
+      const chosen = panels.find((panel) => panel.id === requested) || panels[0];
+      if (!chosen) return;
+      panels.forEach((panel) => { panel.hidden = panel !== chosen; });
+      links().forEach((link) => {
+        if (link.getAttribute('href') === `#${chosen.id}`) link.setAttribute('aria-current', 'true');
+        else link.removeAttribute('aria-current');
+      });
+    }
+    nav.addEventListener('click', (event) => {
+      const link = event.target.closest('a');
+      if (!link || !nav.contains(link)) return;
+      event.preventDefault();
+      history.replaceState(null, '', link.getAttribute('href'));
+      selectSection();
+    });
+    window.addEventListener('hashchange', selectSection);
+    selectSection();
+
     nav.addEventListener('keydown', (event) => {
       const items = links();
       const current = items.indexOf(document.activeElement);
@@ -755,22 +791,15 @@
           }
         });
       }
-      document.querySelectorAll('[data-chart-mode]').forEach((button) => {
-        button.addEventListener('click', () => {
-          state.mode = button.getAttribute('data-chart-mode') === 'cumulative' ? 'cumulative' : 'daily';
-          state.point = 0;
-          markActive('[data-chart-mode]', 'data-chart-mode', state.mode);
-          renderChart();
-        });
+      document.getElementById('chartMode')?.addEventListener('change', (event) => {
+        state.mode = event.target.value === 'cumulative' ? 'cumulative' : 'daily';
+        state.point = 0;
+        renderChart();
       });
-      document.querySelectorAll('[data-chart-period]').forEach((button) => {
-        button.addEventListener('click', () => {
-          const period = button.getAttribute('data-chart-period');
-          state.period = period === 'week' || period === 'month' ? period : 'day';
-          state.point = 0;
-          markActive('[data-chart-period]', 'data-chart-period', state.period);
-          renderChart();
-        });
+      document.getElementById('chartPeriod')?.addEventListener('change', (event) => {
+        state.period = ['week', 'month'].includes(event.target.value) ? event.target.value : 'day';
+        state.point = 0;
+        renderChart();
       });
       if (prevButton) {
         prevButton.addEventListener('click', () => {
@@ -893,7 +922,7 @@
       if (rows.length === 0) {
         const empty = document.createElement('tr');
         const cell = document.createElement('td');
-        cell.colSpan = 8;
+        cell.colSpan = 5;
         cell.className = 'empty-state';
         cell.textContent = 'No posts match these filters. Adjust or clear them to recover.';
         empty.append(cell);
@@ -903,10 +932,6 @@
       const showChannel = Boolean(document.querySelector('.explorer-table .col-channel'));
       rows.forEach((row) => {
         const tr = document.createElement('tr');
-        tr.append(textCell(String(row.posted_at || '').slice(0, 16), 'date-cell'));
-        if (showChannel) {
-          tr.append(textCell(String(row.identifier || row.channel_identifier || ''), 'channel-cell'));
-        }
         const excerpt = (row.text || '(media post)').slice(0, 140);
         const postCell = document.createElement('td');
         postCell.className = 'post-text';
@@ -917,18 +942,12 @@
         openButton.setAttribute('aria-label', `Read post ${row.message_id || row.id}`);
         openButton.addEventListener('click', () => openReader(Number(row.id), openButton));
         postCell.append(openButton);
+        const metadata = document.createElement('span');
+        metadata.className = 'post-meta';
+        metadata.textContent = `${row.identifier || row.channel_identifier || ''} · ${String(row.posted_at || '').slice(0,16)} UTC`;
+        postCell.append(metadata);
         tr.append(postCell);
         EXPLORER_METRICS.forEach((metric) => tr.append(metricCell(row, metric)));
-        const actions = document.createElement('td');
-        actions.className = 'actions-col';
-        const fullLink = document.createElement('a');
-        fullLink.className = 'icon-btn';
-        fullLink.href = `/post/${encodeURIComponent(String(row.id))}`;
-        fullLink.setAttribute('aria-label', 'Open full post page');
-        fullLink.title = 'Open full post page';
-        fullLink.textContent = '↗';
-        actions.append(fullLink);
-        tr.append(actions);
         rowsBody.append(tr);
       });
     }
@@ -945,7 +964,7 @@
         });
       }
       if (state.sort !== 'date') {
-        chips.push({ label: `Sort: ${state.sort}`, clear: () => { if (sortSelect) sortSelect.value = 'date'; } });
+        chips.push({ label: `Sort: ${state.sort}`, clear: () => { if (sortSelect) { sortSelect.value = 'date'; sortSelect.dispatchEvent(new Event('ui-select-sync')); } } });
       }
       Object.entries(state.bounds).forEach(([key, value]) => {
         chips.push({
@@ -1033,9 +1052,17 @@
     explorerForm.addEventListener('submit', (event) => {
       event.preventDefault();
       loadExplorer(1, true);
+      explorerForm.querySelector('details')?.removeAttribute('open');
     });
+    let searchTimer;
+    searchInput?.addEventListener('input', () => {
+      window.clearTimeout(searchTimer);
+      searchTimer = window.setTimeout(() => loadExplorer(1, true), 250);
+    });
+    explorerForm.querySelector('[name=sort]')?.addEventListener('change', () => loadExplorer(1, true));
     explorerForm.querySelector('[data-explorer-clear]')?.addEventListener('click', () => {
       explorerForm.reset();
+      sortSelect?.dispatchEvent(new Event('ui-select-sync'));
       explorerError(null);
       loadExplorer(1, false);
       searchInput?.focus();

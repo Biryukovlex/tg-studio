@@ -271,12 +271,10 @@ def test_overview_controls_expose_dates_metric_modes_and_summary():
     assert "data-chart-next" in source
     assert 'data-chart-readout' in source
     assert 'aria-live="polite"' in source
-    assert "KPI totals:" in source
-    assert "Chart window:" in source
-    assert "independent of the Post Explorer and export scope" in source
-    assert "Stored history for this channel scope" in source
-    assert "up to 100,000 rows" in source
-    assert "schedules a collection run" in source
+    assert "Views · selected dates" in source
+    assert "Latest known totals grouped by publication date" in source
+    assert "Find what resonated" in source
+    assert 'class="explorer-filter-popover"' in source
     assert "View data" not in source
     assert "data-table" not in source
 
@@ -285,7 +283,7 @@ def test_chart_client_uses_one_metric_accent_monotone_and_keyboard_values():
     source = (ROOT / "app/web/static/app.js").read_text(encoding="utf-8")
     assert "cubicInterpolationMode: 'monotone'" in source
     assert "chartFills" in source
-    assert "data-chart-mode" in source
+    assert "getElementById('chartMode')" in source
     assert "setActiveElements" in source
     assert "data-chart-readout" in source
     assert "data-chart-summary" in source
@@ -342,7 +340,7 @@ async def test_sync_reports_scheduling_not_completion(tmp_path):
         # The banner repeats the scheduling wording; stored numbers stay put.
         page = await client.get("/?channel=1")
         assert page.status_code == 200
-        assert "schedules a collection run" in page.text
+        assert "Latest known metrics · selected publication dates" in page.text
 
 
 @pytest.mark.asyncio

@@ -36,8 +36,8 @@ async def test_postgres_overview_chart_uses_publication_dates():
         older_index = series["days"].index(older_day.strftime("%Y-%m-%d"))
         newer_index = series["days"].index(newer_day.strftime("%Y-%m-%d"))
         assert series["views"][older_index] == 11
-        assert series["views"][older_index + 1] == 11
-        assert series["views"][newer_index] == 33
+        assert series["views"][older_index + 1] == 0
+        assert series["views"][newer_index] == 22
         assert series["posts_per_day"][older_index] == 1
         assert series["posts_per_day"][newer_index] == 1
     finally:

@@ -224,6 +224,9 @@
     select.addEventListener("change", function () {
       syncTrigger(state);
     });
+    select.addEventListener("ui-select-sync", function () {
+      syncTrigger(state);
+    });
 
     select.classList.add("ui-native-select");
     select.tabIndex = -1;

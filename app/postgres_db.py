@@ -1062,18 +1062,10 @@ class PostgresDatabase:
         from_date: Any = None,
         to_date: Any = None,
     ) -> dict[str, list]:
-        """Current cumulative metrics attributed to each post's publication date.
+        """Latest post metrics grouped by UTC publication day, never accumulated.
 
-        Snapshot timestamps describe collection activity, so they must never
-        drive the Overview x-axis.  The latest snapshot supplies each post's
-        current values and ``posts.posted_at`` decides when those values enter
-        the cumulative series.
-
-        When ``from_date``/``to_date`` are given they form one inclusive UTC
-        cohort with the KPI query (half-open next-day boundary) and override
-        the relative ``days`` window.  Sparse days carry totals forward with
-        ``posts_per_day=0``; an empty cohort returns zeros for the requested
-        range.
+        The browser owns Day/Week/Month grouping and cumulative display. Empty
+        days are zero; earlier posts never carry into a selected date window.
         """
 
         start, end_exclusive = cohort_bounds(from_date, to_date)
@@ -1091,7 +1083,7 @@ class PostgresDatabase:
                                 WHERE workspace_id=:workspace_id
                                 ORDER BY workspace_id, post_id, id DESC
                            )
-                           SELECT p.posted_at::date AS day,
+                           SELECT (p.posted_at AT TIME ZONE 'UTC')::date AS day,
                                   COUNT(*) AS posts,
                                   COALESCE(SUM(latest.views), 0) AS views,
                                   COALESCE(SUM(latest.comments), 0) AS comments,
@@ -1106,8 +1098,8 @@ class PostgresDatabase:
                              AND p.is_deleted=false
                              AND (CAST(:from_dt AS timestamptz) IS NULL OR p.posted_at >= CAST(:from_dt AS timestamptz))
                              AND (CAST(:to_exclusive AS timestamptz) IS NULL OR p.posted_at < CAST(:to_exclusive AS timestamptz))
-                             GROUP BY p.posted_at::date
-                             ORDER BY p.posted_at::date"""
+                             GROUP BY (p.posted_at AT TIME ZONE 'UTC')::date
+                             ORDER BY (p.posted_at AT TIME ZONE 'UTC')::date"""
                     ),
                     {
                         "workspace_id": workspace_id,
@@ -1135,17 +1127,10 @@ class PostgresDatabase:
             # Overview range usable (collection itself caps at 3650 days).
             span = min(span, 4000)
             days_list = [(datetime.combine(range_start, datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(span)]
-            totals = {key: 0 for key in ("views", "comments", "reactions", "shares")}
-            by_day: dict[str, dict[str, Any]] = {str(row["day"]): dict(row) for row in rows}
-            output: dict[str, list] = {key: [] for key in ("views", "comments", "reactions", "shares", "posts_per_day")}
-            for day in days_list:
-                day_row = by_day.get(day)
-                if day_row:
-                    for key in totals:
-                        totals[key] += int(day_row[key] or 0)
-                for key in totals:
-                    output[key].append(totals[key])
-                output["posts_per_day"].append(int(day_row["posts"] or 0) if day_row else 0)
+            by_day = {str(row["day"]): dict(row) for row in rows}
+            output = {key: [int(by_day.get(day, {}).get(key) or 0) for day in days_list]
+                      for key in ("views", "comments", "reactions", "shares")}
+            output["posts_per_day"] = [int(by_day.get(day, {}).get("posts") or 0) for day in days_list]
             return {"days": days_list, **output}
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         first_day = min((row["day"] for row in rows), default=now.date())
@@ -1155,24 +1140,10 @@ class PostgresDatabase:
             start_date = today - timedelta(days=max(1, days) - 1)
         span = max(1, (now.date() - start_date.date()).days + 1)
         days_list = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(span)]
-        totals = {key: 0 for key in ("views", "comments", "reactions", "shares")}
-        by_day: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            day = str(row["day"])
-            if day < days_list[0]:
-                for key in totals:
-                    totals[key] += int(row[key] or 0)
-            else:
-                by_day[day] = dict(row)
-        output: dict[str, list] = {key: [] for key in ("views", "comments", "reactions", "shares", "posts_per_day")}
-        for day in days_list:
-            day_row = by_day.get(day)
-            if day_row:
-                for key in totals:
-                    totals[key] += int(day_row[key] or 0)
-            for key in totals:
-                output[key].append(totals[key])
-            output["posts_per_day"].append(int(day_row["posts"] or 0) if day_row else 0)
+        by_day = {str(row["day"]): dict(row) for row in rows}
+        output = {key: [int(by_day.get(day, {}).get(key) or 0) for day in days_list]
+                  for key in ("views", "comments", "reactions", "shares")}
+        output["posts_per_day"] = [int(by_day.get(day, {}).get("posts") or 0) for day in days_list]
         return {"days": days_list, **output}
 
     # ---------- import diagnostics and overlap-safe jobs ----------

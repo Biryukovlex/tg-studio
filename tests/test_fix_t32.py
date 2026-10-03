@@ -78,7 +78,7 @@ async def test_dashboard_paginates_posts_and_uses_supervised_refresh(tmp_path):
         assert "page post 1" in first.text
         assert "page post 101" not in first.text
         assert "Post Explorer" in first.text
-        assert "Performance by publication date" in first.text
+        assert "Post performance" in first.text
         assert "Showing 1–100 of 250" in first.text
         assert "Page 1 of 3" in first.text
         assert 'aria-label="Last post page"' in first.text
@@ -149,7 +149,7 @@ async def test_overview_chart_uses_post_dates_instead_of_sync_dates(tmp_path):
     older_index = series["days"].index(older_day.strftime("%Y-%m-%d"))
     newer_index = series["days"].index(newer_day.strftime("%Y-%m-%d"))
     assert series["views"][older_index] == 10
-    assert series["views"][older_index + 1] == 10
-    assert series["views"][newer_index] == 30
+    assert series["views"][older_index + 1] == 0
+    assert series["views"][newer_index] == 20
     assert series["posts_per_day"][older_index] == 1
     assert series["posts_per_day"][newer_index] == 1
