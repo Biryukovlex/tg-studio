@@ -10,7 +10,8 @@
   --text: #f3f7fa;
   --soft-text: #c9d3dc;
   --muted: #8394a4;
-  --faint: #5d7080;
+  /* T47: secondary text must clear WCAG AA 4.5:1 on --surface (was #5d7080 at 3.56). */
+  --faint: #8498ab;
   --cyan: #19d2ec;
   --teal: #24d4b8;
   --coral: #ff716a;
@@ -1390,7 +1391,7 @@ html[data-mascot-paused] .ghost-scene *::after {
 .reader-source { margin: 0; font-size: 12px; }
 .reader-source a { color: var(--cyan); }
 .reader-snapshots, .reader-discussion { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
-.reader-snapshots li, .reader-discussion li { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(7, 19, 29, .5); }
+.reader-snapshots li, .reader-discussion li { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(7, 19, 29, .5); overflow-wrap: anywhere; }
 .reader-comment-head { margin: 0 0 4px; color: var(--muted); font-size: 10px; }
 .reader-discussion p { margin: 0; }
 .reader-foot { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 22px 20px; }

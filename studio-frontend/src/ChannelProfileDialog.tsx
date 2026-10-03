@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, csrfToken, fetchStudioPost, type ChannelProfile, type StudioPost, StudioApiError } from "./api";
+import { useDialogFocusTrap } from "./dialogFocus";
 
 type Props = {
   channelId: number;
@@ -52,6 +53,8 @@ export function evidenceIdsFrom(profile: ChannelProfile | null): number[] {
 
 export function ProfileEvidence({ channelId, evidencePostIds }: { channelId: number; evidencePostIds: number[] }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  // Modal isolation: Tab cycles inside the evidence reader.
+  useDialogFocusTrap(dialogRef);
   const [detail, setDetail] = useState<StudioPost | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -207,6 +210,8 @@ export function PreviewMarkdown({ text }: { text: string }) {
 
 export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  // Modal isolation: Tab cycles inside the profile dialog.
+  useDialogFocusTrap(dialogRef);
   // The profile opens formatted; raw-source editing is an explicit Edit
   // action, never the default preview.
   const [mode, setMode] = useState<"edit" | "preview">("preview");

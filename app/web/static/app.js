@@ -536,6 +536,34 @@
     }
   });
 
+  // Modal isolation (T47): Tab and Shift+Tab cycle inside the topmost open
+  // modal dialog instead of leaking to the page behind it. Escape and focus
+  // return stay with each dialog's own handling.
+  const DIALOG_FOCUSABLE = "[autofocus], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])";
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab' || event.defaultPrevented) return;
+    const open = [...document.querySelectorAll('dialog[open]')];
+    if (open.length === 0) return;
+    const dialog = open[open.length - 1];
+    const items = [...dialog.querySelectorAll(DIALOG_FOCUSABLE)].filter(
+      (node) => node instanceof HTMLElement && node.closest('[hidden]') === null,
+    );
+    if (items.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !dialog.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+
   // Charts — read data from data-chart attributes to keep CSP script-src 'self'.
   function parseChartData(element) {
     const raw = element.getAttribute('data-chart') || element.dataset.chart;

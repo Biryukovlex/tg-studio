@@ -36,6 +36,7 @@ import {
   describeSearchOutcome,
 } from "./api";
 import { describeRunFailure } from "./runFailure";
+import { useDialogFocusTrap } from "./dialogFocus";
 import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } from "./runPolling";
 import { copyRenderedSelection, copyRichText, htmlFromMarkdown, isBlankDraftBody, plainFromMarkdown, telegramMarkupFromMarkdown } from "./markdownCopy";
 import ChannelProfileDialog from "./ChannelProfileDialog";
@@ -507,6 +508,8 @@ function ConversationRail({
 
 export function StudioSettings({ channelId, channelLabel, onClose }: { channelId: number; channelLabel: string; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  // Modal isolation: Tab cycles inside the System Prompt dialog.
+  useDialogFocusTrap(dialog);
   const [prompt, setPrompt] = useState("");
   const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
