@@ -251,6 +251,16 @@ first profile is prepared from local deterministic channel evidence and shows a
 low-confidence warning when the channel has too little history. Discussion
 comment bodies are never sent to the model.
 
+Click a conversation title to rename it in place (Enter or leaving the field
+saves; Escape cancels). **My channels** lets you explicitly add another active
+channel in your workspace as a reference for that conversation. Confirm that
+you control the channel and may use its posts with the configured provider.
+Selections persist and can be removed; a provider configuration change requires
+renewing access. The agent can search the stored post archive on demand and
+retain original Telegram links. Reference profiles and posts are evidence;
+other channels' System Prompts, conversations, drafts and comment bodies are
+excluded. Stop an active run before changing its references.
+
 For a local no-network protocol check only, set `STUDIO_TEST_MODE=true`.
 This selects PydanticAI's deterministic TestModel;
 it is an explicit test seam and must not be enabled for a hosted deployment.

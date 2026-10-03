@@ -1587,3 +1587,42 @@ body { font-family: 'Manrope Variable', Manrope, ui-sans-serif, system-ui, sans-
 .chart-points [data-chart-readout] { flex:1 1 180px; }
 
 @media(max-width:680px) { .brand-bar { position:sticky; top:0; z-index:55; background:var(--bg); } }
+
+/* Readable prototype scale and predictable dropdown layers. */
+body { font-size:16px; }
+.page-heading h1 { font-size:32px; }
+.sidebar-link { font-size:13px; }
+.control-row[data-reveal], .motion-ready .control-row[data-reveal].is-visible { position:relative; z-index:30; opacity:1; transform:none; animation:none; }
+.control-caption, .filter-form > label, .chart-controls label, .explorer-row > label { font-size:14px; }
+.date-range-value { font-size:15px; }
+.update-meta, .sync-note, .metric-context, .scope-note, .chart-panel .scope-note { font-size:13px; }
+.metric-label { font-size:14px; }
+.metric-value { font-size:34px; }
+.chart-points, .chart-readout, .chart-summary { font-size:13px; }
+.ui-select-trigger, .ui-select-option { font-size:15px; }
+#posts.panel, .settings-stack > .panel { overflow:visible; }
+.explorer-filters > .explorer-row { display:grid; grid-template-columns:minmax(180px,1fr) 220px; flex:1 1 auto; min-width:0; }
+.explorer-row .explorer-search, .explorer-row .explorer-sort { width:100%; min-width:0; }
+.explorer-search input { font-size:15px; }
+.explorer-table .explorer-open, .explorer-table .link-btn { font-size:15px; }
+.post-meta { font-size:13px; }
+.explorer-table th, .explorer-table .number-cell, .settings-layout .section-tabs a, .field-help, .panel-note { font-size:14px; }
+.channel-card .counts { font-size:13px; }
+.channel-card .card-top strong { font-size:17px; }
+.channel-heading-actions .row-count { font-size:12px; }
+@media(max-width:680px) {
+  .explorer-filters > .explorer-row { grid-template-columns:minmax(0,1fr); flex-basis:100%; }
+  .metric-value { font-size:30px; }
+  .metric-label, .metric-context { font-size:13px; }
+  .chart-controls label { min-width:120px; }
+}
+
+.btn, .action-btn, .filter-form input, .settings-layout input, .settings-layout select { font-size:14px; }
+
+.btn.small { font-size:13px; }
+.date-fieldset legend, .date-fieldset label { font-size:13px; }
+
+@media(max-width:680px) { .sidebar { z-index:60; } }
+.settings-scope, .settings-view-tabs a { font-size:14px; }
+.settings-stack h2 { font-size:22px; }
+.settings-stack .section-kicker, .channel-card .fine, .channel-card .pill { font-size:12px; }

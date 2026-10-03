@@ -1518,15 +1518,11 @@ function StudioThread({
 export function MoreActionsMenu({
   selected,
   busy,
-  onRename,
-  onProfile,
   onSettings,
   onDelete,
 }: {
   selected: Conversation | null;
   busy: boolean;
-  onRename: () => void;
-  onProfile: () => void;
   onSettings: () => void;
   onDelete: (conversation: Conversation) => void;
 }) {
@@ -1598,8 +1594,6 @@ export function MoreActionsMenu({
             else if (event.key === "End") { event.preventDefault(); const items = menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])"); items?.[items.length - 1]?.focus(); }
           }}
         >
-          <button type="button" role="menuitem" disabled={!selected} onClick={act(onRename)}>Rename conversation</button>
-          <button type="button" role="menuitem" onClick={act(onProfile)}>Channel profile</button>
           <button type="button" role="menuitem" onClick={act(onSettings)}>System Prompt</button>
           <button
             type="button"
@@ -1614,58 +1608,100 @@ export function MoreActionsMenu({
   );
 }
 
-/**
- * Compact summary-only surface for the owner's other channels. Until the
- * separately authorized owned-channel backend exists, cross-channel context
- * stays unavailable: this panel shows names only (no archive counts,
- * metrics, discussion, or inspected posts) and its context-use action is
- * disabled with an honest reason. It never moves another channel's chats,
- * prompts, memory, or drafts.
- */
-export function MyChannels({
-  channels,
-  selectedChannelId,
-}: {
-  channels: Channel[];
-  selectedChannelId: number | null;
+type ReferenceChannel = Channel & { summary: string; selected: boolean; needs_renewal: boolean };
+
+export function MyChannels({ channels, selectedChannelId, conversationId, busy = false }: {
+  channels: Channel[]; selectedChannelId: number | null; conversationId: string | null; busy?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [references, setReferences] = useState<ReferenceChannel[]>([]);
+  const [permissions, setPermissions] = useState<Set<number>>(new Set());
+  const [pending, setPending] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const sectionRef = useRef<HTMLElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    setReferences([]); setPermissions(new Set()); setError("");
+    if (!conversationId) return;
+    const controller = new AbortController();
+    void api<{ references: ReferenceChannel[] }>(`/studio/api/conversations/${conversationId}/references`, { signal: controller.signal })
+      .then((payload) => setReferences(payload.references))
+      .catch((reason: unknown) => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Could not load reference channels."); });
+    return () => controller.abort();
+  }, [conversationId]);
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => { if (!sectionRef.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setOpen(false); triggerRef.current?.focus(); } };
+    document.addEventListener("pointerdown", dismiss); document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  const update = async (channel: ReferenceChannel) => {
+    if (!conversationId || pending !== null) return;
+    setPending(channel.id); setError("");
+    try {
+      const payload = await api<{references: ReferenceChannel[]}>(`/studio/api/conversations/${conversationId}/references/${channel.id}`, {
+        method:"PUT", headers:{"content-type":"application/json", "x-csrf-token":csrfToken()},
+        body:JSON.stringify({enabled:!channel.selected, permission:permissions.has(channel.id)}),
+      });
+      setReferences(payload.references);
+    } catch (reason: unknown) { setError(reason instanceof Error ? reason.message : "Could not update the reference."); }
+    finally { setPending(null); }
+  };
   const others = channels.filter((channel) => channel.id !== selectedChannelId);
+  const selectedCount = references.filter((channel) => channel.selected).length;
   if (others.length === 0) return null;
-  return (
-    <section className="studio-my-channels" aria-label="My channels">
-      <button
-        type="button"
-        className="studio-my-channels-toggle"
-        aria-expanded={open}
-        aria-controls="studio-my-channels-body"
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="studio-my-channels-copy">
-          <strong>My channels</strong>
-        </span>
-        <small>{others.length} other{others.length === 1 ? "" : "s"}</small>
-        <span className="studio-my-channels-chevron" aria-hidden="true">{open ? "⌃" : "⌄"}</span>
-      </button>
-      {open && (
-        <div id="studio-my-channels-body" className="studio-my-channels-body">
-          <p>Your other channels. Research across channels is not available yet.</p>
-          <ul>
-            {others.map((channel) => (
-              <li key={channel.id} className="studio-my-channels-card">
-                <div>
-                  <strong>{channelLabel(channel)}</strong>
-                  <span>{channel.identifier}</span>
-                </div>
-                <p>Open this channel’s Studio to view its profile.</p>
-                <button type="button" disabled title="Research across channels is not available yet">Use in this conversation</button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </section>
-  );
+  return <section ref={sectionRef} className="studio-my-channels" aria-label="My channels">
+    <button ref={triggerRef} type="button" className="studio-my-channels-toggle" aria-expanded={open} aria-controls="studio-my-channels-body" onClick={() => setOpen((current) => !current)}>
+      <span className="studio-my-channels-copy"><strong>My channels{selectedCount ? ` · ${selectedCount}` : ""}</strong></span><span aria-hidden="true">{open ? "⌃" : "⌄"}</span>
+    </button>
+    {open && <div id="studio-my-channels-body" className="studio-my-channels-body">
+      <p>Use your other channels as references for this conversation.</p>
+      {!conversationId && <p>Create a conversation to add a reference.</p>}
+      {error && <p role="alert">{error}</p>}
+      <ul>{references.map((channel) => <li key={channel.id} className="studio-my-channels-card">
+        <div><strong>{channelLabel(channel)}</strong><span>{channel.identifier}</span></div>
+        <p>{channel.summary || "No profile has been built for this channel yet."}</p>
+        {!channel.selected && <label className="studio-reference-permission"><input type="checkbox" checked={permissions.has(channel.id)} onChange={(event) => setPermissions((current) => { const next = new Set(current); if (event.target.checked) next.add(channel.id); else next.delete(channel.id); return next; })} />I control this channel and have permission to use its posts with Studio and the configured AI provider.</label>}
+        <button type="button" disabled={busy || pending !== null || (!channel.selected && !permissions.has(channel.id))} onClick={() => { void update(channel); }}>{channel.selected ? "Remove from context" : channel.needs_renewal ? "Renew reference access" : "Use in this conversation"}</button>
+        {channel.selected && <span className="studio-reference-selected" role="status">Connected to this conversation</span>}
+      </li>)}</ul>
+    </div>}
+  </section>;
+}
+
+export function ConversationTitle({ conversation, onRenamed }: { conversation: Conversation | null; onRenamed: (conversation: Conversation) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const cancelled = useRef(false);
+  const savingRef = useRef(false);
+  const mounted = useRef(true);
+  const scope = useRef(conversation?.id);
+  scope.current = conversation?.id;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { setEditing(false); setError(""); }, [conversation?.id]);
+  useEffect(() => { if (editing) { inputRef.current?.focus(); inputRef.current?.select(); } }, [editing]);
+  const save = async () => {
+    if (!conversation || cancelled.current || savingRef.current) return;
+    const title = value.trim();
+    if (!title || title === conversation.title) { setEditing(false); return; }
+    savingRef.current = true; setSaving(true); setError("");
+    try {
+      const result = await api<{conversation:Conversation}>(`/studio/api/conversations/${conversation.id}`, {method:"PATCH", headers:{"content-type":"application/json","x-csrf-token":csrfToken()}, body:JSON.stringify({title})});
+      if (mounted.current && scope.current === conversation.id) { onRenamed(result.conversation); setEditing(false); }
+    } catch (reason: unknown) { setError(reason instanceof Error ? reason.message : "Could not rename the conversation."); }
+    finally { savingRef.current=false; setSaving(false); }
+  };
+  return <div className="studio-title-row">
+    {editing ? <input ref={inputRef} className="studio-title-input" aria-label="Conversation title" maxLength={160} value={value} disabled={saving} onChange={(event) => setValue(event.target.value)} onBlur={() => { void save(); }} onKeyDown={(event) => {
+      if (event.key === "Enter") { event.preventDefault(); void save(); }
+      if (event.key === "Escape") { event.preventDefault(); cancelled.current = true; setEditing(false); setError(""); }
+    }} /> : <h1>{conversation ? <button className="studio-title-trigger" type="button" aria-label="Rename conversation" title="Click to rename" onClick={() => { cancelled.current=false; setValue(conversation.title); setEditing(true); }}>{conversation.title}</button> : "Content Studio"}</h1>}
+    {error && <p role="alert">{error}</p>}
+  </div>;
 }
 
 function StudioApp() {
@@ -1684,9 +1720,6 @@ function StudioApp() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [agentRunActive, setAgentRunActive] = useState(false);
   const [draftRefreshToken, setDraftRefreshToken] = useState(0);
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleText, setTitleText] = useState("");
-  const [titleError, setTitleError] = useState("");
   const bootstrapRef = useRef<Bootstrap | null>(null);
   const selectedChannelRef = useRef<number | null>(selectedChannelId);
   const refreshSequence = useRef(0);
@@ -1758,7 +1791,6 @@ function StudioApp() {
       return () => window.clearTimeout(timer);
     }
   }, [agentRunActive, refresh]);
-  useEffect(() => { setEditingTitle(false); setTitleError(""); }, [selected?.id]);
 
   const cancelRun = useCallback(async (runId: string) => {
     await api(`/studio/api/runs/${encodeURIComponent(runId)}/cancel`, {
@@ -1767,14 +1799,6 @@ function StudioApp() {
     });
   }, []);
 
-  const rename = () => {
-    if (!selected || !titleText.trim()) return;
-    void api<{ conversation: Conversation }>(`/studio/api/conversations/${selected.id}`, {
-      method: "PATCH", headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
-      body: JSON.stringify({ title: titleText.trim() }),
-    }).then(({ conversation }) => { setSelected(conversation); setEditingTitle(false); setTitleError(""); refresh(); })
-      .catch((reason: unknown) => setTitleError(reason instanceof Error ? reason.message : "Could not rename."));
-  };
 
   const selectChannel = useCallback((channelId: number) => {
     if (!Number.isInteger(channelId) || channelId <= 0 || channelId === selectedChannelRef.current) return;
@@ -2000,17 +2024,14 @@ function StudioApp() {
         <header className="studio-topbar">
           <div>
             <p className="studio-overline">{selectedChannel?.identifier ?? "Channel"}</p>
-            {editingTitle ? <form className="studio-title-editor" onSubmit={(event) => { event.preventDefault(); rename(); }}><input autoFocus aria-label="Conversation title" maxLength={160} value={titleText} onChange={(event) => setTitleText(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditingTitle(false); }} /><button type="submit" disabled={!titleText.trim()}>Save</button><button type="button" onClick={() => setEditingTitle(false)}>Cancel</button></form> : <div className="studio-title-row"><h1 title={selected?.title}>{selected?.title ?? "Content Studio"}</h1></div>}
-            {titleError && <p role="alert">{titleError}</p>}
+            <ConversationTitle key={selected?.id} conversation={selected} onRenamed={(conversation) => { setSelected(conversation); refresh(); }} />
           </div>
           <div className="studio-topbar-actions">
             <button type="button" className="studio-draft-toggle" onClick={openDraft}>Draft</button>
-            <MyChannels channels={bootstrap.channels} selectedChannelId={selectedChannelId} />
+            <MyChannels key={selected?.id} channels={bootstrap.channels} selectedChannelId={selectedChannelId} conversationId={selected?.id ?? null} busy={agentRunActive} />
             <MoreActionsMenu
               selected={selected}
               busy={deletingId !== null}
-              onRename={() => { if (selected) { setTitleText(selected.title); setEditingTitle(true); } }}
-              onProfile={() => setProfileOpen(true)}
               onSettings={() => setSettingsOpen(true)}
               onDelete={deleteConversation}
             />

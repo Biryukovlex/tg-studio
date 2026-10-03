@@ -22,6 +22,7 @@ from .repository import ActiveRunExists, ConversationNotFound, DraftNotFound, Ru
 from .prompts import PROMPT_VERSION
 from .schemas import ConversationCreate, DraftPatchRequest, ProviderConsentRequest, StudioSettingsPatch
 from .service import StudioService
+from .references import ReferenceChannels
 from .setup import build_setup_state
 from .search_health import check_search_health
 from .observability import duration_ms, normalize_usage, safe_error, safe_error_for_code
@@ -708,6 +709,44 @@ def build_router() -> APIRouter:
         except ConversationNotFound:
             return _safe_error("channel_not_found", "Selected channel is not part of this workspace.", status_code=404)
         return {"conversation": _conversation(row)}
+
+    @router.get("/api/conversations/{conversation_id}/references")
+    async def conversation_references(request: Request, conversation_id: str):
+        require_auth(request)
+        try:
+            references = ReferenceChannels(_service(request).repository, _settings(request))
+            refs = await references.list(uuid.UUID(conversation_id))
+        except (ConversationNotFound, ValueError):
+            return _safe_error("conversation_not_found", "Conversation not found.", status_code=404)
+        return {"references": refs}
+
+    @router.put("/api/conversations/{conversation_id}/references/{channel_id}")
+    async def set_conversation_reference(request: Request, conversation_id: str, channel_id: str):
+        context = require_auth(request)
+        require_csrf(request)
+        consent = await _consent(request, context)
+        try:
+            conversation_id = uuid.UUID(conversation_id)
+            channel_id = int(channel_id)
+            payload = await request.json()
+            if (
+                not isinstance(payload, dict) or set(payload) - {"enabled", "permission"}
+                or not isinstance(payload.get("enabled"), bool)
+                or not isinstance(payload.get("permission", False), bool)
+            ):
+                raise ValueError("Invalid reference selection.")
+            if payload["enabled"] and not consent["granted"]:
+                return _safe_error("consent_required", "Allow the configured provider in Studio before adding a reference.", status_code=409)
+            references = ReferenceChannels(_service(request).repository, _settings(request))
+            refs = await references.set(
+                conversation_id, channel_id, enabled=payload["enabled"],
+                permission=payload.get("permission", False), user_id=context.user_id,
+            )
+        except ConversationNotFound:
+            return _safe_error("reference_not_found", "Reference channel or conversation not found.", status_code=404)
+        except (ValueError, TypeError):
+            return _safe_error("invalid_reference", "Confirm permission to use this channel's posts, and stop any active run before changing references.", status_code=422)
+        return {"references": refs}
 
     @router.patch("/api/conversations/{conversation_id}")
     async def rename_conversation(request: Request, conversation_id: str):

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   PREFILL_MAX_TEXT,
   PREFILL_STORAGE_KEY,
@@ -12,6 +12,8 @@ import { isBlankDraftBody } from "./markdownCopy";
 import {
   ChannelPicker,
   MoreActionsMenu,
+  ConversationTitle,
+  MyChannels,
   draftPreviewHtml,
   isStaleScope,
 } from "./main";
@@ -226,41 +228,96 @@ describe("custom channel picker", () => {
 });
 
 describe("single More actions menu", () => {
-  it("keeps secondary actions in one anchored menu", () => {
-    const onRename = vi.fn();
-    const onDelete = vi.fn();
-    const selected = conversation("c1");
-    render(
-      <MoreActionsMenu
-        selected={selected}
-        busy={false}
-        onRename={onRename}
-        onProfile={() => undefined}
-        onSettings={() => undefined}
-        onDelete={onDelete}
-      />,
-    );
-    // Secondary actions are hidden until the menu opens: no inline buttons.
+  it("contains System Prompt and deletion without duplicate profile or rename", () => {
+    const onSettings = vi.fn();
+    render(<MoreActionsMenu selected={conversation("c1")} busy={false} onSettings={onSettings} onDelete={vi.fn()} />);
     expect(screen.queryByRole("menuitem")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "More actions" }));
-    expect(screen.getAllByRole("menuitem")).toHaveLength(4);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Rename conversation" }));
-    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+    expect(screen.queryByRole("menuitem", { name: /Profile|Rename/ })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: /System Prompt/ }));
+    expect(onSettings).toHaveBeenCalledTimes(1);
   });
-
-  it("disables conversation actions without a selection", () => {
-    render(
-      <MoreActionsMenu
-        selected={null}
-        busy={false}
-        onRename={() => undefined}
-        onProfile={() => undefined}
-        onSettings={() => undefined}
-        onDelete={() => undefined}
-      />,
-    );
+  it("disables deletion without a selected conversation", () => {
+    render(<MoreActionsMenu selected={null} busy={false} onSettings={vi.fn()} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "More actions" }));
-    expect(screen.getByRole("menuitem", { name: "Rename conversation" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("menuitem", { name: /Delete conversation/ }).hasAttribute("disabled")).toBe(true);
+  });
+});
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("inline conversation title", () => {
+  it.each(["Enter", "blur"])("saves the title once on %s", async (action) => {
+    const renamed = { ...conversation("c1"), title: "New title" };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({conversation: renamed}), {status:200,headers:{"content-type":"application/json"}}));
+    vi.stubGlobal("fetch", fetchMock);
+    const onRenamed = vi.fn();
+    render(<ConversationTitle conversation={conversation("c1")} onRenamed={onRenamed} />);
+    fireEvent.click(screen.getByRole("button", {name:"Rename conversation"}));
+    const input = screen.getByRole("textbox", {name:"Conversation title"});
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, {target:{value:"  New title  "}});
+    if (action === "Enter") fireEvent.keyDown(input, {key:"Enter"});
+    fireEvent.blur(input);
+    await waitFor(() => expect(onRenamed).toHaveBeenCalledWith(renamed));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({title:"New title"});
+  });
+  it("does not switch back to a previous conversation when its save returns late", async () => {
+    let resolve!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => new Promise<Response>((done) => {resolve = done;})));
+    const onRenamed = vi.fn();
+    const view = render(<ConversationTitle conversation={conversation("c1")} onRenamed={onRenamed} />);
+    fireEvent.click(screen.getByRole("button", {name:"Rename conversation"}));
+    fireEvent.change(screen.getByRole("textbox"), {target:{value:"Late result"}});
+    fireEvent.keyDown(screen.getByRole("textbox"), {key:"Enter"});
+    view.rerender(<ConversationTitle conversation={conversation("c2")} onRenamed={onRenamed} />);
+    await act(async () => resolve(new Response(JSON.stringify({conversation:{...conversation("c1"),title:"Late result"}}), {headers:{"content-type":"application/json"}})));
+    expect(onRenamed).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", {name:"Rename conversation"}).textContent).toBe("Conversation c2");
+  });
+  it("cancels on Escape without persisting the edited text", () => {
+    const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+    render(<ConversationTitle conversation={conversation("c1")} onRenamed={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", {name:"Rename conversation"}));
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, {target:{value:"Cancelled"}});
+    fireEvent.keyDown(input, {key:"Escape"});
+    expect(screen.getByRole("button", {name:"Rename conversation"}).textContent).toBe("Conversation c1");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("keeps the edited value when saving fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({error:{message:"Try again"}}), {status:500,headers:{"content-type":"application/json"}})));
+    render(<ConversationTitle conversation={conversation("c1")} onRenamed={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", {name:"Rename conversation"}));
+    fireEvent.change(screen.getByRole("textbox"), {target:{value:"Keep me"}});
+    fireEvent.keyDown(screen.getByRole("textbox"), {key:"Enter"});
+    await screen.findByRole("alert");
+    expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("Keep me");
+  });
+});
+
+describe("conversation reference channels", () => {
+  it("requires permission, persists a selection and allows removal", async () => {
+    const ref = {...channel(9,"Other channel"), summary:"Useful topics", selected:false, needs_renewal:false};
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({references:[ref]}), {headers:{"content-type":"application/json"}}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({references:[{...ref,selected:true}]}), {headers:{"content-type":"application/json"}}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({references:[ref]}), {headers:{"content-type":"application/json"}}));
+    vi.stubGlobal("fetch",fetchMock);
+    render(<MyChannels channels={[channel(7,"Main"),ref]} selectedChannelId={7} conversationId="c1" />);
+    fireEvent.click(screen.getByRole("button",{name:/My channels/}));
+    const add = await screen.findByRole("button",{name:"Use in this conversation"});
+    expect(add.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(add);
+    const remove = await screen.findByRole("button",{name:"Remove from context"});
+    expect(screen.getByRole("status").textContent).toBe("Connected to this conversation");
+    expect(fetchMock.mock.calls[1][0]).toBe("/studio/api/conversations/c1/references/9");
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({enabled:true,permission:true});
+    fireEvent.click(remove);
+    await screen.findByRole("button",{name:"Use in this conversation"});
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body).enabled).toBe(false);
   });
 });

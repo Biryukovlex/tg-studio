@@ -286,6 +286,7 @@ class StudioConversation(Base):
     channel_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False, server_default="New conversation")
     summary: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    reference_channels: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default=sql_text("'[]'::jsonb"))
     active_draft_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
