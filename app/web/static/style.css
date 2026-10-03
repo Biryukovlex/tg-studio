@@ -1119,12 +1119,20 @@ html[data-mascot-paused] .ghost-scene *::after {
   opacity: .45;
   cursor: not-allowed;
 }
-.ui-native-select {
+select.ui-native-select[aria-hidden="true"] {
   position: absolute;
   width: 1px;
   height: 1px;
   overflow: hidden;
   clip: rect(0 0 0 0);
+  min-width: 0;
+  max-width: 1px;
+  min-height: 0;
+  max-height: 1px;
+  left: 0;
+  top: 0;
+  padding: 0;
+  margin: 0;
 }
 
 /* Shared dialog primitive (native dialog; see ui-controls.js). */

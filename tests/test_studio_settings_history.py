@@ -145,3 +145,20 @@ async def test_existing_artifact_turn_requires_revision_instead_of_duplicate_cre
         pass
 
     assert seen == [("get_channel_context", "revise_draft")]
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_conflict_preserves_the_saved_prompt(client, settings, app, channel_id):
+    settings.studio_test_mode = True
+    await client.post('/login', data={'username': settings.admin_username, 'password': settings.admin_password})
+    page = await client.get('/studio')
+    token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', page.text).group(1)
+    headers = {'x-csrf-token': token}
+    first = await client.patch('/studio/api/settings', headers=headers, json={
+        'channel_id': channel_id, 'system_prompt': 'First editor', 'expected_prompt': ''})
+    assert first.status_code == 200
+    stale = await client.patch('/studio/api/settings', headers=headers, json={
+        'channel_id': channel_id, 'system_prompt': 'Stale editor', 'expected_prompt': ''})
+    assert stale.status_code == 409
+    assert stale.json()['error']['code'] == 'system_prompt_conflict'
+    assert await app.state.studio_repository.get_system_prompt(channel_id) == 'First editor'

@@ -37,14 +37,8 @@ export function extractConflictProfile(error: unknown): ChannelProfile | null {
   return server ?? null;
 }
 
-/**
- * Supporting-post evidence for a built profile. The backend stores evidence
- * post IDs with the analysis; until it exposes them on the profile payload
- * (see handoff: add `evidence_post_ids` to the profile serializer) this
- * section stays hidden rather than showing a dead control. When present,
- * each entry opens the full sanitized post through the T51 read model —
- * never an excerpt.
- */
+/** Supporting posts come from the saved analysis or current build and use
+ * the authorized, full Telegram post reader. */
 export function evidenceIdsFrom(profile: ChannelProfile | null): number[] {
   const ids = profile?.evidence_post_ids;
   if (!Array.isArray(ids)) return [];
@@ -220,6 +214,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
   const [style, setStyle] = useState("");
   const [initial, setInitial] = useState<{ topics: string; editorial: string; style: string; version: number } | null>(null);
   const [profile, setProfile] = useState<ChannelProfile | null>(null);
+  const [buildEvidence, setBuildEvidence] = useState<number[] | null>(null);
   const [canBuild, setCanBuild] = useState(true);
   const [blockers, setBlockers] = useState<Array<{ code: string; message: string }>>([]);
   const [building, setBuilding] = useState(false);
@@ -242,6 +237,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
         if (!alive || payload.channel_id !== channelId) return;
         const p = payload.profile;
         setProfile(p);
+        setBuildEvidence(null);
         setCanBuild(payload.can_build);
         setBlockers(payload.build_blockers);
         const t = p?.topics_text ?? "";
@@ -283,21 +279,19 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
     setStatus("Analyzing posts. Compatibility retries can take up to 90 seconds.");
     setStatusIsError(false);
     try {
-      const result = await api<{ draft: { topics_text: string; editorial_text: string; style_text: string; built_from_posts: number; limitations?: string[] } }>("/studio/api/profile/build", {
+      const result = await api<{ draft: { topics_text: string; editorial_text: string; style_text: string; built_from_posts: number; evidence_post_ids?: number[]; limitations?: string[] } }>("/studio/api/profile/build", {
         method: "POST",
         headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
         body: JSON.stringify({ channel_id: channelId }),
       });
       const d = result.draft;
+      setBuildEvidence(d.evidence_post_ids ?? []);
       setTopics(d.topics_text ?? "");
       setEditorial(d.editorial_text ?? "");
       setStyle(d.style_text ?? "");
       // A fresh build opens formatted; edits stay an explicit action.
       setMode("preview");
-      const usedLocalFallback = d.limitations?.some((item) => item.includes("built locally"));
-      setStatus(usedLocalFallback
-        ? "The model could not return a valid profile, so this draft was built locally from channel statistics. Review it before saving."
-        : "Build replaces the text in all three fields with a fresh analysis of your posts. Nothing is saved until you press Save.");
+      setStatus("Build replaces the text in all three fields with a fresh analysis of your posts. Nothing is saved until you press Save.");
       setStatusIsError(false);
     } catch (e) {
       const message = e instanceof StudioApiError ? (e.payload.error?.message ?? "Could not build.") : "Could not build.";
@@ -327,6 +321,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
         body: JSON.stringify({
           channel_id: channelId,
           expected_version: expected,
+          ...(buildEvidence !== null ? { evidence_post_ids: buildEvidence } : {}),
           topics_text: topics,
           editorial_text: editorial,
           style_text: style,
@@ -334,6 +329,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
       });
       const p = result.profile;
       setProfile(p);
+      setBuildEvidence(null);
       setInitial({ topics: p.topics_text ?? "", editorial: p.editorial_text ?? "", style: p.style_text ?? "", version: p.version });
       setConflictProfile(null);
       setStatus(`Saved as v${p.version}. The agent uses it from the next message.`);
@@ -404,7 +400,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
         </div>
       </header>
       <p className="studio-profile-meta">{formatMeta(profile)}</p>
-      <ProfileEvidence channelId={channelId} evidencePostIds={evidenceIdsFrom(profile)} />
+      <ProfileEvidence channelId={channelId} evidencePostIds={buildEvidence ?? evidenceIdsFrom(profile)} />
 
       {mode === "edit" ? (
         <>

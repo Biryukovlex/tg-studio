@@ -25,14 +25,14 @@
   </div>
 </section>
 
-<div class="banner warn" data-logs-availability hidden role="alert">Agent log storage is unavailable. Saved results cannot be listed right now; try again later.</div>
+<div class="banner warn" data-logs-availability {% if logs_available %}hidden{% endif %} role="alert">Agent log storage is unavailable. Saved results cannot be listed right now; try again later.</div>
 
 <form method="get" action="/settings/logs" class="log-toolbar" data-logs-filter role="search" aria-label="Filter agent logs">
   <label class="log-filter-field log-filter-search">Search<input type="search" name="q" value="{{ request.query_params.get('q', '') }}" maxlength="200" placeholder="Conversation, tool or result…" aria-label="Search logs"></label>
   <label class="log-filter-field">Channel<input type="text" name="channel" value="{{ request.query_params.get('channel', '') }}" inputmode="numeric" placeholder="ID" aria-label="Channel ID" aria-describedby="log-channel-help"></label>
   <label class="log-filter-field">Status
     {% set current_status = request.query_params.get('status', '') %}
-    <select name="status" aria-label="Run status">
+    <select data-ui-dropdown name="status" aria-label="Run status">
       <option value="" {% if not current_status %}selected{% endif %}>All statuses</option>
       <option value="queued" {% if current_status == 'queued' %}selected{% endif %}>Queued</option>
       <option value="running" {% if current_status == 'running' %}selected{% endif %}>Running</option>
@@ -82,11 +82,13 @@
     </details>
   </article>
   {% else %}
+  {% if logs_available %}
   <section class="panel agent-log-empty" data-reveal>
     <i class="mgc mgc-terminal-box-core-regular" aria-hidden="true"></i>
     <h2>No tool results yet</h2>
     <p>Run the Studio agent with a task that uses a tool. New full results will appear here.</p>
   </section>
+  {% endif %}
   {% endfor %}
 </div>
 

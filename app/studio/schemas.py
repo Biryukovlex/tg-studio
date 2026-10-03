@@ -12,6 +12,7 @@ class StudioSettingsPatch(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     channel_id: int = Field(gt=0)
     system_prompt: str = Field(max_length=12000)
+    expected_prompt: str | None = Field(default=None, max_length=12000)
 
 
 class ChannelContext(BaseModel):
@@ -103,6 +104,7 @@ class ProfileTextPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     channel_id: int
     expected_version: int = Field(ge=0)
+    evidence_post_ids: list[int] | None = Field(default=None, max_length=30)
     topics_text: str = Field(default="", max_length=2000)
     editorial_text: str = Field(default="", max_length=2000)
     style_text: str = Field(default="", max_length=2000)

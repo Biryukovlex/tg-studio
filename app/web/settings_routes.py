@@ -430,6 +430,7 @@ async def settings_logs_page(
         {
             "request": request,
             "logs": logs,
+            "logs_available": available,
             "page": page,
             "has_next": has_next,
             "can_manage_settings": True,

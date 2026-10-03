@@ -529,7 +529,7 @@ export function StudioSettings({ channelId, channelLabel, onClose }: { channelId
   }, [channelId]);
   // Channel-scoped and separately named: edits here never leave this
   // channel, and closing with unsaved edits asks first. The server is
-  // last-writer-wins, so every failure path keeps the local text.
+  // checked against the loaded text, so conflicts keep the local text.
   const dirty = initialPrompt !== null && prompt !== initialPrompt;
   const closeWithConfirm = () => {
     if (dirty && !window.confirm("Discard unsaved System Prompt changes?")) return;
@@ -538,10 +538,12 @@ export function StudioSettings({ channelId, channelLabel, onClose }: { channelId
   const save = async () => {
     setSaving(true); setNotice("");
     try {
-      await api("/studio/api/settings", { method: "PATCH", headers: { "content-type": "application/json", "x-csrf-token": csrfToken() }, body: JSON.stringify({ channel_id: channelId, system_prompt: prompt }) });
+      await api("/studio/api/settings", { method: "PATCH", headers: { "content-type": "application/json", "x-csrf-token": csrfToken() }, body: JSON.stringify({ channel_id: channelId, system_prompt: prompt, expected_prompt: initialPrompt }) });
       setInitialPrompt(prompt);
       setNotice(`Saved for ${channelLabel}. It applies to this channel's conversations only.`);
-    } catch { setNotice("Could not save. Your text is preserved; try again."); }
+    } catch (error) { setNotice(error instanceof StudioApiError && error.status === 409
+      ? "System Prompt changed in another tab. Your text is preserved; copy it before reopening to load the saved instructions."
+      : "Could not save. Your text is preserved; try again."); }
     finally { setSaving(false); }
   };
   const clear = () => {
@@ -1901,7 +1903,9 @@ function StudioApp() {
     setPendingPrefill(null);
   }, []);
 
+  const draftOpener = useRef<HTMLElement | null>(null);
   const openDraft = () => {
+    draftOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const viewport = document.querySelector(".studio-viewport");
     chatScroll.current = viewport instanceof HTMLElement ? viewport.scrollTop : 0;
     setDraftOpen(true);
@@ -1910,18 +1914,36 @@ function StudioApp() {
 
   useEffect(() => {
     document.body.classList.toggle("studio-draft-open", draftOpen);
+    const overlay = window.matchMedia("(max-width: 1080px)");
+    const background = [...document.querySelectorAll<HTMLElement>(".studio-main, .studio-rail")];
+    const updateIsolation = () => {
+      background.forEach(node => { node.inert = draftOpen && overlay.matches; });
+      if (draftOpen && overlay.matches) document.querySelector<HTMLElement>(".studio-draft-close")?.focus();
+    };
+    updateIsolation();
+    overlay.addEventListener("change", updateIsolation);
+    const escape = (event: KeyboardEvent) => {
+      if (draftOpen && overlay.matches && event.key === "Escape") setDraftOpen(false);
+    };
+    document.addEventListener("keydown", escape);
     if (!draftOpen) {
       const top = chatScroll.current;
       const restore = () => {
         const viewport = document.querySelector(".studio-viewport");
         if (viewport instanceof HTMLElement) viewport.scrollTop = top;
+        if (draftOpener.current?.isConnected) draftOpener.current.focus();
       };
       // The overlay unmounts first; restore on the next frame so Back
       // returns to the same chat scroll.
       if (typeof requestAnimationFrame === "function") requestAnimationFrame(restore);
       else restore();
     }
-    return () => document.body.classList.remove("studio-draft-open");
+    return () => {
+      document.body.classList.remove("studio-draft-open");
+      background.forEach(node => { node.inert = false; });
+      overlay.removeEventListener("change", updateIsolation);
+      document.removeEventListener("keydown", escape);
+    };
   }, [draftOpen]);
 
   const waitForRunToFinish = useCallback(async (conversationId: string, runId: string) => {

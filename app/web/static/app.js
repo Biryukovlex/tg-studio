@@ -822,7 +822,7 @@
     const searchInput = explorerForm.querySelector('input[name="q"]');
     const sortSelect = explorerForm.querySelector('select[name="sort"]');
     let explorerSequence = 0;
-    let resultIds = [];
+
     let currentPage = 1;
     let totalPages = 1;
 
@@ -889,7 +889,7 @@
     function renderExplorerRows(rows) {
       if (!rowsBody) return;
       rowsBody.textContent = '';
-      resultIds = rows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id));
+      readerIds = rows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id));
       if (rows.length === 0) {
         const empty = document.createElement('tr');
         const cell = document.createElement('td');
@@ -1273,6 +1273,7 @@
       window.location.href = '/studio';
     });
   });
+  const postCanvas = document.getElementById('postChart');
   if (postCanvas && typeof window.Chart !== 'undefined') {
     const data = parseChartData(postCanvas);
     if (data && Array.isArray(data.labels)) {

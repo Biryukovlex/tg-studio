@@ -73,6 +73,15 @@
     trigger.dataset.ghostReady = "true";
 
     var mode = trigger.dataset.ghostMode || "overview";
+    // Jinja form submissions reload the document without switching screens.
+    // Persist the last screen in this tab so filtering/reselecting stays idle.
+    var enteredPage = true;
+    try {
+      var previousPage = window.sessionStorage.getItem("tg-studio:ghost-page");
+      enteredPage = previousPage !== mode;
+      window.sessionStorage.setItem("tg-studio:ghost-page", mode);
+    } catch (err) { /* Storage restrictions keep normal entry behaviour. */ }
+
     var svg = trigger.querySelector("svg.ghost-scene");
     var lookTimer = null;
     var destroyed = false;
@@ -243,12 +252,12 @@
       neutralise(svg, mode);
       svg.addEventListener("animationend", onAnimationEnd);
       // Accepted page entry plays once; reduced motion stays neutral.
-      if (!document.hidden) playGhost();
+      if (enteredPage && !document.hidden) playGhost();
       else scheduleLook();
     } else {
       var src = trigger.dataset.ghostSrc;
       if (src && typeof window.fetch === "function") {
-        loadScene(src, !document.hidden && !motionReduced());
+        loadScene(src, enteredPage && !document.hidden && !motionReduced());
         if (motionReduced() || document.hidden) scheduleLook();
       }
     }

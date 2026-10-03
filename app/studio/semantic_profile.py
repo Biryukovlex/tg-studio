@@ -203,7 +203,7 @@ def _dedupe_clean(lines, *, limit: int) -> tuple[list[str], int]:
 async def build_profile_text_draft(analytics, rows, settings, *, model=None, current: dict | None = None):
     """Return a ProfileDraft for the Channel Profile dialog.
 
-    Test mode (or a missing provider key) yields the deterministic draft so the
+    Test mode yields the deterministic draft so the
     UI and API are testable offline. Otherwise the configured model extracts
     topics and rules from a bounded, sanitized sample of posts; the server then
     filters template-like lines and forbidden markup and prepends the
@@ -215,8 +215,11 @@ async def build_profile_text_draft(analytics, rows, settings, *, model=None, cur
 
     deterministic = _build_draft_from_analytics(analytics, rows)
     has_key = bool(str(getattr(settings, "openrouter_api_key", "") or "").strip())
-    if model is None and (getattr(settings, "studio_test_mode", False) or not has_key):
+    if model is None and getattr(settings, "studio_test_mode", False):
+        deterministic.evidence_post_ids = [p.post_id for p in analytics.evidence_posts[:30]]
         return deterministic
+    if model is None and not has_key:
+        raise ValueError("A configured provider is required to build a profile")
 
     text_by_id = {int(r.get("post_id", r.get("id", 0))): str(r.get("text") or "") for r in rows}
     ordered_ids: list[int] = []
@@ -298,15 +301,12 @@ All three values must be JSON arrays of strings. Do not use Markdown fences arou
                     usage_limits=UsageLimits(request_limit=2),
                 )
             extraction = _parse_profile_json(plain_result.output)
-        except Exception as exc:  # noqa: BLE001 - keep profile building available offline/degraded
+        except Exception as exc:  # noqa: BLE001 - surface failure after both provider modes
             log.warning(
-                "Plain-JSON channel-profile extraction failed with %s; using deterministic profile",
+                "Plain-JSON channel-profile extraction failed with %s; profile build failed",
                 type(exc).__name__,
             )
-            deterministic.limitations.append(
-                "The configured model could not return a valid profile; this draft was built locally from channel statistics."
-            )
-            return deterministic
+            raise ValueError("The configured model could not return a valid profile. The previous profile is unchanged.") from exc
 
     topics, r1 = _dedupe_clean(extraction.topics, limit=160)
     editorial, r2 = _dedupe_clean(extraction.editorial_rules, limit=200)
@@ -327,4 +327,5 @@ All three values must be JSON arrays of strings. Do not use Markdown fences arou
         built_from_posts=len(rows),
         limitations=limitations,
         formatting_facts=facts,
+        evidence_post_ids=[p["post_id"] for p in posts],
     )

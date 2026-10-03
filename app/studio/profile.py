@@ -90,6 +90,7 @@ class ProfileDraft(BaseModel):
     built_from_posts: int = 0
     limitations: list[str] = Field(default_factory=list)
     formatting_facts: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_post_ids: list[int] = Field(default_factory=list, max_length=30)
 
 
 class ProfileAnalysis(BaseModel):

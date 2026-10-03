@@ -22,6 +22,10 @@ from .drafts import (
 )
 
 
+class SystemPromptConflict(ValueError):
+    """Another editor changed the channel instructions."""
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -213,7 +217,7 @@ class StudioRepositoryProtocol(Protocol):
     async def channel_context(self, channel_id: int) -> dict[str, Any]: ...
     async def performance_rows(self, channel_id: int, limit: int = 2000) -> list[dict[str, Any]]: ...
     async def get_system_prompt(self, channel_id: int) -> str: ...
-    async def set_system_prompt(self, channel_id: int, value: str) -> str: ...
+    async def set_system_prompt(self, channel_id: int, value: str, *, expected_prompt: str | None = None) -> str: ...
     async def get_profile(self, channel_id: int) -> dict[str, Any] | None: ...
     async def get_analysis(self, analysis_id: uuid.UUID) -> dict[str, Any] | None: ...
     async def create_analysis(self, payload: dict[str, Any]) -> dict[str, Any]: ...
@@ -285,16 +289,19 @@ class StudioRepository:
         )
         return str(result.scalar_one_or_none() or "")
 
-    async def set_system_prompt(self, channel_id: int, value: str) -> str:
+    async def set_system_prompt(self, channel_id: int, value: str, *, expected_prompt: str | None = None) -> str:
         if len(value) > 12000:
             raise ValueError("Studio instructions exceed 12000 characters")
         result = await self.db._execute(
             """UPDATE channels SET studio_system_prompt=:prompt
                 WHERE workspace_id=:workspace_id AND id=:channel_id AND active=true
+                  AND (CAST(:expected_prompt AS text) IS NULL OR COALESCE(studio_system_prompt, '')=:expected_prompt)
                 RETURNING id""",
-            {"channel_id": int(channel_id), "prompt": value},
+            {"channel_id": int(channel_id), "prompt": value, "expected_prompt": expected_prompt},
         )
         if result.scalar_one_or_none() is None:
+            if expected_prompt is not None:
+                raise SystemPromptConflict("System Prompt changed in another tab")
             raise ConversationNotFound("channel is not part of the active workspace")
         return value
 
@@ -461,8 +468,10 @@ class StudioRepository:
 
     async def get_profile(self, channel_id: int) -> dict[str, Any] | None:
         result = await self.db._execute(
-            """SELECT * FROM studio_profiles
-                WHERE workspace_id=:workspace_id AND channel_id=:channel_id""",
+            """SELECT p.*, COALESCE(p.style_profile->'evidence_post_ids', a.evidence_post_ids) AS evidence_post_ids FROM studio_profiles p
+                LEFT JOIN studio_analyses a ON a.id=p.current_analysis_id
+                  AND a.workspace_id=p.workspace_id AND a.channel_id=p.channel_id
+                WHERE p.workspace_id=:workspace_id AND p.channel_id=:channel_id""",
             {"channel_id": channel_id},
         )
         row = result.mappings().first()
@@ -522,9 +531,12 @@ class StudioRepository:
         current_version = int(current["version"]) if current else 0
         if expected is not None and int(expected) != current_version:
             # Return conflict via exception to be handled by routes
-            from .drafts import DraftConflictError
             raise DraftConflictError(current or {}, expected_revision=int(expected))
         built_from = int(payload.get("built_from_posts", 0) or 0)
+        evidence = payload.get("evidence_post_ids")
+        style_profile = dict((current or {}).get("style_profile") or {})
+        if evidence is not None:
+            style_profile["evidence_post_ids"] = evidence
         # Determine version
         new_version = current_version + 1
         values = {
@@ -538,28 +550,31 @@ class StudioRepository:
             "style_text": style_text,
             "built_from_posts": built_from,
             "version": new_version,
+            "style_profile": json.dumps(style_profile),
+            "expected_version": current_version,
         }
         # A manual edit (built_from_posts == 0) keeps the previous build
         # provenance; only a save that carries build output refreshes it.
         result = await self.db._execute(
             """INSERT INTO studio_profiles(
                        id, workspace_id, channel_id, topics_text, editorial_text, style_text,
-                       built_from_posts, built_at, version
+                       built_from_posts, built_at, version, style_profile
                    ) VALUES (
                        :id, :workspace_id, :channel_id, :topics_text, :editorial_text, :style_text,
-                       :built_from_posts, CASE WHEN :built_from_posts > 0 THEN now() ELSE NULL END, :version
+                       :built_from_posts, CASE WHEN :built_from_posts > 0 THEN now() ELSE NULL END, :version, CAST(:style_profile AS jsonb)
                    )
                ON CONFLICT (workspace_id, channel_id) DO UPDATE SET
                    topics_text=EXCLUDED.topics_text, editorial_text=EXCLUDED.editorial_text, style_text=EXCLUDED.style_text,
                    built_from_posts=CASE WHEN EXCLUDED.built_from_posts > 0 THEN EXCLUDED.built_from_posts ELSE studio_profiles.built_from_posts END,
                    built_at=CASE WHEN EXCLUDED.built_from_posts > 0 THEN now() ELSE studio_profiles.built_at END,
-                   version=EXCLUDED.version, updated_at=now()
+                   version=EXCLUDED.version, updated_at=now(), style_profile=EXCLUDED.style_profile
+               WHERE studio_profiles.version=:expected_version
                RETURNING *""",
             values,
         )
         row = result.mappings().first()
         if row is None:
-            raise ConversationNotFound("channel is not part of the active workspace")
+            raise DraftConflictError(await self.get_profile(channel_id) or {}, expected_revision=current_version)
         return dict(row)
 
     async def create_profile_change(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2178,11 +2193,13 @@ class MemoryStudioRepository:
             return ""
         return self.system_prompts.get(int(channel_id), "")
 
-    async def set_system_prompt(self, channel_id: int, value: str) -> str:
+    async def set_system_prompt(self, channel_id: int, value: str, *, expected_prompt: str | None = None) -> str:
         if len(value) > 12000:
             raise ValueError("Studio instructions exceed 12000 characters")
         if not any(row["id"] == int(channel_id) and row["active"] for row in self.channels):
             raise ConversationNotFound("channel is not part of the active workspace")
+        if expected_prompt is not None and self.system_prompts.get(int(channel_id), "") != expected_prompt:
+            raise SystemPromptConflict("System Prompt changed in another tab")
         self.system_prompts[int(channel_id)] = value
         return value
 
@@ -2259,6 +2276,8 @@ class MemoryStudioRepository:
             return None
         # Ensure text fields exist for legacy rows
         result = dict(row)
+        analysis = self.analyses.get(row.get("current_analysis_id"), {})
+        result["evidence_post_ids"] = row.get("style_profile", {}).get("evidence_post_ids", analysis.get("evidence_post_ids", []) if analysis.get("channel_id") == int(channel_id) else [])
         for k in ["topics_text", "editorial_text", "style_text"]:
             if k not in result:
                 result[k] = ""
@@ -2313,15 +2332,17 @@ class MemoryStudioRepository:
         previous = self.profiles.get(channel_id)
         current_version = int(previous["version"]) if previous else 0
         if expected is not None and int(expected) != current_version:
-            from .drafts import DraftConflictError
             raise DraftConflictError(previous or {}, expected_revision=int(expected))
         new_version = current_version + 1
+        style_profile = dict((previous or {}).get("style_profile") or {})
+        if payload.get("evidence_post_ids") is not None:
+            style_profile["evidence_post_ids"] = payload["evidence_post_ids"]
         row = {
             "id": (previous or {}).get("id") or uuid.uuid4(),
             "workspace_id": self.workspace_id,
             "channel_id": channel_id,
             "topics": (previous or {}).get("topics", []),
-            "style_profile": (previous or {}).get("style_profile", {}),
+            "style_profile": style_profile,
             "editorial_rules": (previous or {}).get("editorial_rules", {}),
             "confidence": (previous or {}).get("confidence", "low"),
             "current_analysis_id": (previous or {}).get("current_analysis_id"),
@@ -2329,8 +2350,8 @@ class MemoryStudioRepository:
             "topics_text": topics_text,
             "editorial_text": editorial_text,
             "style_text": style_text,
-            "built_at": utcnow(),
-            "built_from_posts": int(payload.get("built_from_posts", 0) or 0),
+            "built_at": utcnow() if payload.get("built_from_posts") else (previous or {}).get("built_at"),
+            "built_from_posts": int(payload.get("built_from_posts") or (previous or {}).get("built_from_posts", 0)),
             "created_at": (previous or {}).get("created_at", utcnow()),
             "updated_at": utcnow(),
         }

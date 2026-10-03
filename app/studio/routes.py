@@ -271,6 +271,7 @@ def _profile(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "style_text": row.get("style_text", "") or "",
         "built_at": _iso(row.get("built_at")),
         "built_from_posts": int(row.get("built_from_posts", 0) or 0),
+        "evidence_post_ids": row.get("evidence_post_ids", []) or [],
         "created_at": _iso(row.get("created_at")),
         "updated_at": _iso(row.get("updated_at")),
     }
@@ -345,9 +346,13 @@ def build_router() -> APIRouter:
         _, selected_channel_id = await _selected_channel(request, payload.channel_id)
         if selected_channel_id is None:
             return _safe_error("channel_not_found", "Selected channel is not part of this workspace.", status_code=404)
-        value = await _service(request).repository.set_system_prompt(
-            selected_channel_id, payload.system_prompt
-        )
+        from .repository import SystemPromptConflict
+        try:
+            value = await _service(request).repository.set_system_prompt(
+                selected_channel_id, payload.system_prompt, expected_prompt=payload.expected_prompt
+            )
+        except SystemPromptConflict:
+            return _safe_error("system_prompt_conflict", "System Prompt changed in another tab. Your text is preserved; reopen to load the saved instructions.", status_code=409)
         return {"channel_id": selected_channel_id, "system_prompt": value}
 
     def _ensure_ready(request: Request) -> dict[str, Any]:
@@ -584,6 +589,14 @@ def build_router() -> APIRouter:
         current_version = int(current["version"]) if current else 0
         if expected != current_version:
             return JSONResponse({"error": {"code": "profile_conflict", "message": "Profile changed in another tab.", "retryable": True}, "server_profile": _profile(current)}, status_code=409)
+        evidence = payload.evidence_post_ids
+        build_count = 0
+        if evidence is not None:
+            supplied_rows = await service.repository.performance_rows(payload.channel_id)
+            allowed_ids = {int(r.get("post_id", r.get("id", 0))) for r in supplied_rows}
+            if any(pid <= 0 or pid not in allowed_ids for pid in evidence):
+                return _safe_error("invalid_profile_evidence", "Supporting posts must belong to this channel's supplied context.", status_code=422)
+            build_count = len(supplied_rows)
         def clean_text(v: str) -> str:
             lines = [line.rstrip() for line in v.splitlines()]
             cleaned = "\n".join(line for line in lines if line.strip() != "")
@@ -598,6 +611,8 @@ def build_router() -> APIRouter:
                 "editorial_text": editorial_text,
                 "style_text": style_text,
                 "expected_version": expected,
+                "evidence_post_ids": evidence,
+                "built_from_posts": build_count,
             })
         except ValueError as exc:
             # Validation from repository (length/line)
@@ -609,7 +624,7 @@ def build_router() -> APIRouter:
                 cur = await service.repository.get_profile(payload.channel_id)
                 return JSONResponse({"error": {"code": "profile_conflict", "message": "Profile changed in another tab.", "retryable": True}, "server_profile": _profile(cur)}, status_code=409)
             raise
-        return {"profile": _profile(row)}
+        return {"profile": _profile(await service.repository.get_profile(payload.channel_id))}
 
     @router.post("/api/profile/build")
     async def build_profile(request: Request):

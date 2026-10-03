@@ -63,13 +63,13 @@ async def test_model_output_is_filtered_deduped_and_merged_with_formatting_facts
 
 
 @pytest.mark.asyncio
-async def test_test_mode_and_missing_key_use_the_deterministic_draft():
+async def test_only_explicit_test_mode_uses_the_deterministic_draft():
     rows = _rows(8)
     analytics = analyze_posts(rows, 1, now=datetime.now(timezone.utc), identifier="@test")
-    for settings in (_settings(studio_test_mode=True), _settings(studio_test_mode=False, openrouter_api_key="")):
-        draft = await build_profile_text_draft(analytics, rows, settings)
-        assert draft.topics and draft.style_rules and draft.built_from_posts == 8
-        assert not any("channel.profile.v2" in item for item in draft.limitations)
+    draft = await build_profile_text_draft(analytics, rows, _settings(studio_test_mode=True))
+    assert draft.topics and draft.style_rules and draft.built_from_posts == 8
+    with pytest.raises(ValueError, match="configured provider"):
+        await build_profile_text_draft(analytics, rows, _settings(studio_test_mode=False, openrouter_api_key=""))
 
 
 @pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def test_profile_build_retries_as_plain_json_when_structured_output_is_uns
 
 
 @pytest.mark.asyncio
-async def test_profile_build_falls_back_locally_when_provider_modes_fail(monkeypatch):
+async def test_profile_build_fails_without_a_local_substitute_when_provider_modes_fail(monkeypatch):
     import app.studio.semantic_profile as semantic_profile
 
     rows = _rows(8)
@@ -144,16 +144,12 @@ async def test_profile_build_falls_back_locally_when_provider_modes_fail(monkeyp
             raise RuntimeError("provider unavailable")
 
     monkeypatch.setattr(semantic_profile, "Agent", FailingAgent)
-    draft = await build_profile_text_draft(
-        analytics,
-        rows,
-        _settings(studio_test_mode=False, openrouter_api_key="synthetic-key"),
-        model=object(),
-    )
-
-    assert draft.topics
-    assert draft.built_from_posts == 8
-    assert any("built locally" in item for item in draft.limitations)
+    with pytest.raises(ValueError, match="previous profile is unchanged"):
+        await build_profile_text_draft(
+            analytics, rows,
+            _settings(studio_test_mode=False, openrouter_api_key="synthetic-key"),
+            model=object(),
+        )
 
 
 def test_fit_field_lines_respects_dialog_and_api_limits():

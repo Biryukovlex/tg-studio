@@ -21,7 +21,7 @@
     <label>
       <span>Channel</span>
       <span class="select-shell">
-        <select name="channel" aria-label="Channel" data-auto-submit>
+        <select data-ui-dropdown name="channel" aria-label="Channel" data-auto-submit>
           <option value="">All channels</option>
           {% for c in channels %}
           <option value="{{ c.id }}" {% if current_channel == c.id %}selected{% endif %}>
@@ -115,7 +115,7 @@
     <label class="chart-metric-field">
       <span>Metric</span>
       <span class="select-shell">
-        <select id="chartMetric" aria-label="Chart metric">
+        <select data-ui-dropdown id="chartMetric" aria-label="Chart metric">
           <option value="views" selected>Views</option>
           <option value="reactions">Reactions</option>
           <option value="comments">Comments</option>
@@ -159,7 +159,7 @@
       <label class="explorer-sort">
         <span>Sort</span>
         <span class="select-shell">
-          <select name="sort" id="explorerSort" aria-label="Sort posts">
+          <select data-ui-dropdown name="sort" id="explorerSort" aria-label="Sort posts">
             <option value="date" selected>Newest first</option>
             <option value="views">Views</option>
             <option value="reactions">Reactions</option>

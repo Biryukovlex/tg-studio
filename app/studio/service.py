@@ -480,6 +480,7 @@ class StudioService:
             "built_from_posts": draft.built_from_posts,
             "limitations": limitations,
             "formatting_facts": draft.formatting_facts,
+            "evidence_post_ids": draft.evidence_post_ids,
         }
 
     async def stream_request(self, request, body: bytes) -> StreamingResponse | JSONResponse:

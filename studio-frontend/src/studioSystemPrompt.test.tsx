@@ -87,3 +87,22 @@ describe("StudioSettings channel prompt", () => {
     confirm.mockRestore();
   });
 });
+
+it("sends the loaded prompt and preserves edits after a concurrent save", async () => {
+  const bodies: unknown[] = [];
+  stubSettingsFetch("Original", (body) => {
+    bodies.push(body);
+    return { ok: false, status: 409, redirected: false,
+      headers: { get: () => "application/json" },
+      json: async () => ({ error: { code: "system_prompt_conflict", message: "Changed in another tab" } }),
+    } as unknown as Response;
+  });
+  render(<StudioSettings channelId={7} channelLabel="@chan" onClose={() => {}} />);
+  const box = await screen.findByRole("textbox");
+  await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe("Original"));
+  fireEvent.change(box, { target: { value: "My edits" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save instructions" }));
+  await screen.findByText(/changed in another tab/i);
+  expect(bodies[0]).toMatchObject({ expected_prompt: "Original", system_prompt: "My edits" });
+  expect((box as HTMLTextAreaElement).value).toBe("My edits");
+});

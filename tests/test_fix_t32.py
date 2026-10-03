@@ -77,7 +77,7 @@ async def test_dashboard_paginates_posts_and_uses_supervised_refresh(tmp_path):
         assert first.status_code == 200
         assert "page post 1" in first.text
         assert "page post 101" not in first.text
-        assert "All posts" in first.text
+        assert "Post Explorer" in first.text
         assert "Performance by publication date" in first.text
         assert "Showing 1–100 of 250" in first.text
         assert "Page 1 of 3" in first.text
