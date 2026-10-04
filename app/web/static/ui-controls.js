@@ -306,6 +306,15 @@
   }
 
   function onDocumentClick(event) {
+    var statusCloser = event.target.closest("[data-sync-dismiss]");
+    if (statusCloser) {
+      statusCloser.closest(".sync-feedback").remove();
+      var url = new URL(window.location.href);
+      url.searchParams.delete("msg");
+      window.history.replaceState(window.history.state, "", url);
+      document.querySelector(".refresh-form button[type=submit]").focus();
+      return;
+    }
     var opener = event.target.closest("[data-ui-dialog-open]");
     if (opener instanceof HTMLElement) {
       var dialog = document.getElementById(opener.dataset.uiDialogOpen || "");
