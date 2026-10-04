@@ -1389,11 +1389,14 @@ select.ui-native-select[aria-hidden="true"] {
 
 /* Reader dialog: independent scroll, Escape closes natively, focus returns
    to the opener so list position and keyboard context are restored. */
-.reader-dialog { width: min(760px, 94vw); max-height: min(88dvh, 900px); padding: 0; border: 1px solid var(--line-strong); border-radius: 14px; background: #0a1723; color: var(--text); }
+.reader-dialog { width: min(760px, 94vw); height: min(88dvh, 900px); max-height: min(88dvh, 900px); overflow: hidden; padding: 0; border: 1px solid var(--line-strong); border-radius: 14px; background: #0a1723; color: var(--text); }
+.reader-dialog[open] { display: flex; flex-direction: column; }
+.reader-head, .reader-foot { flex: none; }
+.reader-dialog > .field-error { flex: none; margin: 0; padding: 0 22px 12px; }
 .reader-dialog::backdrop { background: rgba(3, 8, 14, .66); }
 .reader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 22px 0; }
 .reader-head h2 { margin: 4px 0 0; font-size: 17px; letter-spacing: -.02em; }
-.reader-body { display: grid; gap: 12px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 22px; }
+.reader-body { display: grid; align-content: start; gap: 12px; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 22px; }
 .reader-body h3 { margin: 8px 0 0; font-size: 13px; }
 .reader-post-meta { margin: 0; color: var(--muted); font-size: 11px; }
 .reader-metrics { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; padding: 0; list-style: none; color: var(--soft-text); font-size: 12px; font-variant-numeric: tabular-nums; }

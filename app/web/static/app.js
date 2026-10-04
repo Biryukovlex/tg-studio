@@ -1223,6 +1223,7 @@
       }
       if (sequence !== readerSequence) return;
       renderReaderDetail(payload);
+      readerBody.scrollTop = 0;
       updateReaderNav();
       if (typeof readerDialog.showModal === 'function' && !readerDialog.open) {
         readerDialog.showModal();
