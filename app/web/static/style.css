@@ -1394,7 +1394,7 @@ select.ui-native-select[aria-hidden="true"] {
 .reader-head, .reader-foot { flex: none; }
 .reader-dialog > .field-error { flex: none; margin: 0; padding: 0 22px 12px; }
 .reader-dialog::backdrop { background: rgba(3, 8, 14, .66); }
-.reader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 22px 0; }
+.reader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 22px 16px; }
 .reader-head h2 { margin: 4px 0 0; font-size: 17px; letter-spacing: -.02em; }
 .reader-body { display: grid; align-content: start; gap: 12px; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 22px; }
 .reader-body h3 { margin: 8px 0 0; font-size: 13px; }
@@ -1406,7 +1406,7 @@ select.ui-native-select[aria-hidden="true"] {
 .reader-snapshots li, .reader-discussion li { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(7, 19, 29, .5); overflow-wrap: anywhere; }
 .reader-comment-head { margin: 0 0 4px; color: var(--muted); font-size: 10px; }
 .reader-discussion p { margin: 0; }
-.reader-foot { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 22px 20px; }
+.reader-foot { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 22px 20px; }
 
 @media (max-width: 860px) {
   .explorer-range-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
