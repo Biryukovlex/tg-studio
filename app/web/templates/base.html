@@ -14,6 +14,7 @@
   <script src="/static/ghost.js?v={{ asset_version }}" defer></script>
   <script src="/static/ui-controls.js?v={{ asset_version }}" defer></script>
   {% block head %}{% endblock %}
+  <link rel="stylesheet" href="/static/dropdowns.css?v={{ asset_version }}">
 </head>
 <body class="app-body{% block body_class %}{% endblock %}">
   {% set ghost_mode = 'overview' %}
@@ -75,9 +76,10 @@
               <i class="mgc mgc-refresh-4-ai-core-regular" aria-hidden="true"></i>
               <span>Sync now</span>
             </button>
+            {% if msg and request.url.path == "/" %}<span class="sync-feedback" role="status"><span class="sync-feedback-dot" aria-hidden="true"></span><span>{{ msg }}</span></span>{% endif %}
           </form>
-          <details class="header-export">
-            <summary class="action-btn"><i class="mgc mgc-file-export-core-regular" aria-hidden="true"></i><span>Export</span></summary>
+          <details class="header-export" data-ui-popover>
+            <summary class="action-btn"><i class="mgc mgc-file-export-core-regular" aria-hidden="true"></i><span>Export</span><span class="ui-chevron" aria-hidden="true"></span></summary>
             <div class="header-export-menu">
           <a class="action-btn" href="/export.csv{% if current_channel %}?channel={{ current_channel }}{% endif %}">
             <i class="mgc mgc-file-export-core-regular" aria-hidden="true"></i>
@@ -94,7 +96,7 @@
       </header>
 
       <main id="main-content">
-        {% if msg %}
+        {% if msg and request.url.path != "/" %}
         <div class="banner" role="status">
           <i class="mgc mgc-signal-core-regular" aria-hidden="true"></i>
           <span>{{ msg }}</span>

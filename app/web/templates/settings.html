@@ -50,7 +50,7 @@
         <p class="panel-note">Keep collection and writing context under your control.</p>
       </div>
       <div class="channel-heading-actions"><span class="row-count">{{ channels|length }} channel{% if channels|length != 1 %}s{% endif %}</span>
-      <details class="channel-add-popover" {% if errors.identifier %}open{% endif %}><summary class="btn small">＋ Add channel</summary>
+      <details class="channel-add-popover" data-ui-popover {% if errors.identifier %}open{% endif %}><summary class="btn small">＋ Add channel<span class="ui-chevron" aria-hidden="true"></span></summary>
     <form method="post" action="/settings/channels/add" class="inline-add">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <input type="text" name="identifier" placeholder="@channel, https://t.me/channel or -100…" aria-label="Channel to add" required value="{{ values.identifier if values.identifier is defined else '' }}">

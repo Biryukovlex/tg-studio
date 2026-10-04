@@ -31,8 +31,8 @@
         </select>
       </span>
     </label>
-    <details class="date-popover">
-      <summary><span class="control-caption">Date range</span><span class="date-range-value">{{ applied_from ~ ' – ' ~ applied_to if applied_from and applied_to else 'Available history' }} <span aria-hidden="true">⌄</span></span></summary>
+    <details class="date-popover" data-ui-popover>
+      <summary><span class="control-caption">Date range</span><span class="date-range-value">{{ applied_from ~ ' – ' ~ applied_to if applied_from and applied_to else 'Available history' }} <span class="ui-chevron" aria-hidden="true"></span></span></summary>
     <fieldset class="date-fieldset" aria-label="Date range">
       <legend>Publication dates · UTC</legend>
       <div class="date-inputs">
@@ -169,7 +169,7 @@
         </span>
       </label>
     </div>
-    <details class="explorer-filter-popover"><summary class="btn ghost small">Filters <span aria-hidden="true">⌄</span></summary><div class="explorer-filter-body">
+    <details class="explorer-filter-popover" data-ui-popover><summary class="btn ghost small">Filters <span class="ui-chevron" aria-hidden="true"></span></summary><div class="explorer-filter-body">
     <fieldset class="explorer-channels" aria-label="Channels">
       <legend>Channels</legend>
       <div class="explorer-checks">

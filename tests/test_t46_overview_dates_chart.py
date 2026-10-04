@@ -337,10 +337,14 @@ async def test_sync_reports_scheduling_not_completion(tmp_path):
         location = refresh.headers["location"]
         assert "Refresh+started" in location
         assert "complet" not in location.lower()
-        # The banner repeats the scheduling wording; stored numbers stay put.
-        page = await client.get("/?channel=1")
+        # Feedback belongs to the existing header, leaving the data layout intact.
+        page = await client.get(location)
         assert page.status_code == 200
-        assert "Latest known metrics · selected publication dates" in page.text
+        header, main = page.text.split('<main id="main-content">', 1)
+        assert 'class="sync-feedback" role="status"' in header
+        assert "Refresh started - numbers will update shortly" in header
+        assert "Refresh started" not in main
+        assert "Latest known metrics · selected publication dates" in main
 
 
 @pytest.mark.asyncio

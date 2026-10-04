@@ -34,7 +34,7 @@
     <a class="btn ghost small" href="/settings/logs">Reset</a>
   </div>
 </form>
-<details class="log-help"><summary>About these logs</summary><p id="log-channel-help">Filter by numeric channel ID. Complete tool results are private to this workspace and may contain channel text, source excerpts and URLs.</p></details>
+<details class="log-help"><summary>About these logs<span class="ui-chevron" aria-hidden="true"></span></summary><p id="log-channel-help">Filter by numeric channel ID. Complete tool results are private to this workspace and may contain channel text, source excerpts and URLs.</p></details>
 
 <div class="agent-log-list">
   {% for log in logs %}
@@ -64,7 +64,7 @@
     </dl>
     {% endif %}
     <details class="agent-log-result">
-      <summary>View complete result</summary>
+      <summary>View complete result<span class="ui-chevron" aria-hidden="true"></span></summary>
       <pre>{{ log.result_content }}</pre>
     </details>
   </article>

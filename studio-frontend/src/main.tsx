@@ -399,7 +399,7 @@ export function ChannelPicker({
       <button
         ref={triggerRef}
         type="button"
-        className="studio-channel-trigger"
+        className="studio-channel-trigger ui-dropdown-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls="studio-channel-menu"
@@ -415,13 +415,13 @@ export function ChannelPicker({
         }}
       >
         <span className="studio-channel-value" id="studio-channel-value">{selected ? channelLabel(selected) : "Choose a channel"}</span>
-        <span className="studio-channel-chevron" aria-hidden="true">⌄</span>
+        <span className="studio-channel-chevron ui-chevron" aria-hidden="true" />
       </button>
       {open && (
         <div
           ref={menuRef}
           id="studio-channel-menu"
-          className="studio-channel-menu"
+          className="studio-channel-menu ui-dropdown-menu"
           role="listbox"
           aria-label="Studio channel"
           tabIndex={-1}
@@ -438,7 +438,7 @@ export function ChannelPicker({
               type="button"
               role="option"
               aria-selected={channel.id === selectedChannelId}
-              className={`studio-channel-option${channel.id === selectedChannelId ? " is-selected" : ""}`}
+              className={`studio-channel-option ui-dropdown-option${channel.id === selectedChannelId ? " is-selected" : ""}`}
               title={channel.identifier}
               onClick={() => {
                 setOpen(false);
@@ -1212,7 +1212,7 @@ function RunDetailsPanel({ run }: { run: RunSummary | null }) {
       >
         <span><span className="studio-run-details-mark" aria-hidden="true" />Run details</span>
         <small>{run.status} · {formatRunDuration(shown.duration_ms)}</small>
-        <span className="studio-run-details-chevron" aria-hidden="true">{open ? "⌃" : "⌄"}</span>
+        <span className="studio-run-details-chevron ui-chevron" aria-hidden="true" />
       </button>
       {open && (
         <div className="studio-run-details-body">
@@ -1600,7 +1600,7 @@ export function MoreActionsMenu({
         <div
           ref={menuRef}
           id="studio-more-menu"
-          className="studio-more-menu"
+          className="studio-more-menu ui-dropdown-menu"
           role="menu"
           aria-label="Conversation actions"
           onKeyDown={(event) => {
@@ -1610,11 +1610,11 @@ export function MoreActionsMenu({
             else if (event.key === "End") { event.preventDefault(); const items = menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])"); items?.[items.length - 1]?.focus(); }
           }}
         >
-          <button type="button" role="menuitem" onClick={act(onSettings)}>System Prompt</button>
+          <button type="button" className="ui-dropdown-option" role="menuitem" onClick={act(onSettings)}>System Prompt</button>
           <button
             type="button"
             role="menuitem"
-            className="is-danger"
+            className="is-danger ui-dropdown-option"
             disabled={!selected || busy}
             onClick={act(() => { if (selected) onDelete(selected); })}
           >Delete conversation…</button>
@@ -1692,10 +1692,10 @@ export function MyChannels({ channels, selectedChannelId, conversationId, busy =
   const selectedCount = references.filter((channel) => channel.selected).length;
   if (others.length === 0) return null;
   return <section ref={sectionRef} className="studio-my-channels" aria-label="My channels">
-    <button ref={triggerRef} type="button" className="studio-my-channels-toggle" aria-expanded={open} aria-controls="studio-my-channels-body" onClick={() => setOpen((current) => !current)}>
-      <span className="studio-my-channels-copy"><strong>My channels{selectedCount ? ` · ${selectedCount}` : ""}</strong></span><span aria-hidden="true">{open ? "⌃" : "⌄"}</span>
+    <button ref={triggerRef} type="button" className="studio-my-channels-toggle ui-dropdown-trigger" aria-expanded={open} aria-controls="studio-my-channels-body" onClick={() => setOpen((current) => !current)}>
+      <span className="studio-my-channels-copy"><strong>My channels{selectedCount ? ` · ${selectedCount}` : ""}</strong></span><span className="ui-chevron" aria-hidden="true" />
     </button>
-    {open && <div id="studio-my-channels-body" className="studio-my-channels-body">
+    {open && <div id="studio-my-channels-body" className="studio-my-channels-body ui-dropdown-menu ui-dropdown-content">
       <div className="studio-reference-heading"><h2>Reference channels</h2><button type="button" aria-label="Close reference channels" onClick={() => { setOpen(false); triggerRef.current?.focus(); }}><i className="mgc mgc-close-core-regular" aria-hidden="true" /></button></div>
       <p>Use your other channels as references for this conversation.</p>
       {runBusy && <p className="studio-reference-wait" role="status">Wait for the current reply to finish before changing its sources.</p>}

@@ -47,6 +47,7 @@
 
   function openMenuAt(state, index) {
     closeMenu(false);
+    document.querySelectorAll("details[data-ui-popover][open]").forEach(function (popover) { popover.open = false; });
     state.menu.hidden = false;
     state.wrapper.classList.add("is-open");
     fitMenu(state);
@@ -136,7 +137,7 @@
     var value = document.createElement("span");
     value.className = "ui-select-value";
     var chevron = document.createElement("span");
-    chevron.className = "ui-select-chevron";
+    chevron.className = "ui-select-chevron ui-chevron";
     chevron.setAttribute("aria-hidden", "true");
     trigger.append(value, chevron);
 
@@ -324,6 +325,13 @@
   }
 
   function onDocumentKey(event) {
+    if (event.key === "Escape") {
+      document.querySelectorAll("details[data-ui-popover][open]").forEach(function (popover) {
+        event.preventDefault();
+        popover.open = false;
+        popover.querySelector("summary").focus();
+      });
+    }
     if (event.key === "Escape" && openMenu) {
       event.preventDefault();
       closeMenu(true);
@@ -343,7 +351,14 @@
       wired = true;
       document.addEventListener("click", onDocumentClick);
       document.addEventListener("keydown", onDocumentKey);
+      document.addEventListener("toggle", function (event) {
+        var popover = event.target;
+        if (!(popover instanceof HTMLDetailsElement) || !popover.matches("[data-ui-popover]") || !popover.open) return;
+        closeMenu(false);
+        document.querySelectorAll("details[data-ui-popover][open]").forEach(function (other) { if (other !== popover) other.open = false; });
+      }, true);
       document.addEventListener("pointerdown", function (event) {
+        document.querySelectorAll("details[data-ui-popover][open]").forEach(function (popover) { if (!popover.contains(event.target)) popover.open = false; });
         if (openMenu && !openMenu.wrapper.contains(event.target)) {
           closeMenu(false);
         }
