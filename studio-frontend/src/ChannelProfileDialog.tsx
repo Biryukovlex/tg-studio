@@ -382,8 +382,9 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
       className="studio-settings studio-profile"
       ref={dialogRef}
       aria-labelledby="studio-profile-title"
-      onCancel={(e) => { e.preventDefault(); closeWithConfirm(); }}
-      onClose={onClose}
+      // React propagates nested dialogs' close/cancel events to this parent.
+      onCancel={(e) => { if (e.target !== e.currentTarget) return; e.preventDefault(); closeWithConfirm(); }}
+      onClose={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <header>
         <h2 id="studio-profile-title">Channel profile</h2>

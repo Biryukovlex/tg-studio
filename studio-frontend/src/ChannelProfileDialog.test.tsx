@@ -276,6 +276,51 @@ describe("ChannelProfileDialog evidence", () => {
     fireEvent.click(screen.getByRole("button", { name: "Post #9" }));
     await screen.findByText(/belongs to another channel/);
   });
+
+  it.each(["button", "escape"])("keeps the profile and unsaved edits when a supporting post closes via %s", async (method) => {
+    HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) {
+      this.removeAttribute("open");
+      this.dispatchEvent(new Event("close"));
+    });
+    const onClose = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown) => ({
+      ok: true, status: 200, redirected: false,
+      headers: { get: () => "application/json" },
+      json: async () => String(url).includes("/studio/api/profile?")
+        ? { channel_id: 7, profile: evidenceProfile([42]), can_build: true, build_blockers: [] }
+        : { id: 42, message_id: 1042, channel_id: 7, formatted_html: "Supporting content",
+            metrics: { views: 100, reactions: 5, comments: 2, shares: 1 }, source_url: null },
+    }) as unknown as Response));
+    render(<ChannelProfileDialog channelId={7} onClose={onClose} />);
+    await screen.findByRole("button", { name: "Post #42" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const topics = screen.getByLabelText("Topics") as HTMLTextAreaElement;
+    fireEvent.change(topics, { target: { value: "Unsaved topic" } });
+    fireEvent.click(screen.getByRole("button", { name: "Post #42" }));
+    const reader = await screen.findByRole("dialog", { name: "Supporting post" });
+    if (method === "button") {
+      fireEvent.click(screen.getByRole("button", { name: "Close supporting post" }));
+    } else {
+      // Native Escape dispatches a non-bubbling cancel, then closes unless prevented.
+      const cancel = new Event("cancel", { cancelable: true });
+      fireEvent(reader, cancel);
+      expect(cancel.defaultPrevented).toBe(false);
+      (reader as HTMLDialogElement).close();
+    }
+    expect(onClose).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect((reader as HTMLDialogElement).open).toBe(false);
+    expect((screen.getByRole("dialog", { name: "Channel profile" }) as HTMLDialogElement).open).toBe(true);
+    expect(topics.value).toBe("Unsaved topic");
+    fireEvent.click(screen.getByRole("button", { name: "Close channel profile" }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    confirm.mockRestore();
+  });
 });
 
 describe("ChannelProfileDialog build result", () => {
