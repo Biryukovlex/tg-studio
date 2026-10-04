@@ -45,6 +45,24 @@
     state.wrapper.classList.toggle("opens-up", opensUp);
   }
 
+  function fitPopover(popover) {
+    var summary = popover.querySelector("summary");
+    var body = summary.nextElementSibling;
+    if (!(body instanceof HTMLElement)) return;
+    body.style.maxHeight = "";
+    body.style.translate = "";
+    var rect = summary.getBoundingClientRect();
+    var below = window.innerHeight - rect.bottom - 16;
+    var above = rect.top - 16;
+    var needed = body.getBoundingClientRect().height;
+    var opensUp = below < needed && above > below;
+    popover.classList.toggle("opens-up", opensUp);
+    body.style.maxHeight = Math.max(80, opensUp ? above : below) + "px";
+    var bounds = body.getBoundingClientRect();
+    var shift = Math.max(8 - bounds.left, 0) - Math.max(bounds.right - window.innerWidth + 8, 0);
+    body.style.translate = shift + "px 0";
+  }
+
   function openMenuAt(state, index) {
     closeMenu(false);
     document.querySelectorAll("details[data-ui-popover][open]").forEach(function (popover) { popover.open = false; });
@@ -360,10 +378,14 @@
       wired = true;
       document.addEventListener("click", onDocumentClick);
       document.addEventListener("keydown", onDocumentKey);
+      window.addEventListener("resize", function () {
+        document.querySelectorAll("details[data-ui-popover][open]").forEach(fitPopover);
+      });
       document.addEventListener("toggle", function (event) {
         var popover = event.target;
         if (!(popover instanceof HTMLDetailsElement) || !popover.matches("[data-ui-popover]") || !popover.open) return;
         closeMenu(false);
+        fitPopover(popover);
         document.querySelectorAll("details[data-ui-popover][open]").forEach(function (other) { if (other !== popover) other.open = false; });
       }, true);
       document.addEventListener("pointerdown", function (event) {

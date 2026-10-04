@@ -135,3 +135,9 @@ select:not(.ui-native-select):disabled { opacity: .5; cursor: default; }
   .sync-feedback { position: fixed; z-index: 70; bottom: 82px; left: 16px; right: 16px; width: auto; max-width: none; padding: 12px 14px; border: 1px solid var(--dropdown-border); border-radius: 10px; background: var(--dropdown-surface); box-shadow: var(--dropdown-shadow); }
 }
 @media (prefers-reduced-motion: reduce) { .ui-chevron { transition: none; } }
+
+/* Anchor each rich popup to its trigger and keep both edges on screen. */
+.explorer-filter-popover { position: relative; }
+.explorer-filter-popover .explorer-filter-body { top: calc(100% + 8px); right: 0; }
+details[data-ui-popover] > :not(summary) { overflow-y: auto; }
+details[data-ui-popover].opens-up > :not(summary) { top: auto; bottom: calc(100% + 8px); }
