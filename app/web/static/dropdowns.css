@@ -141,3 +141,5 @@ select:not(.ui-native-select):disabled { opacity: .5; cursor: default; }
 .explorer-filter-popover .explorer-filter-body { top: calc(100% + 8px); right: 0; }
 details[data-ui-popover] > :not(summary) { overflow-y: auto; }
 details[data-ui-popover].opens-up > :not(summary) { top: auto; bottom: calc(100% + 8px); }
+
+.date-popover .date-fieldset > legend { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }

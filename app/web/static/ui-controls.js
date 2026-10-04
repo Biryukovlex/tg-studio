@@ -37,12 +37,25 @@
     if (restoreFocus) state.trigger.focus();
   }
 
+  function viewportBottom() {
+    var rail = document.querySelector(".sidebar");
+    var bottom = window.innerHeight - 8;
+    if (rail && getComputedStyle(rail).position === "fixed") {
+      var rect = rail.getBoundingClientRect();
+      if (rect.top > window.innerHeight / 2) bottom = Math.min(bottom, rect.top - 8);
+    }
+    return bottom;
+  }
+
   function fitMenu(state) {
     var rect = state.wrapper.getBoundingClientRect();
-    var needed = state.menu.scrollHeight + 16;
-    var opensUp =
-      window.innerHeight - rect.bottom < needed && rect.top > needed;
+    state.menu.style.maxHeight = "";
+    var needed = state.menu.getBoundingClientRect().height;
+    var below = viewportBottom() - rect.bottom - 8;
+    var above = rect.top - 16;
+    var opensUp = below < needed && above > below;
     state.wrapper.classList.toggle("opens-up", opensUp);
+    state.menu.style.maxHeight = Math.min(needed, Math.max(80, opensUp ? above : below)) + "px";
   }
 
   function fitPopover(popover) {
@@ -52,12 +65,12 @@
     body.style.maxHeight = "";
     body.style.translate = "";
     var rect = summary.getBoundingClientRect();
-    var below = window.innerHeight - rect.bottom - 16;
+    var below = viewportBottom() - rect.bottom - 8;
     var above = rect.top - 16;
     var needed = body.getBoundingClientRect().height;
     var opensUp = below < needed && above > below;
     popover.classList.toggle("opens-up", opensUp);
-    body.style.maxHeight = Math.max(80, opensUp ? above : below) + "px";
+    body.style.maxHeight = Math.min(needed, Math.max(80, opensUp ? above : below)) + "px";
     var bounds = body.getBoundingClientRect();
     var shift = Math.max(8 - bounds.left, 0) - Math.max(bounds.right - window.innerWidth + 8, 0);
     body.style.translate = shift + "px 0";
@@ -379,6 +392,7 @@
       document.addEventListener("click", onDocumentClick);
       document.addEventListener("keydown", onDocumentKey);
       window.addEventListener("resize", function () {
+        if (openMenu) fitMenu(openMenu);
         document.querySelectorAll("details[data-ui-popover][open]").forEach(fitPopover);
       });
       document.addEventListener("toggle", function (event) {
