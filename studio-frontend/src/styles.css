@@ -495,7 +495,7 @@ body { font-family:'Manrope Variable',Manrope,ui-sans-serif,system-ui,sans-serif
 .studio-primer-profile button { border:0; padding:2px 0; color:var(--studio-accent); background:none; font-size:13px; }
 .studio-primer-consent { margin:12px 0 0; padding:12px; }
 .studio-thread { padding:20px 28px; }
-.studio-message { max-width:100%; padding:18px 20px; box-shadow:none; border-radius:14px 14px 14px 4px; }
+.studio-message { max-width:min(680px,90%); padding:18px 20px; box-shadow:none; border-radius:14px 14px 14px 4px; }
 .studio-message[data-role="user"] { max-width:min(85%,640px); }
 .studio-message-actions { margin:0 0 10px; display:flex; justify-content:flex-end; }
 .studio-message-actions button { display:flex; align-items:center; gap:7px; padding:5px 0; border:0; background:none; color:var(--studio-muted); font-size:12px; cursor:pointer; }
