@@ -1628,10 +1628,9 @@ body { font-size:16px; }
 .settings-stack h2 { font-size:22px; }
 .settings-stack .section-kicker, .channel-card .fine, .channel-card .pill { font-size:12px; }
 
-/* Workspace hierarchy: identity/navigation belong to the rail. Content headers
-   carry the current task, while supporting controls stay near their content. */
+/* The outer rail is icon-only; page controls belong to the workspace. */
 [hidden] { display:none !important; }
-:root { --sidebar-width:240px; --sidebar:#0b1b27; --line:#263b49; }
+:root { --sidebar-width:80px; --sidebar:#0b1b27; --line:#263b49; }
 .topbar { min-height:120px; padding:30px 36px 20px; gap:24px; border:0; background:var(--bg); }
 .topbar .page-heading { min-width:0; flex:1; padding:0; border:0; }
 .topbar .eyebrow { display:none; }
@@ -1652,7 +1651,7 @@ body { font-size:16px; }
 .header-export-menu { position:absolute; z-index:60; top:calc(100% + 8px); right:0; display:grid; gap:4px; min-width:210px; padding:6px; background:#102431; border:1px solid var(--line); border-radius:12px; box-shadow:0 16px 36px #0007; }
 .header-export-menu .action-btn { justify-content:flex-start; border:0; }
 .header-export-menu .action-btn:hover { background:#183440; }
-.settings-layout { display:block; }
+.settings-layout { display:grid; grid-template-columns:190px minmax(0,1fr); gap:24px; align-items:start; }
 .settings-stack { max-width:1160px; }
 .log-toolbar { max-width:none; margin:0 0 12px; padding:0; border:0; border-radius:0; background:none; }
 .log-filter-field { font-size:14px; }
@@ -1663,33 +1662,26 @@ body { font-size:16px; }
 .agent-log-list, .log-pagination { max-width:none; }
 .agent-log-meta dd, .agent-log-diagnostics dd { font-size:13px; }
 @media(min-width:681px) {
-  .sidebar { height:100dvh; padding:12px 16px 12px; gap:14px; }
-  .brand-junction { min-height:88px; justify-content:flex-start; gap:8px; margin:0; }
+  .sidebar { height:100dvh; padding:12px 8px; gap:14px; }
+  .brand-junction { min-height:88px; justify-content:center; margin:0; }
   .ghost-trigger { flex:none; width:64px; min-height:80px; }
   .ghost-trigger .ghost-scene { width:64px; height:64px; }
   .sidebar-nav { flex:none; display:grid; grid-template-columns:minmax(0,1fr); gap:4px; }
-  .sidebar-link { min-height:48px; flex-direction:row; justify-content:flex-start; gap:12px; padding:10px 12px; font-size:14px; font-weight:650; border-radius:9px; }
-  .sidebar-link i { display:block; font-size:20px; }
+  .sidebar-link { min-height:48px; justify-content:center; padding:10px; border-radius:9px; }
+  .sidebar-link i { display:block; font-size:22px; }
   .sidebar-link.active { background:#16323c; border-color:transparent; }
   .sidebar-link.active::before { display:none; }
   .sidebar-link:hover { transform:none; }
-  .sidebar-context { flex:1; min-height:0; overflow:auto; }
-  .sidebar-context .section-tabs { display:grid; gap:4px; padding:14px 0; border:0; border-top:1px solid var(--line); background:transparent; }
-  .sidebar-context .section-tabs a { padding:12px; border:0; border-radius:8px; font-size:14px; }
-  .sidebar-context .section-tabs a[aria-current] { color:var(--teal); background:#15313b; }
   .sidebar-foot { flex:none; margin-top:auto; padding-top:8px; border-top:1px solid var(--line); }
-  .sidebar-foot .sidebar-link { flex-direction:row; justify-content:flex-start; width:100%; min-height:40px; margin:0; gap:10px; padding:8px 12px; font-size:13px; }
+  .sidebar-foot .sidebar-link { justify-content:center; width:100%; min-height:48px; margin:0; padding:10px; }
 }
 @media(max-width:1080px) and (min-width:681px) {
-  :root { --sidebar-width:212px; }
-  .sidebar { padding-inline:12px; }
   .ghost-trigger { width:56px; }
   .ghost-trigger .ghost-scene { width:56px; height:56px; }
   .topbar { padding-inline:24px; }
   #main-content { padding-inline:24px; }
 }
 @media(max-width:680px) {
-  .sidebar-context { display:none; }
   .topbar { position:sticky; top:0; z-index:50; min-height:0; padding:18px 16px 16px 68px; gap:14px; flex-wrap:wrap; }
   .topbar .page-heading h1 { font-size:27px; }
   .header-description { display:none; }
@@ -1700,14 +1692,17 @@ body { font-size:16px; }
   .studio-mobile-brand { display:flex; align-items:center; height:60px; padding:0 16px 0 68px; border-bottom:1px solid var(--line); }
   .studio-page .workspace { grid-template-rows:60px minmax(0,1fr); }
   .settings-layout > .settings-stack { margin-top:0; }
-  .sidebar-context + .sidebar-foot { margin-top:0; }
 }
 
-.settings-mobile-sections { display:none; }
+.sidebar-link > span { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.sidebar-link i { display:block; }
+.settings-section-menu { position:sticky; top:20px; }
+.settings-section-menu .section-tabs { display:grid; padding:0; border:0; background:transparent; }
 @media(max-width:680px) {
-  .settings-mobile-sections { display:block; margin-bottom:18px; }
-  .settings-mobile-sections .section-tabs { display:flex; flex-wrap:nowrap; overflow-x:auto; padding:4px; white-space:nowrap; }
-  .settings-mobile-sections .section-tabs a { font-size:13px; padding:10px 12px; }
+  .settings-layout { display:block; }
+  .settings-section-menu { position:static; margin-bottom:18px; }
+  .settings-section-menu .section-tabs { display:flex; flex-wrap:nowrap; overflow-x:auto; padding:4px; white-space:nowrap; }
+  .settings-section-menu .section-tabs a { font-size:13px; padding:10px 12px; }
 }
 
 /* Navigation and data appear immediately; motion belongs to the mascot. */

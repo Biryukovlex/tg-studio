@@ -31,27 +31,24 @@
       </div>
 
       <nav class="sidebar-nav">
-        <a class="sidebar-link{% if request.url.path == '/' %} active{% endif %}" href="/">
+        <a class="sidebar-link{% if request.url.path == '/' %} active{% endif %}" href="/" title="Overview">
           <i class="mgc mgc-three-quarters-circle-dash-core-regular" aria-hidden="true"></i>
           <span>Overview</span>
         </a>
-        <a class="sidebar-link{% if request.url.path.startswith('/studio') %} active{% endif %}" href="/studio">
+        <a class="sidebar-link{% if request.url.path.startswith('/studio') %} active{% endif %}" href="/studio" title="Studio">
           <i class="mgc mgc-content-ai-core-regular" aria-hidden="true"></i>
           <span>Studio</span>
         </a>
         {% if can_manage_settings %}
-        <a class="sidebar-link{% if request.url.path.startswith('/settings') %} active{% endif %}" href="/settings">
+        <a class="sidebar-link{% if request.url.path.startswith('/settings') %} active{% endif %}" href="/settings" title="Settings">
           <i class="mgc mgc-settings-3-core-regular" aria-hidden="true"></i>
           <span>Settings</span>
         </a>
         {% endif %}
       </nav>
 
-      <div class="sidebar-context"{% if ghost_mode == 'studio' %} id="studio-navigation-slot"{% endif %}>
-        {% block sidebarcontext %}{% endblock %}
-      </div>
       <div class="sidebar-foot">
-        <a class="sidebar-link logout-link" href="/logout">
+        <a class="sidebar-link logout-link" href="/logout" title="Log out">
           <i class="mgc mgc-exit-door-core-regular" aria-hidden="true"></i>
           <span>Log out</span>
         </a>

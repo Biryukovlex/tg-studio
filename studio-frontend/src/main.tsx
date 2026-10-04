@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { createPortal } from "react-dom";
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -476,13 +475,7 @@ function ConversationRail({
 }) {
   return (
     <aside className="studio-rail" aria-label="Studio conversations">
-      <div className="studio-rail-head">
-        <div className="studio-symbol" aria-hidden="true">✦</div>
-        <div>
-          <a className="studio-wordmark" href="/" aria-label="TG Studio home"><span>TG</span>Studio</a>
-          <p className="studio-rail-title">Channel desk</p>
-        </div>
-      </div>
+      <div className="studio-rail-head"><h2 className="studio-rail-title">Conversations</h2></div>
       <ChannelPicker channels={channels} selectedChannelId={selectedChannelId} onChannelSelect={onChannelSelect} />
       <select
         className="studio-mobile-conversation-select"
@@ -1753,19 +1746,6 @@ export function ConversationTitle({ conversation, onRenamed }: { conversation: C
   </div>;
 }
 
-function ConversationNavigation(props: Parameters<typeof ConversationRail>[0]) {
-  const [desktop, setDesktop] = useState(() => window.matchMedia("(min-width:681px)").matches);
-  useEffect(() => {
-    const media = window.matchMedia("(min-width:681px)");
-    const update = () => setDesktop(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  const target = desktop ? document.getElementById("studio-navigation-slot") : null;
-  const rail = <ConversationRail {...props} />;
-  return target ? createPortal(rail, target) : rail;
-}
-
 function StudioApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -2071,7 +2051,7 @@ function StudioApp() {
 
   return (
     <div className="studio-app">
-      <ConversationNavigation channels={bootstrap.channels} selectedChannelId={selectedChannelId} onChannelSelect={selectChannel} conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} />
+      <ConversationRail channels={bootstrap.channels} selectedChannelId={selectedChannelId} onChannelSelect={selectChannel} conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} />
       {settingsOpen && selectedChannelId && <StudioSettings channelId={selectedChannelId} channelLabel={selectedChannelLabel} onClose={() => setSettingsOpen(false)} />}
       {profileOpen && selectedChannelId && (
         <ChannelProfileDialog

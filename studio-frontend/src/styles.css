@@ -473,13 +473,11 @@ body { font-family:'Manrope Variable',Manrope,ui-sans-serif,system-ui,sans-serif
   .studio-my-channels-body { position:absolute; top:calc(100% + 8px); right:16px; left:16px; width:auto; max-height:min(40dvh,calc(100dvh - 500px)); }
 }
 
-/* One shared rail leaves the conversation and draft room to breathe. */
-.studio-app { grid-template-columns:minmax(0,1fr) min(var(--studio-draft-width,380px),42%); }
-#studio-navigation-slot { display:flex; overflow:visible; }
-#studio-navigation-slot .studio-rail { flex:1; min-height:0; width:100%; padding:18px 0 0; border:0; border-top:1px solid var(--studio-line); background:none; gap:12px; }
-#studio-navigation-slot .studio-rail-head, #studio-navigation-slot .studio-rail-foot { display:none; }
-#studio-navigation-slot .studio-conversations { flex:1; }
-.studio-rail .studio-wordmark { display:none; }
+/* Page controls live inside Studio, beside the conversation and draft. */
+.studio-app { grid-template-columns:240px minmax(0,1fr) min(var(--studio-draft-width,380px),35%); }
+.studio-rail { min-height:0; padding:26px 18px 20px; gap:16px; }
+.studio-rail-title { display:block; margin:0; font-size:18px; }
+.studio-conversations { flex:1; min-height:0; }
 .studio-topbar { min-height:130px; padding:24px 28px 16px; align-items:flex-start; border-bottom:1px solid var(--studio-line); gap:18px; }
 .studio-topbar > div:first-child { flex:1; min-width:0; }
 .studio-topbar h1 { font-size:24px; line-height:1.4; margin-top:4px; white-space:nowrap; }
@@ -525,7 +523,7 @@ body { font-family:'Manrope Variable',Manrope,ui-sans-serif,system-ui,sans-serif
 .studio-panel-heading .studio-overline { display:none; }
 .studio-reference-wait { color:var(--studio-accent); }
 @media(max-width:1080px) {
-  .studio-app { grid-template-columns:minmax(0,1fr); }
+  .studio-app { grid-template-columns:216px minmax(0,1fr); }
   .studio-draft-toggle { display:block; }
   .studio-topbar { padding-inline:24px; }
   .studio-thread { padding-inline:24px; }
