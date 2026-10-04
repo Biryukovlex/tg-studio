@@ -497,9 +497,9 @@ body { font-family:'Manrope Variable',Manrope,ui-sans-serif,system-ui,sans-serif
 .studio-thread { padding:20px 28px; }
 .studio-message { max-width:min(680px,90%); padding:18px 20px; box-shadow:none; border-radius:14px 14px 14px 4px; }
 .studio-message[data-role="user"] { max-width:min(85%,640px); }
-.studio-message-actions { margin:0 0 10px; display:flex; justify-content:flex-end; }
-.studio-message-actions button { display:flex; align-items:center; gap:7px; padding:5px 0; border:0; background:none; color:var(--studio-muted); font-size:12px; cursor:pointer; }
-.studio-message-actions button:hover { color:var(--studio-accent); }
+.studio-message[data-role="assistant"] { position:relative; padding-right:52px; }
+.studio-message-expand { position:absolute; top:12px; right:12px; display:grid; place-items:center; width:28px; height:28px; padding:0; border:0; border-radius:6px; background:none; color:var(--studio-muted); font-size:15px; cursor:pointer; }
+.studio-message-expand:hover { color:var(--studio-accent); background:#142d37; }
 .studio-table-scroll { max-width:100%; overflow-x:auto; overscroll-behavior-x:contain; scrollbar-gutter:stable; border:1px solid var(--studio-line); border-radius:8px; margin:14px 0; }
 .studio-markdown .studio-table-scroll table { display:table; width:max-content; min-width:100%; max-width:none; margin:0; overflow:visible; table-layout:auto; }
 .studio-markdown th { white-space:nowrap; font-weight:750; }

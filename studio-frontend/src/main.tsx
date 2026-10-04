@@ -100,7 +100,7 @@ export function StudioMessage() {
 
   return (
     <MessagePrimitive.Root className="studio-message" data-role={role}>
-      {role === "assistant" && hasContent && <div className="studio-message-actions"><button type="button" onClick={() => setReaderOpen(true)} aria-label="Open message in wide view"><i className="mgc mgc-fullscreen-2-core-regular" aria-hidden="true" />Expand message</button></div>}
+      {role === "assistant" && hasContent && <button type="button" className="studio-message-expand" onClick={() => setReaderOpen(true)} aria-label="Open message in wide view" title="Expand message"><i className="mgc mgc-fullscreen-2-core-regular" aria-hidden="true" /></button>}
       <MessagePrimitive.If assistant>
         <StudioAssistantContent />
       </MessagePrimitive.If>
