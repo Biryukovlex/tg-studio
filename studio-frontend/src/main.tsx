@@ -515,7 +515,7 @@ function ConversationRail({
           ))
         )}
       </div>
-      <div className="studio-rail-foot"><span>Channel context stays separate</span><a href="/settings">Workspace settings</a></div>
+      <div className="studio-rail-foot"><span>Channel context stays separate</span></div>
     </aside>
   );
 }
