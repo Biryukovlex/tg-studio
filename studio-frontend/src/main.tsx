@@ -1074,7 +1074,7 @@ function DraftPanel({
   );
 }
 
-function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Bootstrap; onProfile: () => void; onBootstrap: (next: Bootstrap) => void }) {
+function ProfilePrimer({ bootstrap, onBootstrap }: { bootstrap: Bootstrap; onBootstrap: (next: Bootstrap) => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const consent = bootstrap.consent;
@@ -1114,40 +1114,7 @@ function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Boots
       </section>
     );
   }
-  const profile = bootstrap.profile;
-  const hasProfile = !!(profile && (profile.topics_text?.trim() || profile.editorial_text?.trim() || profile.style_text?.trim()));
-  if (!hasProfile) {
-    return (
-      <section className="studio-primer studio-primer-profile" aria-label="Channel profile status">
-        <p role="status">No profile yet. Add your channel guidelines.</p>
-        <button type="button" onClick={onProfile}>Profile</button>
-      </section>
-    );
-  }
-  // Chips show the topic name only; the scope after the dash belongs in the dialog.
-  const topicName = (line: string) => {
-    const name = line.split(/\s[—–-]\s|:\s/)[0].trim();
-    return name.length > 48 ? `${name.slice(0, 47)}…` : name;
-  };
-  const topicLines = (profile.topics_text ?? "").split("\n").filter((line) => line.trim());
-  const editorialCount = (profile.editorial_text ?? "").split("\n").filter((l) => l.trim()).length;
-  const styleCount = (profile.style_text ?? "").split("\n").filter((l) => l.trim()).length;
-  const topicsCount = topicLines.length;
-  const rulesCount = editorialCount + styleCount;
-  const remainingTopics = topicsCount > 4 ? `+${topicsCount - 4}` : null;
-  const chips = topicLines.slice(0, 4).map(topicName);
-  return (
-    <section className="studio-primer studio-primer-profile" aria-label="Channel profile status">
-      <div>
-        <p>{topicsCount} topics · {rulesCount} rules · v{profile.version}</p>
-      </div>
-      <div className="studio-topic-chips" aria-label="Topics">
-        {chips.map((topic, index) => <span key={`${index}-${topic}`} title={topicLines[index]}>{topic}</span>)}
-        {remainingTopics && <span>{remainingTopics}</span>}
-      </div>
-      <button type="button" onClick={onProfile}>Profile</button>
-    </section>
-  );
+  return null;
 }
 
 function formatRunDuration(durationMs: number | null | undefined): string {
@@ -1691,9 +1658,9 @@ export function MyChannels({ channels, selectedChannelId, conversationId, busy =
   const others = channels.filter((channel) => channel.id !== selectedChannelId);
   const selectedCount = references.filter((channel) => channel.selected).length;
   if (others.length === 0) return null;
-  return <section ref={sectionRef} className="studio-my-channels" aria-label="My channels">
+  return <section ref={sectionRef} className="studio-my-channels" aria-label="References">
     <button ref={triggerRef} type="button" className="studio-my-channels-toggle ui-dropdown-trigger" aria-expanded={open} aria-controls="studio-my-channels-body" onClick={() => setOpen((current) => !current)}>
-      <span className="studio-my-channels-copy"><strong>My channels{selectedCount ? ` · ${selectedCount}` : ""}</strong></span><span className="ui-chevron" aria-hidden="true" />
+      <span className="studio-my-channels-copy"><strong>References{selectedCount ? ` · ${selectedCount}` : ""}</strong></span><span className="ui-chevron" aria-hidden="true" />
     </button>
     {open && <div id="studio-my-channels-body" className="studio-my-channels-body ui-dropdown-menu ui-dropdown-content">
       <div className="studio-reference-heading"><h2>Reference channels</h2><button type="button" aria-label="Close reference channels" onClick={() => { setOpen(false); triggerRef.current?.focus(); }}><i className="mgc mgc-close-core-regular" aria-hidden="true" /></button></div>
@@ -2067,11 +2034,12 @@ function StudioApp() {
           <div>
             <p className="studio-overline">{selectedChannel?.identifier ?? "Channel"}</p>
             <ConversationTitle key={selected?.id} conversation={selected} onRenamed={(conversation) => { setSelected(conversation); refresh(); }} />
-            <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
+            <ProfilePrimer bootstrap={bootstrap} onBootstrap={(next) => setBootstrap(next)} />
           </div>
           <div className="studio-topbar-actions">
             <button type="button" className="studio-draft-toggle" onClick={openDraft}>Draft</button>
             <MyChannels key={selected?.id} channels={bootstrap.channels} selectedChannelId={selectedChannelId} conversationId={selected?.id ?? null} busy={agentRunActive} />
+            <button type="button" className="studio-profile-trigger" aria-haspopup="dialog" aria-expanded={profileOpen} title="View and edit channel profile" onClick={() => setProfileOpen(true)}>Profile</button>
             <MoreActionsMenu
               selected={selected}
               busy={deletingId !== null}

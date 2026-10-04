@@ -60,7 +60,6 @@
       <span aria-hidden="true">•</span>
       {{ k.posts|int }} posts tracked
     </p>
-    <p class="sync-note">Latest known metrics · selected publication dates · UTC</p>
   </div>
 </section>
 
@@ -139,7 +138,7 @@
     <button type="button" class="btn ghost small" data-chart-next>Next point →</button>
     <p class="chart-readout" role="status" aria-live="polite" data-chart-readout></p>
   </div>
-  <p class="chart-summary" data-chart-summary>Views · {{ scope_label }}: {{ k.posts|int }} posts, {{ k.views|num }} total views.</p>
+  <p class="chart-summary" data-chart-summary hidden>Views · {{ scope_label }}: {{ k.posts|int }} posts, {{ k.views|num }} total views.</p>
 </section>
 
 <section class="panel posts-panel" id="posts" data-reveal>

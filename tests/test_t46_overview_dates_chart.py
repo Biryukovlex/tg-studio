@@ -344,7 +344,7 @@ async def test_sync_reports_scheduling_not_completion(tmp_path):
         assert 'class="sync-feedback" role="status"' in header
         assert "Refresh started - numbers will update shortly" in header
         assert "Refresh started" not in main
-        assert "Latest known metrics · selected publication dates" in main
+        assert "Latest known metrics · selected publication dates" not in main
 
 
 @pytest.mark.asyncio

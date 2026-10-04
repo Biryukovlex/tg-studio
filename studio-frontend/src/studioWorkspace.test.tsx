@@ -307,7 +307,7 @@ describe("conversation reference channels", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({references:[ref]}), {headers:{"content-type":"application/json"}}));
     vi.stubGlobal("fetch",fetchMock);
     render(<MyChannels channels={[channel(7,"Main"),ref]} selectedChannelId={7} conversationId="c1" />);
-    fireEvent.click(screen.getByRole("button",{name:/My channels/}));
+    fireEvent.click(screen.getByRole("button",{name:/References/}));
     const add = await screen.findByRole("button",{name:"Use in this conversation"});
     expect(add.hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("checkbox"));
@@ -331,7 +331,7 @@ describe("reference-channel availability", () => {
     ), {headers:{"content-type":"application/json"}})));
     vi.stubGlobal("fetch",fetchMock);
     render(<MyChannels channels={[channel(7,"Main"),ref]} selectedChannelId={7} conversationId="c1" busy />);
-    fireEvent.click(screen.getByRole("button",{name:/My channels/}));
+    fireEvent.click(screen.getByRole("button",{name:/References/}));
     const add = await screen.findByRole("button",{name:"Use in this conversation"});
     fireEvent.click(screen.getByRole("checkbox"));
     await waitFor(() => expect(add.hasAttribute("disabled")).toBe(false));
@@ -344,7 +344,7 @@ describe("reference-channel availability", () => {
     ), {headers:{"content-type":"application/json"}}))));
     const props = {channels:[channel(7,"Main"),ref], selectedChannelId:7, conversationId:"c1"};
     const {rerender}=render(<MyChannels {...props} busy />);
-    fireEvent.click(screen.getByRole("button",{name:/My channels/}));
+    fireEvent.click(screen.getByRole("button",{name:/References/}));
     const add=await screen.findByRole("button",{name:"Use in this conversation"});
     fireEvent.click(screen.getByRole("checkbox"));
     expect(add.hasAttribute("disabled")).toBe(true);
