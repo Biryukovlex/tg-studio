@@ -445,3 +445,73 @@ def test_style_css_covers_scope_cards_states_and_toolbar():
     assert ".log-toolbar" in css
     assert ".save-feedback.is-dirty" in css
     assert ".agent-log-diagnostics" in css
+
+
+async def _seed_run_without_tools(repo, channel_id, state, *, title=None):
+    conversation = await repo.create_conversation(channel_id=channel_id, title=title or f"No tools: {state}")
+    message = await repo.append_message(conversation_id=conversation["id"], role="user", content="Synthetic log coverage")
+    run = await repo.create_run(conversation_id=conversation["id"], user_message_id=message["id"], requested_model="synthetic")
+    await repo.set_run_status(run["id"], status=state)
+    return run
+
+
+@pytest.mark.asyncio
+async def test_all_run_states_without_tool_results_are_visible_and_filtered(tmp_path):
+    app, _, _ = _fake_settings_app(tmp_path)
+    repo = app.state.studio_repository
+    repo.channels = [{"id": 11, "identifier": "@synthetic", "title": "Synthetic", "active": True}]
+    states = ["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
+    for state in states:
+        await _seed_run_without_tools(repo, 11, state)
+    async with _client_for(app) as client:
+        await _login(client)
+        response = await client.get("/settings/logs?format=json&page_size=2")
+        payload = response.json()
+        assert payload["total"] == 6 and payload["has_next"] is True
+        assert [row["run_status"] for row in payload["logs"]] == list(reversed(states))[:2]
+        for state in states:
+            payload = (await client.get(f"/settings/logs?format=json&status={state}")).json()
+            assert payload["total"] == 1
+            assert payload["logs"][0]["run_status"] == state
+            page = await client.get(f"/settings/logs?status={state}")
+            assert f"No tools: {state}" in page.text
+            assert 'View complete result' not in page.text
+        found = (await client.get("/settings/logs?format=json&q=No+tools:+failed&channel=11")).json()
+        assert found["total"] == 1 and found["logs"][0]["run_status"] == "failed"
+        assert (await client.get("/settings/logs?format=json&channel=22")).json()["total"] == 0
+        page = await client.get("/settings/logs?page_size=2")
+        assert "page_size=2" in page.text
+        # Tool-only repository callers retain their original contract.
+        assert await repo.count_tool_result_logs() == 0
+
+
+@pytest.mark.asyncio
+async def test_logs_maximum_page_size_does_not_hide_older_runs(tmp_path):
+    app, _, _ = _fake_settings_app(tmp_path)
+    app.state.studio_repository.channels = [{"id": 11, "identifier": "@synthetic", "title": "Synthetic", "active": True}]
+    for i in range(101):
+        await _seed_run_without_tools(app.state.studio_repository, 11, "failed", title=f"Run {i}")
+    async with _client_for(app) as client:
+        await _login(client)
+        first = (await client.get("/settings/logs?format=json&page_size=100")).json()
+        second = (await client.get("/settings/logs?format=json&page_size=100&page=2")).json()
+        assert first["total"] == 101 and first["has_next"] is True and len(first["logs"]) == 100
+        assert second["has_next"] is False and len(second["logs"]) == 1
+        assert second["logs"][0]["conversation_title"] == "Run 0"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_postgres_logs_include_runs_without_events_across_statuses(app, client, settings, channel_id):
+    repo = app.state.studio_repository
+    states = ["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
+    for state in states:
+        await _seed_run_without_tools(repo, channel_id, state)
+    await _login(client, username=settings.admin_username, password=settings.admin_password)
+    payload = (await client.get("/settings/logs?format=json")).json()
+    assert payload["total"] == 6
+    assert [row["run_status"] for row in payload["logs"]] == list(reversed(states))
+    for state in states:
+        payload = (await client.get(f"/settings/logs?format=json&status={state}")).json()
+        assert payload["total"] == 1 and payload["logs"][0]["run_status"] == state
+    assert await repo.count_tool_result_logs() == 0

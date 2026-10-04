@@ -34,7 +34,7 @@
     <a class="btn ghost small" href="/settings/logs">Reset</a>
   </div>
 </form>
-<details class="log-help"><summary>About these logs<span class="ui-chevron" aria-hidden="true"></span></summary><p id="log-channel-help">Filter by numeric channel ID. Complete tool results are private to this workspace and may contain channel text, source excerpts and URLs.</p></details>
+<details class="log-help"><summary>About these logs<span class="ui-chevron" aria-hidden="true"></span></summary><p id="log-channel-help">Filter by numeric channel ID. Newest entries appear first. All agent runs and complete tool results are private to this workspace and may contain channel text, source excerpts and URLs.</p></details>
 
 <div class="agent-log-list">
   {% for log in logs %}
@@ -51,7 +51,7 @@
       <div><dt>Time</dt><dd>{{ log.created_at_display or "—" }} UTC</dd></div>
       <div><dt>Channel</dt><dd>{% if log.channel_id is not none %}#{{ log.channel_id }}{% else %}—{% endif %}</dd></div>
       <div><dt>Run</dt><dd><code>{{ log.run_id }}</code></dd></div>
-      <div><dt>Sequence</dt><dd>{{ log.sequence }}</dd></div>
+      {% if log.sequence is not none %}<div><dt>Sequence</dt><dd>{{ log.sequence }}</dd></div>{% endif %}
       <div><dt>Requested model</dt><dd>{{ log.requested_model or "—" }}</dd></div>
       <div><dt>Actual model</dt><dd>{{ log.actual_model or "—" }}</dd></div>
     </dl>
@@ -63,17 +63,21 @@
       <div><dt>Provider code</dt><dd>{{ log.diagnostics.get('provider_code') if log.diagnostics.get('provider_code') is not none else "—" }}</dd></div>
     </dl>
     {% endif %}
+    {% if log.result_content is not none %}
     <details class="agent-log-result">
       <summary>View complete result<span class="ui-chevron" aria-hidden="true"></span></summary>
       <pre>{{ log.result_content }}</pre>
     </details>
+    {% else %}
+    <p class="field-help">{% if run_state in ('queued', 'running') %}No tool results yet.{% else %}This run ended without producing a tool result.{% endif %}</p>
+    {% endif %}
   </article>
   {% else %}
   {% if logs_available %}
   <section class="panel agent-log-empty" data-reveal>
     <i class="mgc mgc-terminal-box-core-regular" aria-hidden="true"></i>
-    <h2>No tool results yet</h2>
-    <p>Run the Studio agent with a task that uses a tool. New full results will appear here.</p>
+    <h2>No agent runs yet</h2>
+    <p>Start a conversation in Studio. Runs and their tool results will appear here.</p>
   </section>
   {% endif %}
   {% endfor %}
@@ -84,9 +88,9 @@
 {% set filter_status = request.query_params.get('status', '')|urlencode %}
 {% if page > 1 or has_next %}
 <nav class="log-pagination" aria-label="Agent log pages">
-  {% if page > 1 %}<a class="btn ghost small" href="/settings/logs?q={{ filter_q }}&amp;channel={{ filter_channel }}&amp;status={{ filter_status }}&amp;page={{ page - 1 }}">Newer</a>{% endif %}
+  {% if page > 1 %}<a class="btn ghost small" href="/settings/logs?q={{ filter_q }}&amp;channel={{ filter_channel }}&amp;status={{ filter_status }}&amp;page_size={{ request.query_params.get('page_size', '25')|urlencode }}&amp;page={{ page - 1 }}">Newer</a>{% endif %}
   <span>Page {{ page }}</span>
-  {% if has_next %}<a class="btn ghost small" href="/settings/logs?q={{ filter_q }}&amp;channel={{ filter_channel }}&amp;status={{ filter_status }}&amp;page={{ page + 1 }}">Older</a>{% endif %}
+  {% if has_next %}<a class="btn ghost small" href="/settings/logs?q={{ filter_q }}&amp;channel={{ filter_channel }}&amp;status={{ filter_status }}&amp;page_size={{ request.query_params.get('page_size', '25')|urlencode }}&amp;page={{ page + 1 }}">Older</a>{% endif %}
 </nav>
 {% endif %}
 {% endblock %}

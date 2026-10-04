@@ -350,12 +350,12 @@ async def settings_logs_page(
         if getter is None:
             raise RuntimeError("Studio log storage is unavailable")
         try:
-            logs = list(await getter(limit=page_size + 1, offset=(page - 1) * page_size, query=query, channel_id=channel_id, status=status))
+            logs = list(await getter(limit=page_size + 1, offset=(page - 1) * page_size, query=query, channel_id=channel_id, status=status, include_runs=True))
         except TypeError:
             # Backward-compatible repository without filters: paginate unfiltered, then filter in memory.
             logs = list(await getter(limit=page_size + 1, offset=(page - 1) * page_size))
         try:
-            total = int(await counter(query=query, channel_id=channel_id, status=status)) if counter is not None else (len(logs) if len(logs) <= page_size else (page - 1) * page_size + len(logs))
+            total = int(await counter(query=query, channel_id=channel_id, status=status, include_runs=True)) if counter is not None else (len(logs) if len(logs) <= page_size else (page - 1) * page_size + len(logs))
         except TypeError:
             total = len(logs)
         available = True
@@ -374,7 +374,7 @@ async def settings_logs_page(
         total = 0
         available = False
         error = {"code": "logs_unavailable"}
-    has_next = len(logs) > page_size
+    has_next = page * page_size < total
     logs = logs[:page_size]
     for row in logs:
         row["created_at_display"] = format_timestamp(row.get("created_at"))
