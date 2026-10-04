@@ -68,8 +68,6 @@
       <summary>View complete result<span class="ui-chevron" aria-hidden="true"></span></summary>
       <pre>{{ log.result_content }}</pre>
     </details>
-    {% else %}
-    <p class="field-help">{% if run_state in ('queued', 'running') %}No tool results yet.{% else %}This run ended without producing a tool result.{% endif %}</p>
     {% endif %}
   </article>
   {% else %}
