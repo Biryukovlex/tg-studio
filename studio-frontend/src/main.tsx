@@ -1562,7 +1562,7 @@ export function MoreActionsMenu({
         aria-expanded={open}
         aria-controls="studio-more-menu"
         onClick={() => setOpen((current) => !current)}
-      aria-label="More actions" title="More actions"><i className="mgc mgc-dots-core-regular" aria-hidden="true" /></button>
+      aria-label="More actions" title="More actions"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="12" cy="19" r="1.8" /></svg></button>
       {open && (
         <div
           ref={menuRef}
