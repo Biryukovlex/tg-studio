@@ -81,15 +81,15 @@ def test_retired_product_names_do_not_return_to_public_branding():
 # --- T50 shared shell, brand and mascot contracts ---
 
 
-def test_shell_has_single_ghost_and_static_wordmark():
+def test_shell_has_single_ghost_without_wordmark():
     base = _text("app/web/templates/base.html")
     assert base.count('id="ghost-trigger"') == 1
     assert base.count("ghost-trigger") <= 4
     assert 'class="ghost-scene"' not in base  # injected at runtime, never duplicated
     assert 'data-ghost-mode="{{ ghost_mode }}"' in base
     assert "tgstudio-ghost-{{ ghost_mode }}.svg" in base
-    assert 'class="brand-wordmark"' in base
-    assert "<span>TG</span>Studio</a>" in base
+    assert 'class="brand-wordmark"' not in base
+    assert "<span>TG</span>Studio</a>" not in base
     assert 'aria-label="Replay ghost animation"' in base
     # Per-page action mode without backend changes.
     assert "startswith('/studio')" in base

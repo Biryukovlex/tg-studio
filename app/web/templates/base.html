@@ -28,7 +28,6 @@
           aria-label="Replay ghost animation">
           <span class="ghost-fallback" aria-hidden="true"></span>
         </button>
-        <a class="brand-wordmark" href="/" aria-label="{{ app_name }} home"><span>TG</span>Studio</a>
       </div>
 
       <nav class="sidebar-nav">
@@ -61,9 +60,7 @@
 
     <div class="workspace">
       {% if ghost_mode == 'studio' %}
-      <header class="studio-mobile-brand">
-        <a class="brand-wordmark" href="/" aria-label="{{ app_name }} home"><span>TG</span>Studio</a>
-      </header>
+      <div class="studio-mobile-brand" aria-hidden="true"></div>
       {% endif %}
       <header class="topbar">
         <div class="page-heading">

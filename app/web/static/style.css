@@ -1665,11 +1665,10 @@ body { font-size:16px; }
 @media(min-width:681px) {
   .sidebar { height:100dvh; padding:12px 16px 12px; gap:14px; }
   .brand-junction { min-height:88px; justify-content:flex-start; gap:8px; margin:0; }
-  .brand-junction .brand-wordmark { margin:0; font-size:21px; flex:none; }
   .ghost-trigger { flex:none; width:64px; min-height:80px; }
   .ghost-trigger .ghost-scene { width:64px; height:64px; }
-  .sidebar-nav { flex:none; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; }
-  .sidebar-link { min-height:60px; gap:7px; padding:8px 4px; font-size:12px; font-weight:650; border-radius:9px; }
+  .sidebar-nav { flex:none; display:grid; grid-template-columns:minmax(0,1fr); gap:4px; }
+  .sidebar-link { min-height:48px; flex-direction:row; justify-content:flex-start; gap:12px; padding:10px 12px; font-size:14px; font-weight:650; border-radius:9px; }
   .sidebar-link i { display:block; font-size:20px; }
   .sidebar-link.active { background:#16323c; border-color:transparent; }
   .sidebar-link.active::before { display:none; }
@@ -1684,14 +1683,12 @@ body { font-size:16px; }
 @media(max-width:1080px) and (min-width:681px) {
   :root { --sidebar-width:212px; }
   .sidebar { padding-inline:12px; }
-  .brand-junction .brand-wordmark { font-size:19px; }
   .ghost-trigger { width:56px; }
   .ghost-trigger .ghost-scene { width:56px; height:56px; }
   .topbar { padding-inline:24px; }
   #main-content { padding-inline:24px; }
 }
 @media(max-width:680px) {
-  .brand-junction > .brand-wordmark { display:none; }
   .sidebar-context { display:none; }
   .topbar { position:sticky; top:0; z-index:50; min-height:0; padding:18px 16px 16px 68px; gap:14px; flex-wrap:wrap; }
   .topbar .page-heading h1 { font-size:27px; }
@@ -1701,7 +1698,6 @@ body { font-size:16px; }
   .topbar .settings-view-tabs a { flex:1; text-align:center; }
   #main-content { padding:16px 16px 88px; }
   .studio-mobile-brand { display:flex; align-items:center; height:60px; padding:0 16px 0 68px; border-bottom:1px solid var(--line); }
-  .studio-mobile-brand .brand-wordmark { font-size:21px; margin:0; }
   .studio-page .workspace { grid-template-rows:60px minmax(0,1fr); }
   .settings-layout > .settings-stack { margin-top:0; }
   .sidebar-context + .sidebar-foot { margin-top:0; }
