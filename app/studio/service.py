@@ -449,13 +449,13 @@ class StudioService:
         if reader is None:
             raise ValueError("performance rows unavailable")
         channel = await self.repository.channel_context(channel_id)
-        rows = await reader(channel_id)
+        rows = await reader(channel_id, limit=10_000)
         if not rows:
             raise ValueError("too few posts")
         min_posts = int(limits.MIN_PROFILE_POSTS)
         if len(rows) < min_posts:
             raise ValueError(f"too few posts: {len(rows)} < {min_posts}")
-        analytics = await analyze_posts_async(rows, channel_id, identifier=channel.get("identifier"))
+        analytics = await analyze_posts_async(rows, channel_id, identifier=channel.get("identifier"), max_evidence_posts=30)
         from .semantic_profile import build_profile_text_draft
         current = None
         getter = getattr(self.repository, "get_profile", None)

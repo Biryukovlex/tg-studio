@@ -173,7 +173,7 @@ async def test_build_result_always_fits_the_profile_fields():
     rows = _rows(8)
 
     class Repo(MemoryStudioRepository):
-        async def performance_rows(self, channel_id):
+        async def performance_rows(self, channel_id, limit=2000):
             return rows
 
     settings = _settings(studio_test_mode=True)
@@ -194,3 +194,51 @@ async def test_build_result_always_fits_the_profile_fields():
         assert len(result[key]) <= 2000
         assert len(result[key].splitlines()) <= 60
     assert any("omitted to fit" in item for item in result["limitations"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_only_script_ranked_top_30_posts_enter_both_provider_modes(monkeypatch, fallback):
+    import json
+    from types import SimpleNamespace
+    import app.studio.semantic_profile as semantic_profile
+    from app.studio.repository import MemoryStudioRepository
+    from app.studio.service import StudioService
+
+    rows = _rows(60)
+    for i, row in enumerate(rows):
+        high = i >= 30
+        row.update(views=1000 if high else 10, reactions=500 if high else 0,
+                   comments=50 if high else 0, shares=50 if high else 0)
+        row["text"] = ("TOP" if high else "LOW") + f"_MARKER_{i + 1} " + "x" * 1700
+    seen = []
+
+    class AgentSpy:
+        def __init__(self, _model, *, output_type, **_kwargs):
+            self.output_type = output_type
+
+        def output_validator(self, function):
+            return function
+
+        async def run(self, prompt, **_kwargs):
+            seen.append(json.loads(prompt))
+            if fallback and self.output_type is not str:
+                raise RuntimeError("Synthetic unsupported structured output")
+            value = {"topics": ["Topic — scope"], "editorial_rules": [], "style_rules": []}
+            return SimpleNamespace(output=json.dumps(value) if self.output_type is str else semantic_profile.ProfileTextExtraction(**value))
+
+    class Repo(MemoryStudioRepository):
+        async def performance_rows(self, channel_id, limit=2000):
+            assert limit == 10_000
+            return rows
+
+    monkeypatch.setattr(semantic_profile, "Agent", AgentSpy)
+    monkeypatch.setattr(semantic_profile, "build_model", lambda _settings: object())
+    result = await StudioService(Repo(), _settings(openrouter_api_key="synthetic")).build_profile_draft(1)
+    assert len(seen) == (2 if fallback else 1)
+    for payload in seen:
+        assert [p["post_id"] for p in payload["posts"]] == list(range(31, 61))
+        assert payload["strongest_posts"] == list(range(31, 61))
+        assert all(len(p["text"]) <= 1500 for p in payload["posts"])
+        assert "LOW_MARKER" not in json.dumps(payload)
+    assert result["evidence_post_ids"] == list(range(31, 61))
