@@ -138,7 +138,7 @@ select:not(.ui-native-select):disabled { opacity: .5; cursor: default; }
 
 /* Anchor each rich popup to its trigger and keep both edges on screen. */
 .explorer-filter-popover { position: relative; }
-.explorer-filter-popover .explorer-filter-body { top: calc(100% + 8px); right: 0; }
+.explorer-filter-popover .explorer-filter-body { top: calc(100% + 8px); right: 0; width: min(440px, calc(100vw - 32px)); }
 details[data-ui-popover] > :not(summary) { overflow-y: auto; }
 details[data-ui-popover].opens-up > :not(summary) { top: auto; bottom: calc(100% + 8px); }
 

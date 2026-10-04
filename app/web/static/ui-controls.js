@@ -37,6 +37,14 @@
     if (restoreFocus) state.trigger.focus();
   }
 
+  function viewportTop() {
+    var header = document.querySelector(".topbar");
+    if (header && ["fixed", "sticky"].includes(getComputedStyle(header).position)) {
+      return Math.max(16, header.getBoundingClientRect().bottom + 8);
+    }
+    return 16;
+  }
+
   function viewportBottom() {
     var rail = document.querySelector(".sidebar");
     var bottom = window.innerHeight - 8;
@@ -52,7 +60,7 @@
     state.menu.style.maxHeight = "";
     var needed = state.menu.getBoundingClientRect().height;
     var below = viewportBottom() - rect.bottom - 8;
-    var above = rect.top - 16;
+    var above = rect.top - viewportTop();
     var opensUp = below < needed && above > below;
     state.wrapper.classList.toggle("opens-up", opensUp);
     state.menu.style.maxHeight = Math.min(needed, Math.max(80, opensUp ? above : below)) + "px";
@@ -66,13 +74,13 @@
     body.style.translate = "";
     var rect = summary.getBoundingClientRect();
     var below = viewportBottom() - rect.bottom - 8;
-    var above = rect.top - 16;
+    var above = rect.top - viewportTop();
     var needed = body.getBoundingClientRect().height;
     var opensUp = below < needed && above > below;
     popover.classList.toggle("opens-up", opensUp);
     body.style.maxHeight = Math.min(needed, Math.max(80, opensUp ? above : below)) + "px";
     var bounds = body.getBoundingClientRect();
-    var shift = Math.max(8 - bounds.left, 0) - Math.max(bounds.right - window.innerWidth + 8, 0);
+    var shift = Math.max(16 - bounds.left, 0) - Math.max(bounds.right - window.innerWidth + 16, 0);
     body.style.translate = shift + "px 0";
   }
 
