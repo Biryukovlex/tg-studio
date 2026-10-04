@@ -76,8 +76,13 @@
   {% if logs_available %}
   <section class="panel agent-log-empty" data-reveal>
     <i class="mgc mgc-terminal-box-core-regular" aria-hidden="true"></i>
+    {% if request.query_params.get('q') or request.query_params.get('channel') or request.query_params.get('status') %}
+    <h2>No matching logs</h2>
+    <p>Try another status or reset the filters to see all entries.</p>
+    {% else %}
     <h2>No agent runs yet</h2>
     <p>Start a conversation in Studio. Runs and their tool results will appear here.</p>
+    {% endif %}
   </section>
   {% endif %}
   {% endfor %}

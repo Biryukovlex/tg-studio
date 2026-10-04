@@ -479,6 +479,7 @@ async def test_all_run_states_without_tool_results_are_visible_and_filtered(tmp_
         found = (await client.get("/settings/logs?format=json&q=No+tools:+failed&channel=11")).json()
         assert found["total"] == 1 and found["logs"][0]["run_status"] == "failed"
         assert (await client.get("/settings/logs?format=json&channel=22")).json()["total"] == 0
+        assert "No matching logs" in (await client.get("/settings/logs?channel=22")).text
         page = await client.get("/settings/logs?page_size=2")
         assert "page_size=2" in page.text
         # Tool-only repository callers retain their original contract.
