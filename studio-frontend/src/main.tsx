@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -60,6 +61,7 @@ function StudioMarkdownText() {
       remarkPlugins={[remarkGfm]}
       components={{
         img: () => null,
+        table: ({ node: _node, ...props }) => <div className="studio-table-scroll" role="region" aria-label="Message table, scroll horizontally" tabIndex={0}><table {...props} /></div>,
         a: ({ node: _node, ...props }) => (
           <a {...props} target="_blank" rel="noopener noreferrer" />
         ),
@@ -68,7 +70,26 @@ function StudioMarkdownText() {
   );
 }
 
+export function MessageReader({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useDialogFocusTrap(dialogRef);
+  useEffect(() => {
+    const opener = document.activeElement;
+    dialogRef.current?.showModal();
+    return () => { if (opener instanceof HTMLElement && opener.isConnected) opener.focus(); };
+  }, []);
+  return <dialog ref={dialogRef} className="studio-message-reader" aria-labelledby="message-reader-title" onCancel={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <header><div><h2 id="message-reader-title">Agent response</h2><p>Read the full message. Scroll across wide tables.</p></div><button type="button" onClick={onClose} aria-label="Close message"><i className="mgc mgc-close-core-regular" aria-hidden="true" /></button></header>
+    <div className="studio-message-reader-body" tabIndex={0} role="region" aria-label="Full message, scroll vertically and horizontally">{children}</div>
+  </dialog>;
+}
+
+function StudioAssistantContent() {
+  return <MessagePrimitive.Parts components={{ Text: StudioMarkdownText, tools: { Fallback: ToolActivity } }} />;
+}
+
 export function StudioMessage() {
+  const [readerOpen, setReaderOpen] = useState(false);
   const role = useAuiState((state) => state.message.role);
   const hasContent = useAuiState((state) => state.message.content.some((part) =>
     part.type === "text" ? Boolean(part.text.trim()) : part.type === "tool-call",
@@ -79,14 +100,11 @@ export function StudioMessage() {
 
   return (
     <MessagePrimitive.Root className="studio-message" data-role={role}>
+      {role === "assistant" && hasContent && <div className="studio-message-actions"><button type="button" onClick={() => setReaderOpen(true)} aria-label="Open message in wide view"><i className="mgc mgc-fullscreen-2-core-regular" aria-hidden="true" />Expand message</button></div>}
       <MessagePrimitive.If assistant>
-        <MessagePrimitive.Parts
-          components={{
-            Text: StudioMarkdownText,
-            tools: { Fallback: ToolActivity },
-          }}
-        />
+        <StudioAssistantContent />
       </MessagePrimitive.If>
+      {readerOpen && <MessageReader onClose={() => setReaderOpen(false)}><StudioAssistantContent /></MessageReader>}
       <MessagePrimitive.If user>
         <MessagePrimitive.Parts components={{ tools: { Fallback: ToolActivity } }} />
       </MessagePrimitive.If>
@@ -1128,8 +1146,7 @@ function ProfilePrimer({ bootstrap, onProfile, onBootstrap }: { bootstrap: Boots
   return (
     <section className="studio-primer studio-primer-profile" aria-label="Channel profile status">
       <div>
-        <p className="studio-overline">Channel profile · v{profile.version}</p>
-        <p>{topicsCount} topics · {rulesCount} rules. The agent receives these guidelines with every message.</p>
+        <p>{topicsCount} topics · {rulesCount} rules · v{profile.version}</p>
       </div>
       <div className="studio-topic-chips" aria-label="Topics">
         {chips.map((topic, index) => <span key={`${index}-${topic}`} title={topicLines[index]}>{topic}</span>)}
@@ -1585,7 +1602,7 @@ export function MoreActionsMenu({
         aria-expanded={open}
         aria-controls="studio-more-menu"
         onClick={() => setOpen((current) => !current)}
-      >More actions</button>
+      aria-label="More actions" title="More actions"><i className="mgc mgc-dots-core-regular" aria-hidden="true" /></button>
       {open && (
         <div
           ref={menuRef}
@@ -1624,6 +1641,30 @@ export function MyChannels({ channels, selectedChannelId, conversationId, busy =
   const [permissions, setPermissions] = useState<Set<number>>(new Set());
   const [pending, setPending] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [runBusy, setRunBusy] = useState(busy);
+  // A stream can leave its local busy hint behind after completion. Confirm
+  // it against this conversation, while the server still guards every update.
+  useEffect(() => {
+    if (!busy) { setRunBusy(false); return; }
+    if (!open || !conversationId) { setRunBusy(busy); return; }
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const reconcile = async () => {
+      try {
+        const payload = await api<{ run: RunSummary | null }>(`/studio/api/conversations/${conversationId}/active-run`, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        const active = isActiveRun(payload.run);
+        setRunBusy(active);
+        if (active) timer = setTimeout(() => { void reconcile(); }, 1500);
+      } catch {
+        // Let the update endpoint give a precise error instead of blocking
+        // the control forever because a status request failed.
+        if (!controller.signal.aborted) setRunBusy(false);
+      }
+    };
+    void reconcile();
+    return () => { controller.abort(); if (timer) clearTimeout(timer); };
+  }, [busy, open, conversationId]);
   const sectionRef = useRef<HTMLElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -1662,14 +1703,16 @@ export function MyChannels({ channels, selectedChannelId, conversationId, busy =
       <span className="studio-my-channels-copy"><strong>My channels{selectedCount ? ` · ${selectedCount}` : ""}</strong></span><span aria-hidden="true">{open ? "⌃" : "⌄"}</span>
     </button>
     {open && <div id="studio-my-channels-body" className="studio-my-channels-body">
+      <div className="studio-reference-heading"><h2>Reference channels</h2><button type="button" aria-label="Close reference channels" onClick={() => { setOpen(false); triggerRef.current?.focus(); }}><i className="mgc mgc-close-core-regular" aria-hidden="true" /></button></div>
       <p>Use your other channels as references for this conversation.</p>
+      {runBusy && <p className="studio-reference-wait" role="status">Wait for the current reply to finish before changing its sources.</p>}
       {!conversationId && <p>Create a conversation to add a reference.</p>}
       {error && <p role="alert">{error}</p>}
       <ul>{references.map((channel) => <li key={channel.id} className="studio-my-channels-card">
         <div><strong>{channelLabel(channel)}</strong><span>{channel.identifier}</span></div>
-        <p>{channel.summary || "No profile has been built for this channel yet."}</p>
-        {!channel.selected && <label className="studio-reference-permission"><input type="checkbox" checked={permissions.has(channel.id)} onChange={(event) => setPermissions((current) => { const next = new Set(current); if (event.target.checked) next.add(channel.id); else next.delete(channel.id); return next; })} />I control this channel and have permission to use its posts with Studio and the configured AI provider.</label>}
-        <button type="button" disabled={busy || pending !== null || (!channel.selected && !permissions.has(channel.id))} onClick={() => { void update(channel); }}>{channel.selected ? "Remove from context" : channel.needs_renewal ? "Renew reference access" : "Use in this conversation"}</button>
+        <p className="studio-reference-summary">{channel.summary || "No profile has been built for this channel yet."}</p>
+        {!channel.selected && <label className="studio-reference-permission"><input type="checkbox" checked={permissions.has(channel.id)} onChange={(event) => { const checked = event.currentTarget.checked; setPermissions((current) => { const next = new Set(current); if (checked) next.add(channel.id); else next.delete(channel.id); return next; }); }} />I control this channel and permit sharing its posts with the configured AI provider.</label>}
+        <button type="button" disabled={runBusy || pending !== null || (!channel.selected && !permissions.has(channel.id))} onClick={() => { void update(channel); }}>{pending === channel.id ? "Connecting…" : channel.selected ? "Remove from context" : channel.needs_renewal ? "Renew reference access" : "Use in this conversation"}</button>
         {channel.selected && <span className="studio-reference-selected" role="status">Connected to this conversation</span>}
       </li>)}</ul>
     </div>}
@@ -1705,9 +1748,22 @@ export function ConversationTitle({ conversation, onRenamed }: { conversation: C
     {editing ? <input ref={inputRef} className="studio-title-input" aria-label="Conversation title" maxLength={160} value={value} disabled={saving} onChange={(event) => setValue(event.target.value)} onBlur={() => { void save(); }} onKeyDown={(event) => {
       if (event.key === "Enter") { event.preventDefault(); void save(); }
       if (event.key === "Escape") { event.preventDefault(); cancelled.current = true; setEditing(false); setError(""); }
-    }} /> : <h1>{conversation ? <button className="studio-title-trigger" type="button" aria-label="Rename conversation" title="Click to rename" onClick={() => { cancelled.current=false; setValue(conversation.title); setEditing(true); }}>{conversation.title}</button> : "Content Studio"}</h1>}
+    }} /> : <h1>{conversation ? <button className="studio-title-trigger" type="button" aria-label="Rename conversation" title={`${conversation.title} · Click to rename`} onClick={() => { cancelled.current=false; setValue(conversation.title); setEditing(true); }}>{conversation.title}</button> : "Content Studio"}</h1>}
     {error && <p role="alert">{error}</p>}
   </div>;
+}
+
+function ConversationNavigation(props: Parameters<typeof ConversationRail>[0]) {
+  const [desktop, setDesktop] = useState(() => window.matchMedia("(min-width:681px)").matches);
+  useEffect(() => {
+    const media = window.matchMedia("(min-width:681px)");
+    const update = () => setDesktop(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const target = desktop ? document.getElementById("studio-navigation-slot") : null;
+  const rail = <ConversationRail {...props} />;
+  return target ? createPortal(rail, target) : rail;
 }
 
 function StudioApp() {
@@ -2015,7 +2071,7 @@ function StudioApp() {
 
   return (
     <div className="studio-app">
-      <ConversationRail channels={bootstrap.channels} selectedChannelId={selectedChannelId} onChannelSelect={selectChannel} conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} />
+      <ConversationNavigation channels={bootstrap.channels} selectedChannelId={selectedChannelId} onChannelSelect={selectChannel} conversations={bootstrap.conversations} selected={selected} onSelect={setSelected} onNew={createConversation} />
       {settingsOpen && selectedChannelId && <StudioSettings channelId={selectedChannelId} channelLabel={selectedChannelLabel} onClose={() => setSettingsOpen(false)} />}
       {profileOpen && selectedChannelId && (
         <ChannelProfileDialog
@@ -2031,6 +2087,7 @@ function StudioApp() {
           <div>
             <p className="studio-overline">{selectedChannel?.identifier ?? "Channel"}</p>
             <ConversationTitle key={selected?.id} conversation={selected} onRenamed={(conversation) => { setSelected(conversation); refresh(); }} />
+            <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
           </div>
           <div className="studio-topbar-actions">
             <button type="button" className="studio-draft-toggle" onClick={openDraft}>Draft</button>
@@ -2043,7 +2100,6 @@ function StudioApp() {
             />
           </div>
         </header>
-        <ProfilePrimer bootstrap={bootstrap} onProfile={() => setProfileOpen(true)} onBootstrap={(next) => setBootstrap(next)} />
         {(inlineError || (error && bootstrap)) && <div className="studio-inline-error" role="alert"><span>{inlineError || error}</span>{deleteRetryConversation && <button type="button" onClick={() => void stopAndDelete()} disabled={deletingId !== null}>{deletingId === deleteRetryConversation.id ? "Stopping…" : "Stop run and delete"}</button>}<button type="button" className="studio-inline-error-dismiss" onClick={() => { setInlineError(""); setError(""); setDeleteRetryConversation(null); }} aria-label="Dismiss error">×</button></div>}
         {selected ? <StudioThread key={selected.id} conversation={selected} seedRun={selected.id === bootstrap.current_conversation?.id ? bootstrap.active_run : null} consent={bootstrap.consent} pendingPrefill={pendingPrefill && pendingPrefill.channel_id === selected.channel_id ? pendingPrefill : null} onPrefillResult={handlePrefillResult} onStopRun={cancelRun} onRunActivityChange={setAgentRunActive} onRunFinished={handleRunFinished} /> : <div className="studio-no-thread"><h2>Start a conversation</h2><p>Choose New conversation to give the agent a channel context.</p><button type="button" onClick={createConversation}>Open channel desk</button></div>}
       </main>

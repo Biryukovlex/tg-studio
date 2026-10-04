@@ -11,6 +11,15 @@
   <a href="/settings/logs">Agent logs</a>
 </nav>
 {% endblock %}
+{% block sidebarcontext %}
+  <nav class="section-tabs" aria-label="Settings sections" data-settings-section-nav>
+    <a href="#telegram">Channels</a>
+    <a href="#connection">Telegram connection</a>
+    <a href="#collection">Collection</a>
+    <a href="#studio">Studio model</a>
+    <a href="#research">Web research</a>
+  </nav>
+{% endblock %}
 {% block content %}
 {% if save_notice %}
 <aside class="save-confirmation" data-save-confirmation data-section="{{ save_notice.section }}" role="status" aria-live="polite">
@@ -28,6 +37,7 @@
 </aside>
 {% endif %}
 <div class="settings-layout">
+<div class="settings-mobile-sections">
   <nav class="section-tabs" aria-label="Settings sections" data-settings-section-nav>
     <a href="#telegram">Channels</a>
     <a href="#connection">Telegram connection</a>
@@ -35,6 +45,8 @@
     <a href="#studio">Studio model</a>
     <a href="#research">Web research</a>
   </nav>
+</div>
+
 
 <div class="settings-stack">
   <!-- Telegram -->

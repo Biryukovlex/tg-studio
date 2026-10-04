@@ -28,6 +28,7 @@
           aria-label="Replay ghost animation">
           <span class="ghost-fallback" aria-hidden="true"></span>
         </button>
+        <a class="brand-wordmark" href="/" aria-label="{{ app_name }} home"><span>TG</span>Studio</a>
       </div>
 
       <nav class="sidebar-nav">
@@ -47,6 +48,9 @@
         {% endif %}
       </nav>
 
+      <div class="sidebar-context"{% if ghost_mode == 'studio' %} id="studio-navigation-slot"{% endif %}>
+        {% block sidebarcontext %}{% endblock %}
+      </div>
       <div class="sidebar-foot">
         <a class="sidebar-link logout-link" href="/logout">
           <i class="mgc mgc-exit-door-core-regular" aria-hidden="true"></i>
@@ -62,11 +66,11 @@
       </header>
       {% endif %}
       <header class="topbar">
-        <a class="brand-wordmark" href="/" aria-label="{{ app_name }} home"><span>TG</span>Studio</a>
         <div class="page-heading">
           {% block pageheading %}
           <p class="eyebrow">Channel intelligence</p>
           <h1>Overview</h1>
+          <p class="header-description">See what resonates. Find your next story.</p>
           {% endblock %}
         </div>
         <div class="nav-actions">
@@ -78,6 +82,9 @@
               <span>Sync now</span>
             </button>
           </form>
+          <details class="header-export">
+            <summary class="action-btn"><i class="mgc mgc-file-export-core-regular" aria-hidden="true"></i><span>Export</span></summary>
+            <div class="header-export-menu">
           <a class="action-btn" href="/export.csv{% if current_channel %}?channel={{ current_channel }}{% endif %}">
             <i class="mgc mgc-file-export-core-regular" aria-hidden="true"></i>
             <span>Export posts</span>
@@ -86,6 +93,8 @@
             <i class="mgc mgc-comment-2-core-regular" aria-hidden="true"></i>
             <span>Export comments</span>
           </a>
+            </div>
+          </details>
           {% endblock %}
         </div>
       </header>

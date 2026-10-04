@@ -535,6 +535,20 @@
     });
   });
 
+  // Export actions stay attached to their opener, with native keyboard use.
+  document.addEventListener('click', (event) => {
+    document.querySelectorAll('.header-export[open]').forEach((menu) => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    document.querySelectorAll('.header-export[open]').forEach((menu) => {
+      menu.open = false;
+      menu.querySelector('summary')?.focus();
+    });
+  });
+
   // Agent logs: the list, filters and pagination are server-rendered over all
   // stored results. This only checks storage availability so an outage reads
   // as unavailable instead of empty.

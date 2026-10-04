@@ -321,3 +321,35 @@ describe("conversation reference channels", () => {
     expect(JSON.parse(fetchMock.mock.calls[2][1].body).enabled).toBe(false);
   });
 });
+
+
+describe("reference-channel availability", () => {
+  it("clears a stale busy hint using the conversation's saved status", async () => {
+    const ref = {...channel(9,"Other channel"), summary:"Useful topics", selected:false, needs_renewal:false};
+    const fetchMock = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(
+      url.endsWith("active-run") ? {run:null} : {references:[ref]},
+    ), {headers:{"content-type":"application/json"}})));
+    vi.stubGlobal("fetch",fetchMock);
+    render(<MyChannels channels={[channel(7,"Main"),ref]} selectedChannelId={7} conversationId="c1" busy />);
+    fireEvent.click(screen.getByRole("button",{name:/My channels/}));
+    const add = await screen.findByRole("button",{name:"Use in this conversation"});
+    fireEvent.click(screen.getByRole("checkbox"));
+    await waitFor(() => expect(add.hasAttribute("disabled")).toBe(false));
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("active-run"))).toBe(true);
+  });
+  it("explains a genuine active-run restriction and reenables after completion", async () => {
+    const ref = {...channel(9,"Other channel"), summary:"Useful topics", selected:false, needs_renewal:false};
+    vi.stubGlobal("fetch",vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(
+      url.endsWith("active-run") ? {run:{status:"running"}} : {references:[ref]},
+    ), {headers:{"content-type":"application/json"}}))));
+    const props = {channels:[channel(7,"Main"),ref], selectedChannelId:7, conversationId:"c1"};
+    const {rerender}=render(<MyChannels {...props} busy />);
+    fireEvent.click(screen.getByRole("button",{name:/My channels/}));
+    const add=await screen.findByRole("button",{name:"Use in this conversation"});
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(add.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/Wait for the current reply/)).not.toBeNull();
+    rerender(<MyChannels {...props} busy={false} />);
+    await waitFor(() => expect(add.hasAttribute("disabled")).toBe(false));
+  });
+});
