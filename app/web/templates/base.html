@@ -73,7 +73,7 @@
           <form method="post" action="/refresh" class="inline-form refresh-form">
             {% if current_channel %}<input type="hidden" name="channel" value="{{ current_channel }}">{% endif %}
             <button type="submit" class="action-btn primary-action">
-              <i class="mgc mgc-refresh-4-ai-core-regular" aria-hidden="true"></i>
+              <i class="mgc mgc-refresh-2-core-regular" aria-hidden="true"></i>
               <span>Sync now</span>
             </button>
             {% if msg and request.url.path == "/" %}<span class="sync-feedback" role="status"><span class="sync-feedback-dot" aria-hidden="true"></span><span>{{ msg }}</span><button type="button" data-sync-dismiss aria-label="Dismiss sync status" title="Dismiss sync status"><i class="mgc mgc-close-core-regular" aria-hidden="true"></i></button></span>{% endif %}
