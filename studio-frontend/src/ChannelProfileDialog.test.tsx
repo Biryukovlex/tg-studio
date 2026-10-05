@@ -324,6 +324,29 @@ describe("ChannelProfileDialog evidence", () => {
 });
 
 describe("ChannelProfileDialog build result", () => {
+  it("shows the safe provider failure and retains edited profile text", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown) => {
+      const failed = String(url).includes("/studio/api/profile/build");
+      return {
+        ok: !failed, status: failed ? 502 : 200, redirected: false,
+        headers: { get: () => "application/json" },
+        json: async () => failed
+          ? { error: { code: "provider_timeout", message: "The agent took too long to respond. Try again.", retryable: true } }
+          : { channel_id: 7, profile: { channel_id: 7, version: 2, topics_text: "Original topic", editorial_text: "", style_text: "" }, can_build: true, build_blockers: [] },
+      } as unknown as Response;
+    }));
+    render(<ChannelProfileDialog channelId={7} onClose={() => {}} />);
+    await screen.findByText("Original topic");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const topics = screen.getByLabelText("Topics") as HTMLTextAreaElement;
+    fireEvent.change(topics, { target: { value: "My edited topic" } });
+    fireEvent.click(screen.getByRole("button", { name: "Build from posts" }));
+    await screen.findByText("The agent took too long to respond. Try again. Your text is unchanged.");
+    expect(topics.value).toBe("My edited topic");
+    confirm.mockRestore();
+  });
+
   it("opens a fresh build formatted and keeps it unsaved", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.stubGlobal("fetch", vi.fn(async (url: unknown, init?: RequestInit) => {

@@ -144,7 +144,7 @@ async def test_profile_build_fails_without_a_local_substitute_when_provider_mode
             raise RuntimeError("provider unavailable")
 
     monkeypatch.setattr(semantic_profile, "Agent", FailingAgent)
-    with pytest.raises(ValueError, match="previous profile is unchanged"):
+    with pytest.raises(RuntimeError, match="provider unavailable"):
         await build_profile_text_draft(
             analytics, rows,
             _settings(studio_test_mode=False, openrouter_api_key="synthetic-key"),
@@ -212,10 +212,12 @@ async def test_only_script_ranked_top_30_posts_enter_both_provider_modes(monkeyp
                    comments=50 if high else 0, shares=50 if high else 0)
         row["text"] = ("TOP" if high else "LOW") + f"_MARKER_{i + 1} " + "x" * 1700
     seen = []
+    options = []
 
     class AgentSpy:
-        def __init__(self, _model, *, output_type, **_kwargs):
+        def __init__(self, _model, *, output_type, model_settings, **_kwargs):
             self.output_type = output_type
+            options.append(model_settings)
 
         def output_validator(self, function):
             return function
@@ -234,11 +236,37 @@ async def test_only_script_ranked_top_30_posts_enter_both_provider_modes(monkeyp
 
     monkeypatch.setattr(semantic_profile, "Agent", AgentSpy)
     monkeypatch.setattr(semantic_profile, "build_model", lambda _settings: object())
-    result = await StudioService(Repo(), _settings(openrouter_api_key="synthetic")).build_profile_draft(1)
+    result = await StudioService(Repo(), _settings(openrouter_api_key="synthetic", openrouter_model="nvidia/nemotron-3-ultra-550b-a55b:free")).build_profile_draft(1)
     assert len(seen) == (2 if fallback else 1)
+    assert all(option["max_tokens"] == 4000 and option["extra_body"]["reasoning"] == {"enabled": False} for option in options)
     for payload in seen:
         assert [p["post_id"] for p in payload["posts"]] == list(range(31, 61))
         assert payload["strongest_posts"] == list(range(31, 61))
         assert all(len(p["text"]) <= 1500 for p in payload["posts"])
         assert "LOW_MARKER" not in json.dumps(payload)
     assert result["evidence_post_ids"] == list(range(31, 61))
+
+
+def test_profile_reasoning_override_is_scoped_to_optional_nemotron_reasoning():
+    from app.studio.semantic_profile import profile_model_settings, PROFILE_BUILD_TIMEOUT_SECONDS, PROFILE_STRUCTURED_TIMEOUT_SECONDS, PROFILE_JSON_TIMEOUT_SECONDS
+    assert "extra_body" not in profile_model_settings(_settings(openrouter_model="other/reasoning-model"))
+    assert profile_model_settings(_settings(openrouter_model="nvidia/nemotron-3-ultra-550b-a55b"))["extra_body"] == {"reasoning": {"enabled": False}}
+    assert PROFILE_BUILD_TIMEOUT_SECONDS > PROFILE_STRUCTURED_TIMEOUT_SECONDS + PROFILE_JSON_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_profile_failure_preserves_provider_timeout_classification(monkeypatch):
+    import app.studio.semantic_profile as semantic_profile
+    from app.studio.observability import safe_error
+    class TimeoutAgent:
+        def __init__(self, *_args, **_kwargs): pass
+        def output_validator(self, function): return function
+        async def run(self, *_args, **_kwargs): raise TimeoutError("synthetic sensitive detail")
+    monkeypatch.setattr(semantic_profile, "Agent", TimeoutAgent)
+    rows = _rows(12)
+    analytics = analyze_posts(rows, 1, now=datetime.now(timezone.utc))
+    with pytest.raises(TimeoutError) as raised:
+        await build_profile_text_draft(analytics, rows, _settings(studio_test_mode=False), model=object())
+    code, message, retryable = safe_error(raised.value)
+    assert code == "provider_timeout" and retryable
+    assert "sensitive" not in message

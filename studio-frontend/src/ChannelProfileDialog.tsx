@@ -301,7 +301,7 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
       } else if (e instanceof StudioApiError && e.status === 409) {
         setStatus(message);
       } else {
-        setStatus("Could not build. Your text is unchanged; try again.");
+        setStatus(`${message} Your text is unchanged.`);
       }
       setStatusIsError(true);
     } finally {

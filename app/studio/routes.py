@@ -659,13 +659,14 @@ def build_router() -> APIRouter:
             # Structured output may need a text-JSON compatibility retry on
             # models that do not support tool-based output schemas.
             import asyncio
-            result = await asyncio.wait_for(service.build_profile_draft(payload.channel_id), timeout=100)
+            from .semantic_profile import PROFILE_BUILD_TIMEOUT_SECONDS
+            result = await asyncio.wait_for(service.build_profile_draft(payload.channel_id), timeout=PROFILE_BUILD_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             return _safe_error("profile_build_failed", "Profile build timed out. Your previous profile is unchanged. Retry shortly.", status_code=502, retryable=True)
         except Exception as exc:
             if "too few" in str(exc).lower():
                 return _safe_error("too_few_posts", str(exc), status_code=409)
-            log.exception("Channel profile build failed for channel_id=%s", payload.channel_id)
+            log.warning("Channel profile build failed for channel_id=%s error_class=%s", payload.channel_id, type(exc).__name__)
             code, message, retryable = safe_error(exc)
             return _safe_error(code, message, status_code=502, retryable=retryable)
         return {"draft": result}
