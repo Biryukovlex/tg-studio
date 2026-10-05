@@ -402,3 +402,63 @@ describe("ChannelProfileDialog build result", () => {
     confirm.mockRestore();
   });
 });
+
+
+describe("ChannelProfileDialog save reliability", () => {
+  beforeEach(() => {
+    HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+  });
+
+  const profile = { channel_id: 7, version: 1, topics_text: "Topic", editorial_text: "Rule",
+    style_text: "Style", updated_at: null, built_at: null, built_from_posts: 30 };
+  const response = (payload: unknown, status = 200) => ({
+    ok: status < 400, status, redirected: false, headers: { get: () => "application/json" },
+    json: async () => payload,
+  }) as unknown as Response;
+
+  it("explains a rejected save and retains edits for a successful retry", async () => {
+    let attempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        attempts += 1;
+        if (attempts === 1) return response({ error: { code: "invalid_profile_evidence",
+          message: "Supporting posts must belong to this channel's stored history." } }, 422);
+        return response({ profile: { ...profile, version: 2, topics_text: "My edited topic" } });
+      }
+      return response({ profile, can_build: true, build_blockers: [], channel_id: 7 });
+    }));
+    const onSaved = vi.fn();
+    render(<ChannelProfileDialog channelId={7} onClose={() => {}} onSaved={onSaved} />);
+    await screen.findByText("Topic");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const topics = screen.getByLabelText("Topics") as HTMLTextAreaElement;
+    fireEvent.change(topics, { target: { value: "My edited topic" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save as v2" }));
+    await screen.findByText(/Supporting posts must belong to this channel's stored history/);
+    expect(topics.value).toBe("My edited topic");
+    expect(onSaved).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Save as v2" }));
+    await screen.findByText("Saved as v2. The agent uses it from the next message.");
+    expect(onSaved).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+  });
+
+  it("uses the persisted text after save so server normalization leaves no unsaved changes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init?: RequestInit) =>
+      response(init?.method === "PUT"
+        ? { profile: { ...profile, version: 2, topics_text: "Changed topic" } }
+        : { profile, can_build: true, build_blockers: [], channel_id: 7 })));
+    render(<ChannelProfileDialog channelId={7} onClose={() => {}} />);
+    await screen.findByText("Topic");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const topics = screen.getByLabelText("Topics") as HTMLTextAreaElement;
+    fireEvent.change(topics, { target: { value: "Changed topic  \n\n" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save as v2" }));
+    await screen.findByText("Saved as v2. The agent uses it from the next message.");
+    expect(topics.value).toBe("Changed topic");
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
+  });
+});

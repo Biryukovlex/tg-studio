@@ -591,13 +591,15 @@ def build_router() -> APIRouter:
         if expected != current_version:
             return JSONResponse({"error": {"code": "profile_conflict", "message": "Profile changed in another tab.", "retryable": True}, "server_profile": _profile(current)}, status_code=409)
         evidence = payload.evidence_post_ids
-        build_count = 0
+        build_count = int((current or {}).get("built_from_posts", 0) or 0)
         if evidence is not None:
-            supplied_rows = await service.repository.performance_rows(payload.channel_id)
-            allowed_ids = {int(r.get("post_id", r.get("id", 0))) for r in supplied_rows}
-            if any(pid <= 0 or pid not in allowed_ids for pid in evidence):
-                return _safe_error("invalid_profile_evidence", "Supporting posts must belong to this channel's supplied context.", status_code=422)
-            build_count = len(supplied_rows)
+            if any(pid <= 0 or pid > 2**63 - 1 for pid in evidence):
+                return _safe_error("invalid_profile_evidence", "Supporting posts must belong to this channel's stored history.", status_code=422)
+            allowed_ids = await service.repository.profile_evidence_ids(payload.channel_id, evidence)
+            if set(evidence) != allowed_ids:
+                return _safe_error("invalid_profile_evidence", "Supporting posts must belong to this channel's stored history.", status_code=422)
+            evidence = list(dict.fromkeys(evidence))
+            build_count = len(evidence)
         def clean_text(v: str) -> str:
             lines = [line.rstrip() for line in v.splitlines()]
             cleaned = "\n".join(line for line in lines if line.strip() != "")

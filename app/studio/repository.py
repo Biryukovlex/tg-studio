@@ -216,6 +216,7 @@ class StudioRepositoryProtocol(Protocol):
     async def list_channels(self) -> list[dict[str, Any]]: ...
     async def channel_context(self, channel_id: int) -> dict[str, Any]: ...
     async def performance_rows(self, channel_id: int, limit: int = 2000) -> list[dict[str, Any]]: ...
+    async def profile_evidence_ids(self, channel_id: int, post_ids: list[int]) -> set[int]: ...
     async def get_system_prompt(self, channel_id: int) -> str: ...
     async def set_system_prompt(self, channel_id: int, value: str, *, expected_prompt: str | None = None) -> str: ...
     async def get_profile(self, channel_id: int) -> dict[str, Any] | None: ...
@@ -386,6 +387,20 @@ class StudioRepository:
                 )
             ).mappings().all()
         return [dict(row) for row in rows]
+
+    async def profile_evidence_ids(self, channel_id: int, post_ids: list[int]) -> set[int]:
+        """Validate the small supplied sample against the full scoped archive."""
+        if not post_ids:
+            return set()
+        result = await self.db._execute(
+            """SELECT p.id FROM posts p
+                 WHERE p.workspace_id=:workspace_id AND p.channel_id=:channel_id
+                   AND p.id = ANY(CAST(:post_ids AS bigint[]))
+                   AND EXISTS (SELECT 1 FROM snapshots s
+                                WHERE s.workspace_id=p.workspace_id AND s.post_id=p.id)""",
+            {"channel_id": channel_id, "post_ids": list(set(post_ids))},
+        )
+        return {int(row["id"]) for row in result.mappings().all()}
 
     # ---------- M3 analyses / profiles / consent ----------
 
@@ -2227,6 +2242,12 @@ class MemoryStudioRepository:
         if not any(row["id"] == channel_id and row["active"] for row in self.channels):
             raise ConversationNotFound("channel is not part of the active workspace")
         return []
+
+    async def profile_evidence_ids(self, channel_id: int, post_ids: list[int]) -> set[int]:
+        requested = set(post_ids)
+        rows = await self.performance_rows(channel_id, limit=10_000)
+        return {int(row.get("post_id", row.get("id", 0))) for row in rows
+                if int(row.get("post_id", row.get("id", 0))) in requested}
 
     async def get_analysis_by_hash(self, channel_id: int, input_hash: str) -> dict[str, Any] | None:
         for row in self.analyses.values():

@@ -328,6 +328,9 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
         }),
       });
       const p = result.profile;
+      setTopics(p.topics_text ?? "");
+      setEditorial(p.editorial_text ?? "");
+      setStyle(p.style_text ?? "");
       setProfile(p);
       setBuildEvidence(null);
       setInitial({ topics: p.topics_text ?? "", editorial: p.editorial_text ?? "", style: p.style_text ?? "", version: p.version });
@@ -347,7 +350,8 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
           setStatusIsError(true);
         }
       } else {
-        setStatus("Could not save. Your text is preserved; try again.");
+        const message = e instanceof StudioApiError ? e.payload.error?.message : undefined;
+        setStatus(`${message ?? "Could not save."} Your text is preserved; try again.`);
         setStatusIsError(true);
       }
     } finally {

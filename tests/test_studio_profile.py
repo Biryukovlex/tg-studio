@@ -1,3 +1,5 @@
+import uuid
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -152,3 +154,77 @@ async def test_openrouter_consent_is_explicit_and_precedes_agent_use(client, set
     )
     assert blocked.status_code == 409
     assert blocked.json()["error"]["code"] == "provider_consent_required"
+
+
+@pytest.mark.asyncio
+async def test_save_profile_accepts_supporting_posts_older_than_recent_archive(client, settings, app, channel_id):
+    """Build may select an old top performer beyond the latest 2,000 posts."""
+    settings.studio_test_mode = True
+    from sqlalchemy import text
+    db = app.state.db
+    async with db.sessions.session() as session:
+        oldest = (await session.execute(text("SELECT id FROM posts WHERE workspace_id=:workspace_id AND channel_id=:channel_id"),
+                    {"workspace_id": db.workspace_id, "channel_id": channel_id})).scalar_one()
+        await session.execute(text("""INSERT INTO posts (workspace_id, channel_id, message_id, posted_at, text, created_at)
+            SELECT :workspace_id, :channel_id, n, '2025-01-01'::timestamptz, 'Synthetic post', now()
+              FROM generate_series(100, 2100) AS n"""),
+            {"workspace_id": db.workspace_id, "channel_id": channel_id})
+        await session.execute(text("""INSERT INTO snapshots (workspace_id, post_id, taken_at, views, comments, reactions, shares)
+            SELECT workspace_id, id, now(), 1, 0, 0, 0 FROM posts
+             WHERE workspace_id=:workspace_id AND channel_id=:channel_id AND id<>:oldest"""),
+            {"workspace_id": db.workspace_id, "channel_id": channel_id, "oldest": oldest})
+        await session.commit()
+    import re
+    await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password})
+    home = await client.get("/studio")
+    token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
+    current = (await client.get(f"/studio/api/profile?channel_id={channel_id}")).json()["profile"]
+    version = current["version"] if current else 0
+    payload = {"channel_id": channel_id, "expected_version": version, "topics_text": "Topic from old top performer",
+               "editorial_text": "One rule", "style_text": "One style rule", "evidence_post_ids": [oldest]}
+    saved = await client.put("/studio/api/profile", json=payload, headers={"x-csrf-token": token})
+    assert saved.status_code == 200, saved.text
+    profile = saved.json()["profile"]
+    assert profile["version"] == version + 1
+    assert profile["evidence_post_ids"] == [oldest]
+    assert profile["built_from_posts"] == 1
+    # An ordinary text edit keeps the saved sample metadata.
+    payload.pop("evidence_post_ids")
+    payload.update(expected_version=profile["version"], topics_text="Edited topic")
+    edited = await client.put("/studio/api/profile", json=payload, headers={"x-csrf-token": token})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["profile"]["built_from_posts"] == 1
+    assert edited.json()["profile"]["evidence_post_ids"] == [oldest]
+
+
+@pytest.mark.asyncio
+async def test_profile_save_rejects_foreign_and_missing_supporting_posts(client, settings, app, channel_id):
+    settings.studio_test_mode = True
+    import re
+    from app.postgres_db import PostgresDatabase
+    from sqlalchemy import text
+    db = app.state.db
+    other_channel = await db.upsert_channel("@other_synthetic", "Other", 987654)
+    other_post = await db.upsert_post(other_channel, message_id=1, posted_at=datetime.now(timezone.utc), text="Other channel")
+    await db.add_snapshot_if_changed(other_post, views=1, comments=0, reactions=0, shares=0)
+    foreign = PostgresDatabase(settings.database_url, workspace_slug="profile-save-" + uuid.uuid4().hex)
+    await foreign.init_db(admin_username="synthetic-owner")
+    try:
+        foreign_channel = await foreign.upsert_channel("@foreign_synthetic", "Foreign", 123)
+        foreign_post = await foreign.upsert_post(foreign_channel, message_id=1, posted_at=datetime.now(timezone.utc), text="Foreign workspace")
+        await foreign.add_snapshot_if_changed(foreign_post, views=1, comments=0, reactions=0, shares=0)
+        await client.post("/login", data={"username": settings.admin_username, "password": settings.admin_password})
+        home = await client.get("/studio")
+        token = re.search(r'<meta name="studio-csrf-token" content="([^"]+)"', home.text).group(1)
+        current = (await client.get(f"/studio/api/profile?channel_id={channel_id}")).json()["profile"]
+        version = current["version"] if current else 0
+        for post_id in (other_post, foreign_post, -1, 9223372036854775807, 2**64):
+            response = await client.put("/studio/api/profile", json={"channel_id": channel_id, "expected_version": version,
+                "topics_text": "Synthetic topic", "evidence_post_ids": [post_id]}, headers={"x-csrf-token": token})
+            assert response.status_code == 422
+            assert response.json()["error"]["code"] == "invalid_profile_evidence"
+        after = (await client.get(f"/studio/api/profile?channel_id={channel_id}")).json()["profile"]
+        assert after == current
+    finally:
+        await foreign._execute("DELETE FROM workspaces WHERE id=:workspace_id")
+        await foreign.close()
