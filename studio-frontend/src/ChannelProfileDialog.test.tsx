@@ -461,4 +461,24 @@ describe("ChannelProfileDialog save reliability", () => {
     expect(screen.queryByText("Unsaved changes")).toBeNull();
     expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
   });
+
+  it("preserves new edits made while an earlier save is pending", async () => {
+    let completeSave!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => { completeSave = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init?: RequestInit) =>
+      init?.method === "PUT" ? pending : response({ profile, can_build: true, build_blockers: [], channel_id: 7 })));
+    render(<ChannelProfileDialog channelId={7} onClose={() => {}} />);
+    await screen.findByText("Topic");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const topics = screen.getByLabelText("Topics") as HTMLTextAreaElement;
+    fireEvent.change(topics, { target: { value: "First edit" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save as v2" }));
+    fireEvent.change(topics, { target: { value: "Second edit while saving" } });
+    completeSave(response({ profile: { ...profile, version: 2, topics_text: "First edit" } }));
+    await screen.findByText("Saved as v2. The agent uses it from the next message.");
+    expect(topics.value).toBe("Second edit while saving");
+    expect(screen.getByText("Unsaved changes")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save as v3" }).hasAttribute("disabled")).toBe(false);
+  });
+
 });

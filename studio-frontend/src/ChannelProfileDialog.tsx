@@ -328,9 +328,10 @@ export default function ChannelProfileDialog({ channelId, onClose, onSaved }: Pr
         }),
       });
       const p = result.profile;
-      setTopics(p.topics_text ?? "");
-      setEditorial(p.editorial_text ?? "");
-      setStyle(p.style_text ?? "");
+      // Normalize the submitted fields without overwriting edits made while saving.
+      setTopics((value) => value === topics ? (p.topics_text ?? "") : value);
+      setEditorial((value) => value === editorial ? (p.editorial_text ?? "") : value);
+      setStyle((value) => value === style ? (p.style_text ?? "") : value);
       setProfile(p);
       setBuildEvidence(null);
       setInitial({ topics: p.topics_text ?? "", editorial: p.editorial_text ?? "", style: p.style_text ?? "", version: p.version });
