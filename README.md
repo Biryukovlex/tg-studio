@@ -17,7 +17,8 @@ self-hosted workspace.
   **References**.
 - **Calendar:** schedule text, photos or albums in Telegram; review, reschedule
   and cancel posts in month, week or list views. Publishing always requires
-  your confirmation and the connected account's posting permission.
+  your confirmation and the connected account's posting permission. Once
+  Telegram accepts a schedule, it can publish while TGhost is offline.
 - **Settings:** manage channels, Telegram connection, model provider and
   optional web research; inspect agent runs and failures.
 
@@ -80,6 +81,23 @@ The panel starts without a Telegram connection. To enable collection:
 The Telegram account must be able to read each channel. Scheduling additionally
 requires permission to publish there. TGhost uses a user session, not a bot.
 
+### Update an existing installation
+
+Back up PostgreSQL and your encryption key first; follow the
+[backup and restore guide](docs/deployment.md#backups-and-restore).
+For the default Docker setup:
+
+```bash
+git pull --ff-only
+docker compose --profile migrate build tg-studio migrate
+docker compose stop tg-studio
+docker compose --profile migrate run --rm migrate
+docker compose up -d tg-studio
+```
+
+For separate web and worker processes, use the
+[split deployment guide](docs/deployment.md#explicit-process-roles).
+
 ## Choose your model
 
 Open **Settings → Studio**, configure a provider, select a model and save.
@@ -99,12 +117,14 @@ For web research, connect the optional private SearXNG service using the
 
 ## Storage and deployment
 
-PostgreSQL is the only writable runtime database. Telegram sessions and provider credentials saved through Settings are encrypted;
-the encryption key stays outside the database. Keep database
-backups, Telegram sessions, provider keys and collected content out of Git.
+PostgreSQL is the only database for the app and its maintenance tools. SQLite
+import support has been removed. Telegram sessions and provider credentials
+saved through Settings are encrypted; the encryption key stays outside the
+database. Keep backups, Telegram sessions, provider keys and collected content
+out of Git.
 
-Docker publishes the app and database on loopback only. For private server
-access, use a VPN or SSH tunnel. Read the [deployment runbook](docs/deployment.md)
+The default Docker configuration publishes the app and database on loopback
+only. For private server access, use a VPN or SSH tunnel. Read the [deployment runbook](docs/deployment.md)
 for migrations, backups, HTTPS configuration and separate web/worker processes.
 Do not expose this release as a public service with shared administrator access.
 
