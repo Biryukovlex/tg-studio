@@ -1,7 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TGhost">
-  <rect width="64" height="64" rx="16" fill="#07131d"/>
-  <path d="M14 46h36" fill="none" stroke="#294354" stroke-width="4" stroke-linecap="round"/>
-  <rect x="16" y="34" width="8" height="12" rx="2" fill="#19d2ec"/>
-  <rect x="28" y="24" width="8" height="22" rx="2" fill="#35d8cb"/>
-  <rect x="40" y="14" width="8" height="32" rx="2" fill="#6ee7dd"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" role="img" aria-label="TGhost paper ghost">
+  <title>TGhost</title>
+  <g shape-rendering="crispEdges">
+    <path fill="#78e3df" d="M7 3h6v3h2v5h1v1h1v3h-1v-1h-1v2h-1v1h-1v1h-1v-2h-1v1h-1v1H9v-2H8v1H7v1H6v-4H5v1H3v-3h1v-1h1V5h1V4h1Z"/>
+    <path fill="#9aeeee" d="M14 4h1v1h1v1h-2Z"/>
+    <path fill="#102632" d="M7 8h2v2H7Zm4 0h2v2h-2Z"/>
+    <path fill="#ff8a7a" d="M5 10h2v1H5Z"/>
+  </g>
 </svg>
