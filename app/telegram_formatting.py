@@ -108,7 +108,7 @@ def serialize_entities(entities: Iterable[Any] | None) -> list[dict[str, Any]]:
 
 
 def normalize_entities(value: Any) -> list[dict[str, Any]]:
-    """Load entity metadata from SQLite JSON, PostgreSQL JSONB, or Telethon."""
+    """Load entity metadata from stored JSON/JSONB or Telethon."""
 
     if value in (None, "", b""):
         return []

@@ -27,7 +27,7 @@ def _state_context(request: Request) -> WorkspaceContext:
     context = getattr(request.app.state, "workspace_context", None)
     if isinstance(context, WorkspaceContext):
         return context
-    # SQLite compatibility mode has no tenant row yet.  It still gets an
+    # Lightweight test scaffolding may omit the database context. Keep an
     # explicit community boundary so callers cannot omit scope accidentally.
     return WorkspaceContext(
         user_id=None,

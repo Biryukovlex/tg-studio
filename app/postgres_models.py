@@ -1,7 +1,5 @@
 """SQLAlchemy models for the PostgreSQL application store.
 
-The legacy :mod:`app.db` module remains available for reading the pre-M1
-SQLite archive.  New runtime persistence uses these workspace-owned models.
 Every analytics row carries ``workspace_id`` and composite foreign keys keep a
 row from being attached to a record belonging to another workspace.
 """

@@ -2,8 +2,7 @@
 
 This runbook describes the M7 community deployment and the process topology
 used by a future hosted installation. PostgreSQL is the only runtime
-database. An old `stats.db` file is a read-only import source for one more
-release.
+database.
 
 ## Prerequisites
 
@@ -161,51 +160,29 @@ Never use `docker compose down -v` as a backup or reset operation: it deletes
 the named PostgreSQL volume. Keep at least one encrypted/off-host copy of the
 dump and restrict its filesystem permissions.
 
-The legacy SQLite archive can be copied without modifying it:
+## Inspect or refresh stored history
+
+The diagnostic reads PostgreSQL without creating or changing any rows. It
+reports counts and date ranges, never post/comment bodies:
+
+```bash
+docker compose exec tg-studio python scripts/restore_history.py
+```
+
+To deliberately recollect complete Telegram history and formatting, run the
+following command while the usual Telegram worker is stopped. This avoids two
+processes using the same Telegram session. The refresh uses saved connection
+settings, has no age/message-count limit, and updates PostgreSQL:
 
 ```bash
 docker compose stop tg-studio
-cp -p data/stats.db "backups/stats-sqlite-$(date -u +%Y%m%dT%H%M%SZ).db"
-docker compose up -d
+docker compose run --rm --no-deps tg-studio python scripts/restore_history.py --run
+docker compose up -d tg-studio
 ```
 
-## SQLite import rehearsal
-
-Inventory the source first. The report contains counts, ranges, and one-way
-hashes, never message/comment bodies:
-
-```bash
-.venv/bin/python scripts/inventory_sqlite.py \
-  --db data/stats.db --output /tmp/tg-studio-inventory.json
-```
-
-With PostgreSQL migrated, run a dry-run import from a read-only source, then
-the real import. Host-side commands use the localhost Compose port; inside the
-`migrate` container use the internal hostname `postgres` instead:
-
-```bash
-export HOST_DATABASE_URL=postgresql+asyncpg://tg_stats:<password>@127.0.0.1:55432/tg_stats
-DATABASE_URL="$HOST_DATABASE_URL" .venv/bin/python -m alembic upgrade head
-
-.venv/bin/python scripts/migrate_sqlite_to_postgres.py \
-  --sqlite data/stats.db --database-url "$HOST_DATABASE_URL" --dry-run
-
-.venv/bin/python scripts/migrate_sqlite_to_postgres.py \
-  --sqlite data/stats.db --database-url "$HOST_DATABASE_URL"
-```
-
-Proceed only when the JSON result says `all_match: true`, `source_read_only:
-true`, and `source_untouched: true`. Keep the original SQLite file unchanged
-until the PostgreSQL dashboard, comments, exports, commands, and Studio have
-been verified. After the cutover, recovery is a PostgreSQL restore plus the
-previous image.
-
-After importing, restore complete Telegram bodies and rich formatting:
-
-```bash
-.venv/bin/python scripts/restore_history.py
-.venv/bin/python scripts/restore_history.py --run
-```
+For the split topology, stop/restart `tg-studio-worker` instead and use that
+service for the one-shot command. Inspect the reported failed channels before
+assuming the refresh completed.
 
 ## Frontend development and image rebuild
 

@@ -78,11 +78,11 @@ def test_systemd_unit_is_generic_and_hardened():
         assert directive in content
 
 
-def test_rsync_example_excludes_secrets_and_vcs():
+def test_readme_setup_documents_private_settings_and_recovery_key():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "--exclude .git" in readme
-    assert "--exclude node_modules" in readme
-    assert ".env" in readme
+    assert "Keep `.env` and the generated key private" in readme
+    assert "Back up the key with your database" in readme
+    assert "(docs/deployment.md)" in readme
 
 
 def test_alembic_upgrade_head_applies_cleanly_on_postgres():

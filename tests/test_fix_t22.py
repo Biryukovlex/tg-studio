@@ -1,4 +1,4 @@
-"""T22 memory/SQLite acceptance tests."""
+"""T22 conversation memory acceptance tests."""
 
 from __future__ import annotations
 

@@ -10,8 +10,8 @@ PostgreSQL stores workspace, channel, post, metric snapshot, attributed
 discussion-comment, Studio conversation, run, source, research, profile,
 draft, and complete Studio tool-result records. Telegram sessions are encrypted at rest with
 `TELEGRAM_SESSION_ENCRYPTION_KEY`. The key is supplied outside the database and
-is never returned through the web API. A legacy `data/stats.db` is used only as
-a read-only migration source or rollback archive.
+is never returned through the web API. PostgreSQL backups and the separately
+stored encryption key are required for recovery.
 
 ## OpenRouter disclosure
 

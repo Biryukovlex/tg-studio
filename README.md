@@ -108,8 +108,7 @@ access, use a VPN or SSH tunnel. Read the [deployment runbook](docs/deployment.m
 for migrations, backups, HTTPS configuration and separate web/worker processes.
 Do not expose this release as a public service with shared administrator access.
 
-An old SQLite `stats.db` can be imported read-only; see the runbook for import
-and reconciliation. Existing package, service and storage identifiers retain
+Existing package, service and storage identifiers retain
 `tg-studio` for compatibility with earlier installations.
 
 ## Documentation

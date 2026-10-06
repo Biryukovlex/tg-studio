@@ -1,5 +1,4 @@
-# PostgreSQL-only local deployment. An old stats.db remains only a
-# read-only migration source for one more release.
+# PostgreSQL-only local deployment.
 
 name: tg-studio
 

@@ -1151,7 +1151,7 @@ class PostgresDatabase:
         output["posts_per_day"] = [int(by_day.get(day, {}).get("posts") or 0) for day in days_list]
         return {"days": days_list, **output}
 
-    # ---------- import diagnostics and overlap-safe jobs ----------
+    # ---------- history diagnostics and overlap-safe jobs ----------
 
     async def history_diagnostic(self, channel_id: int | None = None) -> dict[str, Any]:
         result = await self._execute(

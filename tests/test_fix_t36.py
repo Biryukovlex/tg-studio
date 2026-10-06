@@ -52,10 +52,19 @@ def test_settings_template_has_no_readonly_banner():
     assert "{% if available %}" not in html
 
 
-def test_importer_modules_import_cleanly():
-    import app.migration.sqlite_inventory  # noqa: F401
-    import app.migration.sqlite_to_postgres  # noqa: F401
-    import app.migration.legacy_schema  # noqa: F401
+def test_application_has_no_sqlite_driver_or_import_tools():
+    import ast
+
+    for folder in ("app", "scripts", "tests"):
+        for path in (REPO_ROOT / folder).rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                modules = ([alias.name for alias in node.names] if isinstance(node, ast.Import)
+                           else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+                assert not any(name.split(".")[0] in {"sqlite3", "aiosqlite"} for name in modules), path
+    assert not (REPO_ROOT / "app" / "migration").exists()
+    assert not (REPO_ROOT / "scripts" / "inventory_sqlite.py").exists()
+    assert not (REPO_ROOT / "scripts" / "migrate_sqlite_to_postgres.py").exists()
 
 
 @pytest.mark.integration

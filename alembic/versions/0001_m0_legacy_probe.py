@@ -1,4 +1,4 @@
-"""M0 PostgreSQL probe schema mirroring the legacy SQLite archive.
+"""Initial PostgreSQL schema preceding workspace-owned storage.
 
 This is intentionally a small compatibility proof, not the final application
 schema. M1 will replace/evolve it with workspace-owned SQLAlchemy models.

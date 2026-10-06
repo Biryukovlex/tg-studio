@@ -93,40 +93,6 @@ async def test_postgres_repository_smoke():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_sqlite_importer_is_idempotent_and_reports_source_untouched(tmp_path):
-    database_url = pg_url("M1_POSTGRES_URL", "M0_POSTGRES_URL")
-    if not database_url:
-        pytest.skip("set TEST_POSTGRES_URL (or M1_POSTGRES_URL) to run the SQLite importer proof")
-    import sqlite3
-    from app.migration.legacy_schema import _SCHEMA
-    from app.migration.sqlite_to_postgres import import_sqlite
-
-    source = tmp_path / "archive.db"
-    connection = sqlite3.connect(source)
-    connection.executescript(_SCHEMA)
-    connection.execute("INSERT INTO channels(id, identifier, title, chat_id) VALUES (10001, ?, ?, ?)", ("@importer", "Importer", 1))
-    connection.execute(
-        "INSERT INTO posts(id, channel_id, message_id, posted_at, text) VALUES (10001, 10001, 7, ?, ?)",
-        ("2024-01-01 00:00:00", "ю" * 700),
-    )
-    connection.execute(
-        "INSERT INTO snapshots(id, post_id, taken_at, views, comments, reactions, shares) VALUES (10001, 10001, ?, 1, 2, 3, 4)",
-        ("2024-01-01 01:00:00",),
-    )
-    connection.commit()
-    connection.close()
-    before = source.stat()
-    first = await import_sqlite(source, database_url, workspace_slug="importer-test")
-    second = await import_sqlite(source, database_url, workspace_slug="importer-test")
-    after = source.stat()
-    assert first["all_match"] and second["all_match"]
-    assert first["source_untouched"] and second["source_untouched"]
-    assert first["diagnostics"]["posts"]["long_text_posts"] == 1
-    assert (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns)
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
 async def test_postgres_composite_foreign_key_rejects_cross_workspace_post():
     database_url = pg_url("M1_POSTGRES_URL", "M0_POSTGRES_URL")
     if not database_url:

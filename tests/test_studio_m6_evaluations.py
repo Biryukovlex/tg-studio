@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,8 +20,6 @@ import pytest
 from pydantic_ai.ui.ag_ui import AGUIAdapter as RealAGUIAdapter
 
 from app.config import Settings
-from app.migration.legacy_schema import _SCHEMA
-from app.migration.sqlite_to_postgres import import_sqlite
 from app.studio.analytics import analyze_posts
 from app.studio.context import ContextAssembler, context_contains_comment_bodies
 from app.studio.drafts import (
@@ -403,49 +400,6 @@ async def test_provider_failures_recover_to_safe_persisted_errors(monkeypatch, f
     assert messages[-1]["content"] == run["error_message"]
     events = await repository.get_events(run_id)
     assert events[-1]["event_type"] == "RUN_ERROR"
-
-
-def _seed_sqlite_fixture(path: Path) -> None:
-    connection = sqlite3.connect(path)
-    connection.executescript(_SCHEMA)
-    connection.execute(
-        "INSERT INTO channels(identifier, title, chat_id) VALUES (?, ?, ?)",
-        ("@m6_fixture", "Synthetic M6 channel", 7001),
-    )
-    connection.execute(
-        "INSERT INTO posts(channel_id, message_id, posted_at, text, formatting_entities) VALUES (?, ?, ?, ?, ?)",
-        (1, 501, "2026-09-01 10:00:00", "Synthetic body — never production content", "[]"),
-    )
-    connection.execute(
-        "INSERT INTO snapshots(post_id, taken_at, views, comments, reactions, shares) VALUES (?, ?, ?, ?, ?, ?)",
-        (1, "2026-09-02 10:00:00", 42, 3, 8, 2),
-    )
-    connection.execute(
-        """INSERT INTO comments(
-            post_id, telegram_message_id, discussion_chat_id, posted_at, text,
-            first_collected_at, last_collected_at, last_seen_sync
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (1, 502, 7002, "2026-09-01 11:00:00", "Synthetic comment — never production content", "2026-09-01 11:00:00", "2026-09-01 11:00:00", "m6-fixture"),
-    )
-    connection.commit()
-    connection.close()
-
-
-def test_sqlite_reconciliation_fixture_is_read_only_and_content_safe(tmp_path):
-    fixture = tmp_path / "m6-fixture.db"
-    _seed_sqlite_fixture(fixture)
-    before = fixture.stat()
-    report = asyncio.run(
-        import_sqlite(fixture, "postgresql+asyncpg://unused", dry_run=True)
-    )
-    after = fixture.stat()
-    assert report["dry_run"] is True
-    assert report["source"]["posts"]["count"] == 1
-    assert report["source"]["comments"]["count"] == 1
-    assert report["source_untouched"] is True
-    assert (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns)
-    assert "Synthetic body" not in json.dumps(report)
-    assert "Synthetic comment" not in json.dumps(report)
 
 
 def test_telegram_length_and_copy_fidelity_are_server_authoritative():
