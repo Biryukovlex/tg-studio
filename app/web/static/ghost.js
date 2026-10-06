@@ -1,4 +1,4 @@
-/* TG Studio shared mascot lifecycle (T50).
+/* TGhost shared mascot lifecycle (T50).
  *
  * One interactive paper ghost lives in the header/sidebar junction
  * (`#ghost-trigger` in `app/web/templates/base.html`). The frozen artwork is

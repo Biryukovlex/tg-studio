@@ -4,7 +4,7 @@
 use_default_settings: true
 
 general:
-  instance_name: TG Studio private search
+  instance_name: TGhost private search
 
 search:
   formats:

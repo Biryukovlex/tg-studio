@@ -1,6 +1,6 @@
 """Workspace-scoped PostgreSQL repository used by the collector and web app.
 
-PostgreSQL is the only TG Studio runtime.  Methods are asynchronous and
+PostgreSQL is the only TGhost runtime.  Methods are asynchronous and
 return mapping-like rows for the templates and command formatter.
 """
 

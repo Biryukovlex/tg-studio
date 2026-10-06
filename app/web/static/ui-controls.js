@@ -1,4 +1,4 @@
-/* TG Studio shared control primitives (T50).
+/* TGhost shared control primitives (T50).
  *
  * Reusable dropdown (select enhancement) and dialog helpers consumed by
  * Overview, Studio-adjacent web surfaces and Settings. Every control keeps

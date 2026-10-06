@@ -1,6 +1,6 @@
-# Contributing to TG Studio
+# Contributing to TGhost
 
-Thank you for helping improve TG Studio. The project combines Telegram data
+Thank you for helping improve TGhost. The project combines Telegram data
 collection, analytics, and an evidence-aware writing agent, so changes must
 preserve privacy, tenant isolation, and source provenance.
 
@@ -16,7 +16,7 @@ preserve privacy, tenant isolation, and source provenance.
 
 ## Local development
 
-TG Studio requires Python 3.12+ (enforced by `pyproject.toml`), Node.js 22+,
+TGhost requires Python 3.12+ (enforced by `pyproject.toml`), Node.js 22+,
 and PostgreSQL 16 for integration tests. The default unit suite does not
 connect to Telegram or OpenRouter.
 
@@ -63,5 +63,5 @@ the relevant test modules for their environment variables and setup commands.
 
 By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 Unless you explicitly state otherwise, contributions intentionally submitted
-for inclusion in TG Studio are provided under the
+for inclusion in TGhost are provided under the
 [Apache License 2.0](LICENSE).

@@ -890,7 +890,7 @@ async def connect_chatgpt(request: Request):
     # The official public-client OAuth flow requires a loopback callback.
     # Never derive its host from untrusted Host/forwarded headers.
     if request.url.hostname != "127.0.0.1" or request.url.scheme != "http":
-        _flash(request, "ChatGPT sign-in requires opening TG Studio on 127.0.0.1 on this computer.", "studio")
+        _flash(request, "ChatGPT sign-in requires opening TGhost on 127.0.0.1 on this computer.", "studio")
         return _redirect("studio")
     callback = f"http://127.0.0.1:{request.url.port or 8080}/auth/callback"
     try:
@@ -907,7 +907,7 @@ async def disconnect_chatgpt(request: Request):
         return early
     from ..studio.connections import disconnect
     await disconnect(_store(request))
-    _flash(request, "ChatGPT disconnected from TG Studio.", "studio")
+    _flash(request, "ChatGPT disconnected from TGhost.", "studio")
     return _redirect("studio")
 
 

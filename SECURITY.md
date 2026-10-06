@@ -25,7 +25,7 @@ and coordinated disclosure depend on severity and reproducibility.
 
 ## Operator security
 
-TG Studio is self-hosted software that holds a Telegram user session and may
+TGhost is self-hosted software that holds a Telegram user session and may
 send selected channel context to an LLM provider. Operators are responsible for
 protecting `.env`, database backups, provider keys, and the encryption key;
 restricting network access; applying updates; and reviewing the privacy and

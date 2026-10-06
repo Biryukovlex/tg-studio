@@ -1,6 +1,6 @@
 # License and notices
 
-TG Studio is licensed under the Apache License, Version 2.0. The complete
+TGhost is licensed under the Apache License, Version 2.0. The complete
 terms are in the root [`LICENSE`](../LICENSE) file and attribution notices are
 in [`NOTICE`](../NOTICE). Contributions intentionally submitted to the project
 are accepted under the same license unless explicitly stated otherwise.

@@ -40,7 +40,7 @@ def error(exc):
 async def calendar_page(request: Request):
     context = require_auth(request)
     from ..web.routes import static_asset_version
-    return templates.TemplateResponse(request, 'calendar.html', {'request': request, 'csrf_token': csrf_token(request), 'can_manage_settings': context.role == 'owner', 'app_name': 'TG Studio', 'asset_version': static_asset_version()})
+    return templates.TemplateResponse(request, 'calendar.html', {'request': request, 'csrf_token': csrf_token(request), 'can_manage_settings': context.role == 'owner', 'app_name': 'TGhost', 'asset_version': static_asset_version()})
 
 
 @router.get('/studio/api/publishing/channels')

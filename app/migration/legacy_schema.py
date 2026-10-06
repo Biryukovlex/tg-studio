@@ -1,6 +1,6 @@
 """Legacy SQLite archive shape for the read-only importer and its fixtures.
 
-PostgreSQL is the only TG Studio runtime.  This module preserves the
+PostgreSQL is the only TGhost runtime.  This module preserves the
 YYYY-MM-DD HH:MM:SS UTC-string helpers and the archived stats.db
 table layout so the standalone importer (app/migration/*) and its tests
 can read old archives without a runtime database module.

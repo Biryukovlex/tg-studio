@@ -1,6 +1,6 @@
 # Calendar, images and Telegram scheduling
 
-Open **Calendar**, the fourth sidebar icon, for month, week or list views. Filter by channel/status, search the text and select a timezone. Mobile starts with the list. Calendar includes schedules created in TG Studio; it does not import unrelated Telegram schedules.
+Open **Calendar**, the fourth sidebar icon, for month, week or list views. Filter by channel/status, search the text and select a timezone. Mobile starts with the list. Calendar includes schedules created in TGhost; it does not import unrelated Telegram schedules.
 
 ## Schedule a draft
 
@@ -27,10 +27,10 @@ Run migration **0019_calendar_publishing** explicitly before starting the new ap
 docker compose --profile migrate run --rm migrate
 ```
 
-Use the existing `all` community process or the documented split web/worker topology. Only the worker owns the Telethon user session. Web requests write workspace-scoped PostgreSQL commands; the worker checks rights, transfers the schedule to Telegram and records each message ID. Once accepted, Telegram can publish while TG Studio is offline. No separate bot or second user session is required.
+Use the existing `all` community process or the documented split web/worker topology. Only the worker owns the Telethon user session. Web requests write workspace-scoped PostgreSQL commands; the worker checks rights, transfers the schedule to Telegram and records each message ID. Once accepted, Telegram can publish while TGhost is offline. No separate bot or second user session is required.
 
 Images are private PostgreSQL binary assets, protected by authentication and workspace scope; include them in normal database backups. Storage is bounded to 500 MB per workspace and 100 historical uploads per draft. The split topology therefore does not need an additional shared media filesystem.
 
 The worker checks schedule history periodically and consumes Telegram's deletion/publication updates. An item disappearing from the queue is not by itself evidence of publication. When the confirmed mapping was missed while offline, the item stays **Needs review** rather than guessing. A different connected Telegram account cannot manage schedules made by the original account. Channel deletion is blocked until active/uncertain schedules are resolved. If an interrupted operation has no recoverable IDs, the workspace owner can use **Resolve after checking Telegram** only after manually removing every remaining related message from Telegram’s queue. This closes the local record and logs the owner’s confirmation; it does not claim or undo earlier publication.
 
-This version supports text, single images and photo albums. Video, recurring schedules, drag-to-reschedule and importing schedules created outside TG Studio are not included.
+This version supports text, single images and photo albums. Video, recurring schedules, drag-to-reschedule and importing schedules created outside TGhost are not included.

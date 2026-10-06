@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" class="ghost-scene" data-mode="settings" data-playing="true" data-looking="false" viewBox="0 0 340 340" width="340" height="340" role="img" aria-label="TGStudio paper ghost settings animation">
+<svg xmlns="http://www.w3.org/2000/svg" class="ghost-scene" data-mode="settings" data-playing="true" data-looking="false" viewBox="0 0 340 340" width="340" height="340" role="img" aria-label="TGhost paper ghost settings animation">
 <style>
 .ghost-scene{display:block;overflow:visible;mix-blend-mode:lighten;pointer-events:none}
 .ghost-scene g{transform-box:view-box}

@@ -1,1 +1,1 @@
-"""Regression tests for the TG Studio service."""
+"""Regression tests for the TGhost service."""

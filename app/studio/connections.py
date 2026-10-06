@@ -150,7 +150,7 @@ async def start_sign_in(store, *, workspace_id: str, user_id: str, callback: str
               "scope": SCOPES, "resource": RESOURCE, "state": state, "nonce": nonce, "code_challenge_method": "S256",
               "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")}
     if not record:
-        params["agent_name_hint"] = "TG Studio"
+        params["agent_name_hint"] = "TGhost"
     elif record.get("id_token"):
         params["id_token_hint"] = record["id_token"]
     return AUTH_ORIGIN + "/api/accounts/authorize?" + urlencode(params)

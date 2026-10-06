@@ -155,7 +155,7 @@ async def amain() -> None:
         session_string = client.session.save()  # type: ignore[attr-defined]
         print("\n" + "=" * 62)
         print("Success! Logged in as:", me.first_name, f"@{me.username}" if me.username else "")
-        print("\nYour SESSION_STRING (paste into TG Studio -> Settings -> Telegram):\n")
+        print("\nYour SESSION_STRING (paste into TGhost -> Settings -> Telegram):\n")
         print(session_string)
         print("=" * 62)
         print("\nTip: keep it secret - it grants full access to this account.")

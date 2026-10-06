@@ -1,4 +1,4 @@
-# TG Studio
+# TGhost
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -15,7 +15,7 @@ posts, and shows everything in a web admin panel + Telegram commands.
 
 ## What is included
 
-TG Studio is a self-hosted release candidate with a PostgreSQL runtime. It
+TGhost is a self-hosted release candidate with a PostgreSQL runtime. It
 combines:
 
 - whole-history Telegram post and attributed-comment collection;
@@ -30,7 +30,7 @@ combines:
 
 ### Channel overview
 
-![TG Studio channel overview with engagement totals and timeline](docs/screenshots/channel-overview.png)
+![TGhost channel overview with engagement totals and timeline](docs/screenshots/channel-overview.png)
 
 ### Post details and attributed comments
 
@@ -407,6 +407,6 @@ journalctl -u tg-studio -f
 
 ## License
 
-TG Studio is licensed under the [Apache License 2.0](LICENSE). See
+TGhost is licensed under the [Apache License 2.0](LICENSE). See
 [`NOTICE`](NOTICE) and the [third-party license notes](docs/license-notices.md)
 for bundled asset attribution and the separate optional SearXNG service.

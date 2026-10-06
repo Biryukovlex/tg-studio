@@ -1,4 +1,4 @@
-"""Product-name contracts for TG Studio packaging and public UI."""
+"""Product-name contracts for TGhost packaging and public UI."""
 
 from __future__ import annotations
 
@@ -13,14 +13,15 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Frozen approved artwork (design-final-2026-10-01/manifest.json). Only these
+# Approved artwork (design-final-2026-10-01/manifest.json), with accessibility
+# labels updated for TGhost. Pixels and animation remain unchanged. Only these
 # SVGs may live in app/web/static/brand/; the large mouthless PNG and the
 # autosprite source stay out of the product bundle (their approved pixels are
 # already embedded in the SVGs).
 APPROVED_GHOST_ASSETS = {
-    "tgstudio-ghost-overview.svg": "1ed4463b772f81c07076166202c1364a0b23a2360ffadee011c07fb3fe345c4c",
-    "tgstudio-ghost-settings.svg": "83d99e6c6fc54dcf86b97716f9ca44b97e2597daece1020fe4d066436e3a0c70",
-    "tgstudio-ghost-studio.svg": "841f17f38c5a695ca4f92577d255491088c31f58c409cbf8c85eaed424cae6b3",
+    "tgstudio-ghost-overview.svg": "fe9298bc84503f2a407bb02c0008be2b1249fc61a57af678b22fa78a94994962",
+    "tgstudio-ghost-settings.svg": "5473d8df79608cb396c3378d34747745bd8727ea15c0444749036b2a2c3caab6",
+    "tgstudio-ghost-studio.svg": "6f1bc84c7e3942b8a89e498c7245e80d0c234edaf06a5d8dd98ed4751bee345c",
 }
 
 # Review scaffolding from the private prototype; never product code.
@@ -37,11 +38,11 @@ def _text(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_public_brand_is_tg_studio():
-    assert "# TG Studio" in _text("README.md")
-    assert "TG Studio" in _text("app/web/templates/login.html")
-    assert "TG Studio" in _text("app/web/static/favicon.svg")
-    assert "TG Studio" in _text("app/bot.py")
+def test_public_brand_is_tghost():
+    assert "# TGhost" in _text("README.md")
+    assert "TGhost" in _text("app/web/templates/login.html")
+    assert "TGhost" in _text("app/web/static/favicon.svg")
+    assert "TGhost" in _text("app/bot.py")
 
 
 def test_package_and_deployment_slug_is_tg_studio():
@@ -110,7 +111,7 @@ def test_shell_keeps_auth_logout_and_blocks():
 
 def test_login_keeps_auth_and_uses_approved_brand():
     login = _text("app/web/templates/login.html")
-    assert "TG Studio" in login
+    assert "TGhost" in login
     assert 'action="/login"' in login
     assert 'name="password"' in login
     assert "/static/brand/tgstudio-ghost-overview.svg" in login
@@ -150,7 +151,7 @@ def test_ghost_assets_are_unique_approved_scenes():
         mode = name.removeprefix("tgstudio-ghost-").removesuffix(".svg")
         assert f'data-mode="{mode}"' in svg
         assert 'role="img"' in svg
-        assert "TGStudio paper ghost" in svg
+        assert "TGhost paper ghost" in svg
         # Approved dark-surface compositing: lighten blend plus the exact
         # dark-backdrop removal filter; no backing tile.
         assert "mix-blend-mode" in svg and "lighten" in svg

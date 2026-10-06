@@ -25,7 +25,7 @@ from .web.links import normalize_channel_identifier, telegram_message_link
 log = logging.getLogger("commands")
 
 HELP = (
-    "TG Studio\n\n"
+    "TGhost\n\n"
     "/stats [channel] - totals for tracked posts\n"
     "/top [n] - top posts by views\n"
     "/last [n] - most recent posts\n"

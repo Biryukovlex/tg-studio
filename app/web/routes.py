@@ -363,7 +363,7 @@ def _load_or_create_secret(settings: Settings | RuntimeSettings) -> str:
 
 def create_app(collector: Collector, settings: Settings | RuntimeSettings, workspace_settings=None) -> FastAPI:
     db = collector.db
-    app = FastAPI(title="TG Studio", docs_url=None, redoc_url=None)
+    app = FastAPI(title="TGhost", docs_url=None, redoc_url=None)
     app.add_middleware(
         SessionMiddleware,
         secret_key=_load_or_create_secret(settings),
@@ -392,18 +392,18 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
 
     templates.env.filters["num"] = _num
     templates.env.filters["dt"] = _dt
-    templates.env.globals["app_name"] = "TG Studio"
+    templates.env.globals["app_name"] = "TGhost"
     # Content-hash cache busting: a changed app.js/style.css must never be
     # served from a browser cache keyed on a hand-bumped ?v= number.
     templates.env.globals["asset_version"] = static_asset_version()
     _studio_templates.env.globals["asset_version"] = static_asset_version()
-    _studio_templates.env.globals["app_name"] = "TG Studio"
+    _studio_templates.env.globals["app_name"] = "TGhost"
     # Settings page needs the same globals
     from .settings_routes import templates as _settings_templates
 
     _settings_templates.env.filters["num"] = _num
     _settings_templates.env.filters["dt"] = _dt
-    _settings_templates.env.globals["app_name"] = "TG Studio"
+    _settings_templates.env.globals["app_name"] = "TGhost"
     _settings_templates.env.globals["asset_version"] = static_asset_version()
 
     def render(request: Request, name: str, ctx: dict, status_code: int = 200):
