@@ -88,7 +88,7 @@ def _fake_settings_app(tmp_path, role="owner", available=True):
     from cryptography.fernet import Fernet
 
     from app.collector import Collector
-    from app.web.routes import WorkspaceContext, create_app
+    from app.web.routes import create_app
 
     key = Fernet.generate_key().decode("ascii")
 
@@ -326,7 +326,6 @@ async def test_cohort_half_open_boundary_and_chart_kpi_agreement(client, app, ch
     db = app.state.db
     # Isolated channel so the seeded @sample_channel post does not interfere.
     cohort_channel = await db.upsert_channel("@t51_cohort", "T51 cohort", 51001)
-    base = datetime(2026, 9, 6, 0, 0, tzinfo=timezone.utc)
     fixtures = [
         ("2026-09-05T23:59:59", 5),   # before From -> excluded
         ("2026-09-06T00:00:00", 10),  # From inclusive

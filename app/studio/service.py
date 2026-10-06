@@ -504,7 +504,7 @@ class StudioService:
             return JSONResponse({"error": {"code": "conversation_not_found", "message": "Conversation not found.", "retryable": False}}, status_code=404)
         user_message = next((message for message in reversed(run_input.messages) if getattr(message, "role", "") == "user"), None)
         content = _text_from_user_message(user_message) if user_message is not None else ""
-        if not content:
+        if user_message is None or not content:
             return JSONResponse({"error": {"code": "message_required", "message": "Send a text message to start the run.", "retryable": False}}, status_code=422)
         if len(content) > 32_000:
             return JSONResponse({"error": {"code": "message_too_large", "message": "Message is too large.", "retryable": False}}, status_code=413)

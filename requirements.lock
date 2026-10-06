@@ -58,7 +58,7 @@ truststore==0.10.4
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 tzlocal==5.4.4
-urllib3==2.7.0
+urllib3==2.8.0
 uvicorn[standard]==0.52.4
 uvloop==0.22.1
 watchfiles==1.2.0

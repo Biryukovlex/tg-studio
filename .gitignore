@@ -25,3 +25,14 @@ htmlcov/
 dist/
 build/
 .DS_Store
+
+# Local agent configuration must never enter the published repository.
+.agent-workspace
+.agents/
+.codex/
+.claude/
+.opencode/
+AGENTS.md
+CLAUDE.md
+opencode.json
+*.session-*

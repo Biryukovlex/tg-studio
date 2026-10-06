@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import asyncio
 import uuid
-from datetime import timedelta
 from telethon import utils
 from telethon.tl import functions, types
 from .domain import PublishingError, telegram_text, validate_future

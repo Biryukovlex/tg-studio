@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import text
 
 from .consent import configuration_fingerprint
-from .repository import ConversationNotFound, StudioRepositoryProtocol
+from .repository import ConversationNotFound, MemoryStudioRepository, StudioRepositoryProtocol
 from .sources import sanitize_untrusted_text
 
 
@@ -100,6 +100,8 @@ class ReferenceChannels:
                 await session.commit()
         else:
             # The in-memory adapter is an explicit test seam, never a runtime store.
+            if not isinstance(self.repository, MemoryStudioRepository):
+                raise RuntimeError("Reference storage is unavailable")
             async with self.repository._lock:
                 conversation = self.repository.conversations[conversation_id]
                 conversation["reference_channels"] = update(conversation.get("reference_channels"))

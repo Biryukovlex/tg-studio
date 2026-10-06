@@ -234,7 +234,7 @@ describe("ChannelProfileDialog evidence", () => {
   });
 
   it("opens the full sanitized post through the read model", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: unknown) => ({
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown) => ({
       ok: true,
       status: 200,
       redirected: false,
@@ -349,7 +349,7 @@ describe("ChannelProfileDialog build result", () => {
 
   it("opens a fresh build formatted and keeps it unsaved", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    vi.stubGlobal("fetch", vi.fn(async (url: unknown, init?: RequestInit) => {
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown, _init?: RequestInit) => {
       const target = String(url);
       if (target.includes("/studio/api/profile/build")) {
         return {

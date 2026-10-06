@@ -2331,7 +2331,8 @@ class MemoryStudioRepository:
             return None
         # Ensure text fields exist for legacy rows
         result = dict(row)
-        analysis = self.analyses.get(row.get("current_analysis_id"), {})
+        analysis_id = row.get("current_analysis_id")
+        analysis = self.analyses.get(analysis_id, {}) if analysis_id is not None else {}
         result["evidence_post_ids"] = row.get("style_profile", {}).get("evidence_post_ids", analysis.get("evidence_post_ids", []) if analysis.get("channel_id") == int(channel_id) else [])
         for k in ["topics_text", "editorial_text", "style_text"]:
             if k not in result:

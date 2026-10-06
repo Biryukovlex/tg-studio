@@ -349,7 +349,7 @@ async def settings_logs_page(
     if filter_error is not None:
         if _wants_json(request):
             return filter_error
-        raise HTTPException(status_code=filter_error.status_code, detail=filter_error.body.decode("utf-8") if hasattr(filter_error, "body") else "Invalid logs filter")
+        raise HTTPException(status_code=filter_error.status_code, detail=bytes(filter_error.body).decode("utf-8") if hasattr(filter_error, "body") else "Invalid logs filter")
     # Prefer FastAPI-validated values when query string omits the new filters.
     page = parsed_page
     page_size = parsed_size
@@ -369,12 +369,11 @@ async def settings_logs_page(
         except TypeError:
             total = len(logs)
         available = True
-        error: dict[str, Any] | None = None
     except ValueError as exc:
         if _wants_json(request):
             return _json_error("invalid_filter", str(exc), 422)
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    except Exception as exc:  # noqa: BLE001 - settings must remain available if Studio storage is unavailable
+    except Exception:  # noqa: BLE001 - settings must remain available if Studio storage is unavailable
         if _wants_json(request):
             return JSONResponse(
                 {"ok": False, "available": False, "error": {"code": "logs_unavailable", "message": "Agent log storage is unavailable.", "retryable": True}},
@@ -383,7 +382,6 @@ async def settings_logs_page(
         logs = []
         total = 0
         available = False
-        error = {"code": "logs_unavailable"}
     has_next = page * page_size < total
     logs = logs[:page_size]
     for row in logs:
@@ -459,7 +457,7 @@ async def _begin_write(request: Request) -> RedirectResponse | HTMLResponse | JS
         return redirect
     try:
         await _require_csrf(request)
-    except HTTPException as exc:
+    except HTTPException:
         if _wants_json(request):
             return JSONResponse(
                 {"ok": False, "error": {"code": "csrf_failed", "message": "CSRF validation failed.", "retryable": False}},

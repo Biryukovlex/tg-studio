@@ -610,7 +610,7 @@ def build_router() -> APIRouter:
         editorial_text = clean_text(payload.editorial_text)
         style_text = clean_text(payload.style_text)
         try:
-            row = await service.repository.upsert_profile_text({
+            await service.repository.upsert_profile_text({
                 "channel_id": payload.channel_id,
                 "topics_text": topics_text,
                 "editorial_text": editorial_text,
@@ -731,8 +731,8 @@ def build_router() -> APIRouter:
         require_csrf(request)
         consent = await _consent(request, context)
         try:
-            conversation_id = uuid.UUID(conversation_id)
-            channel_id = int(channel_id)
+            reference_conversation_id = uuid.UUID(conversation_id)
+            reference_channel_id = int(channel_id)
             payload = await request.json()
             if (
                 not isinstance(payload, dict) or set(payload) - {"enabled", "permission"}
@@ -744,7 +744,7 @@ def build_router() -> APIRouter:
                 return _safe_error("consent_required", "Allow the configured provider in Studio before adding a reference.", status_code=409)
             references = ReferenceChannels(_service(request).repository, _settings(request))
             refs = await references.set(
-                conversation_id, channel_id, enabled=payload["enabled"],
+                reference_conversation_id, reference_channel_id, enabled=payload["enabled"],
                 permission=payload.get("permission", False), user_id=context.user_id,
             )
         except ConversationNotFound:

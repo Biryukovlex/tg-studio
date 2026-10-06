@@ -26,7 +26,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.collector import Collector
 from app.config import Settings
 from app.studio.repository import MemoryStudioRepository
 from app.studio.service import StudioService

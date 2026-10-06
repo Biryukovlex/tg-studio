@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from telethon import events
 from telethon.tl import types
-from .domain import PublishingError, snapshot, validate_future, telegram_text
+from .domain import PublishingError, snapshot, validate_future
 from .repository import PublishingRepository
 from .telegram import TelegramPublisher
 

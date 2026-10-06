@@ -6,6 +6,7 @@ import logging
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.usage import UsageLimits
+from pydantic_ai.models.openai import OpenAIChatModelSettings
 from .model import build_model, model_name, provider_name, model_configured, run_settings
 from .profile import TopicInsight, build_profile, validate_profile_evidence, _style
 
@@ -149,8 +150,8 @@ PROFILE_JSON_TIMEOUT_SECONDS = 90
 PROFILE_BUILD_TIMEOUT_SECONDS = 225
 
 
-def profile_model_settings(settings) -> dict:
-    options = {"max_tokens": 4_000, "temperature": 0.2}
+def profile_model_settings(settings) -> OpenAIChatModelSettings:
+    options: OpenAIChatModelSettings = {"max_tokens": 4_000, "temperature": 0.2}
     # Nemotron Ultra defaults to high reasoning, consuming the same token
     # budget as the JSON answer. Profile extraction needs direct output.
     if model_name(settings).split(":", 1)[0] == "nvidia/nemotron-3-ultra-550b-a55b":

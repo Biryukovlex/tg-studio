@@ -17,7 +17,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.collector import Collector
 from app.config import Settings
 from app.web.dependencies import WorkspaceContext
 from app.web.routes import create_app

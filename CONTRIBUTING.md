@@ -65,3 +65,15 @@ By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 Unless you explicitly state otherwise, contributions intentionally submitted
 for inclusion in TGhost are provided under the
 [Apache License 2.0](LICENSE).
+
+### Privacy checks
+
+Keep runtime credentials, Telegram sessions, collected content, provider
+payloads and local agent configuration out of commits and test fixtures.
+Use invented channels/posts and credentials that cannot authenticate to a
+real account. Screenshots require an explicit publication review.
+
+CI checks tracked file paths with `python scripts/check_repository_privacy.py`
+and scans Git history (including tests) with checksum-verified Gitleaks.
+`.gitleaks.toml` permits only exact reviewed synthetic values. Do not exclude
+entire test directories or general credential patterns to silence a finding.

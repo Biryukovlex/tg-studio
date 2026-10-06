@@ -1,0 +1,17 @@
+title = "TGhost repository secret scan"
+
+[extend]
+useDefault = true
+
+# Reviewed synthetic fixtures and a comment falsely detected as a key.
+# These exact values are not deployment credentials. Do not allowlist test
+# directories: a real key accidentally copied into a test must still fail.
+[[allowlists]]
+description = "Exact reviewed test/example values and registry comment"
+regexTarget = "secret"
+regexes = [
+    '''^Wl0\-cvos82PSFL7U0PbD7SrvsEJRKq6I1Y_APkFy3iM=$''',
+    '''^0123456789abcdef0123456789abcdef$''',
+    '''^decrypted/normalized$''',
+    '''^test\-secret\-0123456789abcdef$''',
+]

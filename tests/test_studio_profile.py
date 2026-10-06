@@ -202,7 +202,6 @@ async def test_profile_save_rejects_foreign_and_missing_supporting_posts(client,
     settings.studio_test_mode = True
     import re
     from app.postgres_db import PostgresDatabase
-    from sqlalchemy import text
     db = app.state.db
     other_channel = await db.upsert_channel("@other_synthetic", "Other", 987654)
     other_post = await db.upsert_post(other_channel, message_id=1, posted_at=datetime.now(timezone.utc), text="Other channel")

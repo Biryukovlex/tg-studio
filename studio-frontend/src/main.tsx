@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AssistantRuntimeProvider,
@@ -1752,7 +1752,7 @@ export function ConversationTitle({ conversation, onRenamed }: { conversation: C
   const savingRef = useRef(false);
   const mounted = useRef(true);
   const scope = useRef(conversation?.id);
-  scope.current = conversation?.id;
+  useLayoutEffect(() => { scope.current = conversation?.id; }, [conversation?.id]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setEditing(false); setError(""); }, [conversation?.id]);

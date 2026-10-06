@@ -20,7 +20,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.collector import Collector
 from app.config import Settings
 from app.postgres_db import cohort_bounds
 from app.web.dependencies import WorkspaceContext

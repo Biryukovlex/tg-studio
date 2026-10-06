@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -26,7 +26,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from ..collector import Collector
 from ..config import Settings
-from ..postgres_db import cohort_bounds, parse_utc_date
+from ..postgres_db import cohort_bounds
 from ..workspace_settings import RuntimeSettings
 from ..telegram_formatting import normalize_entities, render_telegram_html
 from .dependencies import csrf_token as shared_csrf_token
@@ -221,8 +221,6 @@ def _parse_cohort(request: Request) -> tuple[object | None, object | None, JSONR
     if not raw_from.strip() and not raw_to.strip():
         return None, None, None
     try:
-        start = parse_utc_date(raw_from) if raw_from.strip() else None
-        end = parse_utc_date(raw_to) if raw_to.strip() else None
         cohort_bounds(raw_from if raw_from.strip() else None, raw_to if raw_to.strip() else None)
     except ValueError as exc:
         return None, None, _json_error("invalid_date", str(exc), 422)
@@ -808,7 +806,7 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
             for item in comments
         ]
         return {
-            "id": int(row.get("id")),
+            "id": int(row["id"]),
             "message_id": int(row.get("message_id", 0) or 0),
             "channel_id": int(row.get("channel_id", 0) or 0),
             "channel_identifier": str(row.get("identifier") or ""),

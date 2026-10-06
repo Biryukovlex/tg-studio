@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, csrfToken, type Draft } from './api';
 import { useDialogFocusTrap } from './dialogFocus';
 import { htmlFromMarkdown } from './markdownCopy';
@@ -31,7 +31,7 @@ export function ImageAttachments({ draftId, ids, version, disabled, onChange, on
   const replacing = useRef<number | null>(null);
   const cache = useRef(new Map<string, Media>());
   const activeScope = useRef(draftId);
-  activeScope.current = draftId;
+  useLayoutEffect(() => { activeScope.current = draftId; }, [draftId]);
   useEffect(() => {
     let current = true;
     void api<{ media: Media[] }>(`/studio/api/drafts/${draftId}/media${version ? `?version=${version}` : ''}`).then(r => {
@@ -47,7 +47,7 @@ export function ImageAttachments({ draftId, ids, version, disabled, onChange, on
     const replace = replacing.current;
     replacing.current = null;
     if ((replace === null ? ids.length : ids.length - 1) + files.length > 10) { setError('An album supports up to ten images.'); return; }
-    let next = [...ids];
+    const next = [...ids];
     setProgress(0); setError('');
     try {
       for (let index = 0; index < files.length; index++) {
@@ -95,7 +95,7 @@ export function ScheduleDialog({ draft, initialDate, onClose, onScheduled }: { d
   const [media, setMedia] = useState<Media[]>([]);
   const [channelId, setChannelId] = useState(draft.channel_id);
   const [zone, setZone] = useState(timezonePreference);
-  const [date, setDate] = useState(initialDate || zonedInput(new Date(Date.now() + 3600_000), zone));
+  const [date, setDate] = useState(() => initialDate || zonedInput(new Date(Date.now() + 3600_000), zone));
   const [fold, setFold] = useState<string>('');
   const [mode, setMode] = useState<'caption' | 'separate'>('caption');
   const [caption, setCaption] = useState('');

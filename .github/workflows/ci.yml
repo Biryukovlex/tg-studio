@@ -36,6 +36,8 @@ jobs:
         run: python -m mypy app
       - name: Frontend lint
         run: npm --prefix studio-frontend run lint
+      - name: Frontend tests
+        run: npm --prefix studio-frontend test
       - name: Python tests (unit)
         run: python -m pytest -q -m "not postgres"
       - name: Python compile check
@@ -69,6 +71,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
+      - name: Install lockfile checker dependency
+        run: python -m pip install "packaging>=24,<26"
       - name: Verify the lockfile matches the documented ranges
         # The lockfile is curated, not pip-compile output: regenerating it
         # would churn unrelated upgrades. This gate proves every locked
@@ -125,3 +129,27 @@ jobs:
           languages: python, javascript
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+
+  repository-privacy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Reject private runtime and local configuration files
+        run: python scripts/check_repository_privacy.py
+      - name: Install checksum-verified secret scanner
+        env:
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl --fail --silent --show-error --location \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output "$RUNNER_TEMP/gitleaks.tar.gz"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+      - name: Scan committed history including tests (redacted output)
+        run: '"$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --log-opts="--all" .'
