@@ -41,6 +41,10 @@ _FRIENDLY_ERRORS = {
     "backfill_limit": "Backfill limit must be between 0 and 100000 posts.",
     "model": "Model must be 1 to 200 characters without spaces.",
     "openrouter_api_key": "API key must be at most 512 characters.",
+    "provider": "Choose a supported model provider.",
+    "ollama_url": "Use a local Ollama host and port, without a custom path.",
+    "ollama_model": "Choose an installed model without whitespace in its identifier.",
+    "openai_model": "Choose an available ChatGPT model.",
     "blocked_domains": "Blocked domains must be comma separated hostnames.",
 }
 
@@ -258,6 +262,12 @@ async def _page_context(
             search_state = {}
 
     flash = msg if msg is not None else request.session.pop("flash_msg", "")
+    # Optional provider fields also render during setup, before a store exists.
+    from ..workspace_settings import SETTINGS
+    for key, (kind, attr, _validator) in SETTINGS.items():
+        if key not in ws_dict:
+            default = getattr(settings, attr, "")
+            ws_dict[key] = {"set": bool(default), "source": "default"} if kind == "secret" else {"value": default, "source": "default"}
     save_notice = request.session.pop("settings_notice", None)
     return {
         "request": request,
@@ -266,7 +276,7 @@ async def _page_context(
         "ws_dict": ws_dict,
         "available": _available(request),
         "errors": errors or {},
-        "values": values or {},
+        "values": values or ({"provider": "openai"} if request.query_params.get("provider") == "openai" else {}),
         "msg": flash,
         "save_notice": save_notice if isinstance(save_notice, dict) else None,
         "can_manage_settings": _is_owner(request),
@@ -735,16 +745,28 @@ async def save_studio(
     openrouter_api_key: str = Form(""),
     clear_openrouter_api_key: str = Form(""),
     model: str = Form(""),
+    provider: str = Form(""),
+    ollama_url: str = Form(""),
+    ollama_model: str = Form(""),
+    openai_model: str = Form(""),
 ):
     if (early := await _begin_write(request)) is not None:
         return early
     store = _store(request)
     assert store is not None  # _begin_write guarantees an available store
     errors: dict[str, str] = {}
-    values: dict[str, Any] = {"model": model}
+    values: dict[str, Any] = {"model": model, "provider": provider, "ollama_url": ollama_url, "ollama_model": ollama_model, "openai_model": openai_model}
+    effective = store.effective if hasattr(store, "effective") else request.app.state.settings
     changes: dict[str, Any] = {}
     reset_keys: tuple[str, ...] = ()
     try:
+        for field, value, key in (
+            ("provider", provider, "studio.provider"), ("ollama_url", ollama_url, "studio.ollama_url"),
+            ("ollama_model", ollama_model, "studio.ollama_model"), ("openai_model", openai_model, "studio.openai_model"),
+        ):
+            if value.strip():
+                _validate_field(store, key, field, value, errors)
+                changes[key] = value.strip()
         if clear_openrouter_api_key == "1":
             reset_keys = ("studio.openrouter_api_key",)
         elif openrouter_api_key.strip():
@@ -755,8 +777,12 @@ async def save_studio(
             model_value = model.strip()
             _validate_field(store, "studio.model", "model", model_value, errors)
             changes["studio.model"] = model_value
-        else:
+        elif (provider or effective.studio_provider) == "openrouter":
             errors["model"] = "Model is required."
+        if (provider or effective.studio_provider) == "ollama" and not (ollama_model or effective.ollama_model).strip():
+            errors["ollama_model"] = "Choose an installed Ollama model."
+        if (provider or effective.studio_provider) == "openai" and not (openai_model or effective.openai_model).strip():
+            errors["openai_model"] = "Connect ChatGPT, load models and choose one."
     except EncryptionKeyRequired:
         if _wants_json(request):
             return JSONResponse({"ok": False, "error": {"code": "encryption_key_required", "message": ENCRYPTION_KEY_MESSAGE, "retryable": False}}, status_code=409)
@@ -841,3 +867,62 @@ for _section in ("collection", "studio", "research"):
 
 
 __all__ = ["router", "templates", "validate_channel_identifier"]
+
+
+@router.get("/providers/models")
+async def provider_models(request: Request, provider: str = Query(...), ollama_url: str | None = Query(None, max_length=300)):
+    from ..studio.connections import available_models
+    context = require_auth(request)
+    if context.role != "owner":
+        raise HTTPException(403, "Only the owner can manage providers")
+    try:
+        return {"models": await available_models(request.app.state.settings, provider, ollama_url=ollama_url)}
+    except Exception:
+        return JSONResponse({"error": {"message": "Models could not load. Check the connection and try again."}}, status_code=409)
+
+
+@router.post("/providers/openai/connect")
+async def connect_chatgpt(request: Request):
+    from ..studio.connections import start_sign_in
+    if (early := await _begin_write(request)) is not None:
+        return early
+    context = require_auth(request)
+    # The official public-client OAuth flow requires a loopback callback.
+    # Never derive its host from untrusted Host/forwarded headers.
+    if request.url.hostname != "127.0.0.1" or request.url.scheme != "http":
+        _flash(request, "ChatGPT sign-in requires opening TG Studio on 127.0.0.1 on this computer.", "studio")
+        return _redirect("studio")
+    callback = f"http://127.0.0.1:{request.url.port or 8080}/auth/callback"
+    try:
+        url = await start_sign_in(_store(request), workspace_id=str(context.workspace_id), user_id=str(context.user_id), callback=callback)
+        return RedirectResponse(url, status_code=303)
+    except Exception:
+        _flash(request, "ChatGPT sign-in could not start. Check encrypted settings storage.", "studio")
+        return _redirect("studio")
+
+
+@router.post("/providers/openai/disconnect")
+async def disconnect_chatgpt(request: Request):
+    if (early := await _begin_write(request)) is not None:
+        return early
+    from ..studio.connections import disconnect
+    await disconnect(_store(request))
+    _flash(request, "ChatGPT disconnected from TG Studio.", "studio")
+    return _redirect("studio")
+
+
+async def chatgpt_callback(request: Request):
+    from ..studio.connections import complete_sign_in
+    # Uvicorn writes the query from scope on response. Remove authorization
+    # codes before any response or auth error can reach its access logger.
+    query = dict(request.query_params)
+    request.scope["query_string"] = b""
+    context = require_auth(request)
+    if context.role != "owner":
+        raise HTTPException(403, "Only the owner can connect ChatGPT")
+    try:
+        await complete_sign_in(_store(request), query, workspace_id=str(context.workspace_id), user_id=str(context.user_id))
+        _flash(request, "ChatGPT connected. Choose an available model and save Studio settings.", "studio")
+    except Exception:
+        _flash(request, "ChatGPT sign-in did not complete. Start sign-in again; your previous connection is kept.", "studio")
+    return RedirectResponse("/settings?provider=openai#studio", status_code=303)

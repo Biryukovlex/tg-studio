@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from .. import limits
+from .model import provider_name
+from .connections import oauth_record
 from .search_health import configured_search_state
 
 
 def build_setup_state(settings, db) -> dict:
     blockers: list[dict[str, str]] = []
-    if not settings.openrouter_api_key and not getattr(settings, "studio_test_mode", False):
-        blockers.append({"code": "openrouter_key_missing", "message": "Add OPENROUTER_API_KEY to enable the agent."})
+    provider = provider_name(settings)
+    if not getattr(settings, "studio_test_mode", False):
+        if provider == "openrouter" and not settings.openrouter_api_key:
+            blockers.append({"code": "openrouter_key_missing", "message": "Add OPENROUTER_API_KEY to enable the agent."})
+        elif provider == "ollama" and not settings.ollama_model.strip():
+            blockers.append({"code": "model_not_configured", "message": "Choose an installed Ollama model in Settings."})
+        elif provider == "openai" and (not oauth_record(settings) or not settings.openai_model.strip()):
+            blockers.append({"code": "provider_not_configured", "message": "Connect ChatGPT and choose a model in Settings."})
     if not settings.telegram_session_encryption_key:
         blockers.append({"code": "session_key_missing", "message": "Set TELEGRAM_SESSION_ENCRYPTION_KEY for encrypted Telegram persistence."})
     # Channels may come from .env or from rows added on the settings page; the
@@ -21,7 +29,7 @@ def build_setup_state(settings, db) -> dict:
     return {
         "ready": bool(not blockers),
         "workspace_slug": getattr(db, "workspace_slug", limits.WORKSPACE_SLUG),
-        "provider": "openrouter",
+        "provider": provider,
         "research": configured_search_state(settings).as_dict(),
         "blockers": blockers,
     }

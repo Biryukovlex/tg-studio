@@ -1,7 +1,7 @@
 from functools import cached_property
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     process_role: str = "all"
 
     # Content Studio
+    studio_provider: str = "openrouter"
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = ""
+    openai_model: str = ""
+    studio_openai_oauth: str = Field(default="", repr=False, exclude=True)
+    studio_openai_host_id: str = ""
     openrouter_api_key: str = ""
     openrouter_model: str = "nex-agi/nex-n2.5-pro:free"
     # ``studio_test_mode`` is an explicit deterministic test seam and must
@@ -44,6 +50,13 @@ class Settings(BaseSettings):
     studio_search_enabled: bool = False
     studio_search_base_url: str = ""
     studio_search_blocked_domains: str = ""
+
+    @field_validator("studio_provider")
+    @classmethod
+    def valid_studio_provider(cls, value: str) -> str:
+        if value not in {"openrouter", "ollama", "openai"}:
+            raise ValueError("Studio provider must be openrouter, ollama or openai")
+        return value
 
     # Collection tuning
     poll_minutes: float = 15.0

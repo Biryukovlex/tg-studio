@@ -35,7 +35,7 @@ from .profile import build_profile
 from .semantic_profile import build_semantic_profile
 from .research import ResearchService
 from .prompts import PROMPT_VERSION
-from .model import model_name
+from .model import model_name, provider_name, run_settings
 from .observability import emit_observation, normalize_usage, safe_error, safe_status_code
 from .run_ids import resolve_run_id
 from .repository import (
@@ -486,6 +486,7 @@ class StudioService:
         }
 
     async def stream_request(self, request, body: bytes) -> StreamingResponse | JSONResponse:
+        settings = run_settings(self.settings)
         if len(body) > 512 * 1024:
             return JSONResponse({"error": {"code": "request_too_large", "message": "Studio request is too large.", "retryable": False}}, status_code=413)
         try:
@@ -522,8 +523,8 @@ class StudioService:
                 user_row, _ = await combined(
                     conversation_id=conversation_id,
                     content=content,
-                    requested_model=model_name(self.settings),
-                    provider="openrouter",
+                    requested_model=model_name(settings),
+                    provider=provider_name(settings),
                     run_id=run_id,
                     **({"retry_run_id": retry_run_id} if retry_run_id else {}),
                 )
@@ -534,8 +535,8 @@ class StudioService:
                 await self.repository.create_run(
                     conversation_id=conversation_id,
                     user_message_id=int(user_row["id"]),
-                    requested_model=model_name(self.settings),
-                    provider="openrouter",
+                    requested_model=model_name(settings),
+                    provider=provider_name(settings),
                     run_id=run_id,
                 )
             handle = self.registry.begin(run_id)
@@ -577,13 +578,15 @@ class StudioService:
             }
         )
         try:
-            agent = self.agent_factory(self.settings)
+            from .connections import prepare_model
+            await prepare_model(settings)
+            agent = self.agent_factory(settings)
         except Exception as exc:  # noqa: BLE001 - convert setup failures to a safe response
             code, message, retryable = _safe_error(exc)
             from .diagnostics import build_run_diagnostics
 
             setup_diagnostics = build_run_diagnostics(
-                exc, phase="startup", requested_model=model_name(self.settings),
+                exc, phase="startup", requested_model=model_name(settings),
                 elapsed_ms=0, requests=0, tool_calls=0,
             )
             await self.repository.set_run_status(
@@ -603,8 +606,8 @@ class StudioService:
                 status="failed",
                 stage="failed",
                 duration_ms=0,
-                provider="openrouter",
-                requested_model=model_name(self.settings),
+                provider=provider_name(settings),
+                requested_model=model_name(settings),
                 prompt_version=PROMPT_VERSION,
                 error_code=code,
                 exception_class=exc.__class__.__name__,
@@ -705,7 +708,7 @@ class StudioService:
             return build_run_diagnostics(
                 exc,
                 phase=_failure_phase(),
-                requested_model=model_name(self.settings),
+                requested_model=model_name(settings),
                 elapsed_ms=_run_elapsed_ms(),
                 requests=_run_requests(),
                 tool_calls=observed_tool_calls,
@@ -756,8 +759,8 @@ class StudioService:
                 status=current.get("status"),
                 stage=current.get("stage") or current.get("status"),
                 duration_ms=usage.get("latency_ms"),
-                provider="openrouter",
-                requested_model=model_name(self.settings),
+                provider=provider_name(settings),
+                requested_model=model_name(settings),
                 actual_model=actual_model_holder.get("value"),
                 prompt_version=PROMPT_VERSION,
                 usage=usage,
@@ -875,7 +878,7 @@ class StudioService:
                                     **diagnostics,
                                     "phase": _failure_phase(),
                                     "elapsed_ms": _run_elapsed_ms(),
-                                    "requested_model": model_name(self.settings),
+                                    "requested_model": model_name(settings),
                                     "requests": _run_requests(),
                                     "tool_calls": observed_tool_calls,
                                 }
@@ -935,7 +938,7 @@ class StudioService:
                     latency_ms=int(max(0, (time.monotonic() - run_started_monotonic) * 1000)),
                 )
                 usage["tool_calls"] = max(int(usage.get("tool_calls", 0)), observed_tool_calls)
-                actual_model = actual_model_holder.get("value") or model_name(self.settings)
+                actual_model = actual_model_holder.get("value") or model_name(settings)
                 await self.repository.set_run_status(
                     run_id,
                     status="succeeded",
@@ -958,8 +961,8 @@ class StudioService:
                     status="succeeded",
                     stage="complete",
                     duration_ms=usage.get("latency_ms"),
-                    provider="openrouter",
-                    requested_model=model_name(self.settings),
+                    provider=provider_name(settings),
+                    requested_model=model_name(settings),
                     actual_model=actual_model,
                     prompt_version=PROMPT_VERSION,
                     usage=usage,
@@ -979,7 +982,7 @@ class StudioService:
                     "exception_class": "CancelledError" if user_cancelled else "InterruptedError",
                     "status_code": None,
                     "provider_code": None,
-                    "requested_model": model_name(self.settings),
+                    "requested_model": model_name(settings),
                     "elapsed_ms": _run_elapsed_ms(),
                     "requests": _run_requests(),
                     "tool_calls": observed_tool_calls,
@@ -1009,8 +1012,8 @@ class StudioService:
                         status=status,
                         stage=status,
                         duration_ms=usage.get("latency_ms"),
-                        provider="openrouter",
-                        requested_model=model_name(self.settings),
+                        provider=provider_name(settings),
+                        requested_model=model_name(settings),
                         actual_model=actual_model_holder.get("value"),
                         prompt_version=PROMPT_VERSION,
                         usage=usage,
@@ -1085,7 +1088,7 @@ class StudioService:
                                 run_id,
                                 status="succeeded",
                                 stage="complete",
-                                actual_model=actual_model_holder.get("value") or model_name(self.settings),
+                                actual_model=actual_model_holder.get("value") or model_name(settings),
                                 usage=usage,
                                 worker_id=worker_id,
                             )
@@ -1104,8 +1107,8 @@ class StudioService:
                             status="succeeded",
                             stage="complete",
                             duration_ms=usage.get("latency_ms"),
-                            provider="openrouter",
-                            requested_model=model_name(self.settings),
+                            provider=provider_name(settings),
+                            requested_model=model_name(settings),
                             actual_model=actual_model_holder.get("value"),
                             prompt_version=PROMPT_VERSION,
                             usage=usage,
@@ -1137,8 +1140,8 @@ class StudioService:
                         status="failed",
                         stage="failed",
                         duration_ms=usage.get("latency_ms"),
-                        provider="openrouter",
-                        requested_model=model_name(self.settings),
+                        provider=provider_name(settings),
+                        requested_model=model_name(settings),
                         actual_model=actual_model_holder.get("value"),
                         prompt_version=PROMPT_VERSION,
                         usage=usage,

@@ -1715,3 +1715,9 @@ body { font-size:16px; }
   .filter-form > label { width:190px; }
   .date-popover { width:280px; }
 }
+
+/* Provider controls keep the shared Settings field rhythm. */
+[data-provider-panel] .field { gap: 12px; }
+[data-provider-panel] .field > input, [data-provider-panel] .field > select { max-width: 520px; }
+[data-provider-panel] .field-control > button { justify-self: start; }
+.provider-account-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 8px 0 16px; }

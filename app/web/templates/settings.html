@@ -317,7 +317,7 @@
       <div>
         <p class="section-kicker">Studio</p>
         <h2>Agent and provider</h2>
-        <p class="panel-note">Studio is always on. Keys and model selection apply to every channel; each channel's System Prompt is edited inside Studio.</p>
+        <p class="panel-note">Choose where the agent runs. Provider and model selection apply to every channel; each channel's System Prompt is edited inside Studio.</p>
       </div>
       {% if setup_state.ready %}
       <span class="pill ok" data-setup-readiness><i class="mgc mgc-check-circle-core-regular" aria-hidden="true"></i>Ready</span>
@@ -327,6 +327,17 @@
     </div>
     <form method="post" action="/settings/studio" class="settings-form" autocomplete="off" data-settings-save="studio">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      {% set chosen_provider = values.provider if values.provider else ws_dict['studio.provider'].value %}
+      <div class="field">
+        <label class="field-name" for="studio-provider">Model provider</label>
+        <select data-ui-dropdown id="studio-provider" name="provider" aria-label="Model provider">
+          {% for id, label in [('openrouter','OpenRouter'),('ollama','Ollama · local models'),('openai','OpenAI · ChatGPT account')] %}
+          <option value="{{ id }}" {% if chosen_provider == id %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% if errors.provider %}<p class="field-error">{{ errors.provider }}</p>{% endif %}
+      </div>
+      <div data-provider-panel="openrouter" {% if chosen_provider != 'openrouter' %}hidden{% endif %}>
       <div class="field {% if errors.openrouter_api_key %}has-error{% endif %}">
         <div class="field-label">
           <label class="field-name" for="openrouter_api_key">OpenRouter API key</label>
@@ -367,12 +378,56 @@
           </p>
         </div>
       </div>
+      </div>
+      <div data-provider-panel="ollama" {% if chosen_provider != 'ollama' %}hidden{% endif %}>
+        <div class="field">
+          <label class="field-name" for="ollama-url">Ollama address</label>
+          <div class="field-control">
+          <input type="text" inputmode="url" id="ollama-url" name="ollama_url" value="{{ values.ollama_url if values.ollama_url is defined else ws_dict['studio.ollama_url'].value }}" placeholder="http://127.0.0.1:11434">
+          {% if errors.ollama_url %}<p class="field-error">{{ errors.ollama_url }}</p>{% endif %}
+          <p class="field-hint">The model runs on your computer. Docker connects to the host automatically.</p>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-name" for="ollama-model">Installed model</label>
+          <div class="field-control">
+          {% set local_model = values.ollama_model if values.ollama_model is defined else ws_dict['studio.ollama_model'].value %}
+          <select data-ui-dropdown id="ollama-model" name="ollama_model" aria-label="Installed Ollama model"><option value="{{ local_model }}">{{ local_model or 'Load installed models' }}</option></select>
+          {% if errors.ollama_model %}<p class="field-error">{{ errors.ollama_model }}</p>{% endif %}
+          <button type="button" class="btn ghost small" data-load-models="ollama">Refresh models</button>
+          <p class="field-hint">Use a model with tool calling for Studio research and drafts.</p>
+          </div>
+        </div>
+      </div>
+      <div data-provider-panel="openai" {% if chosen_provider != 'openai' %}hidden{% endif %}>
+        <p class="panel-note">Use your ChatGPT account and its available models. No API key needed.</p>
+    <div class="provider-account-actions">
+      {% if ws_dict['studio.openai_oauth'].set %}
+      <p class="status-line"><span class="pill ok">ChatGPT connected</span></p>
+      <button type="submit" form="chatgpt-disconnect" class="btn ghost small">Disconnect ChatGPT</button>
+      {% endif %}
+      <button type="submit" form="chatgpt-connect" class="btn ghost">Continue with ChatGPT</button>
+    </div>
+
+        <div class="field">
+          <label class="field-name" for="openai-model">ChatGPT model</label>
+          <div class="field-control">
+          {% set chat_model = values.openai_model if values.openai_model is defined else ws_dict['studio.openai_model'].value %}
+          <select data-ui-dropdown id="openai-model" name="openai_model" aria-label="ChatGPT model"><option value="{{ chat_model }}">{{ chat_model or 'Connect ChatGPT, then load models' }}</option></select>
+          {% if errors.openai_model %}<p class="field-error">{{ errors.openai_model }}</p>{% endif %}
+          <button type="button" class="btn ghost small" data-load-models="openai">Refresh models</button>
+          </div>
+        </div>
+      </div>
+      <p class="field-error" data-model-connection-error role="alert" hidden></p>
       <div class="form-actions">
         <p class="form-note" data-save-feedback role="status"></p>
         <button type="submit" class="btn small">Save Studio</button>
       </div>
     </form>
-    <p class="panel-note consent-note">Changing the key or model asks for provider consent again in Studio before channel content is sent.</p>
+    <form id="chatgpt-connect" method="post" action="/settings/providers/openai/connect" hidden><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"></form>
+    <form id="chatgpt-disconnect" method="post" action="/settings/providers/openai/disconnect" hidden><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"></form>
+    <p class="panel-note consent-note">External providers require consent in Studio before channel content is sent. Ollama processes it locally.</p>
     <form id="reset-openrouter_api_key" method="post" action="/settings/studio/reset" hidden>
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <input type="hidden" name="key" value="studio.openrouter_api_key">

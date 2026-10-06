@@ -75,10 +75,41 @@ Docker build, and continuous integration.
 - [Security policy](SECURITY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 
-Studio is always available. Configure the OpenRouter key only
-on the server; it is never sent to the browser. Agent and research bounds are
+Studio is always available. Choose OpenRouter, local Ollama, or an OpenAI
+ChatGPT connection in Settings → Studio. Provider credentials stay on the
+server and are never sent to the browser. Agent and research bounds are
 fixed in `app/limits.py`. Studio routes require authentication and
 PostgreSQL readiness.
+
+### Choose an agent provider
+
+Open **Settings → Studio → Model provider**. Switching provider applies to
+new runs; conversations and saved drafts remain in the workspace.
+
+- **Ollama:** start your local server, select Ollama, click **Refresh models**,
+  choose an installed model and **Save Studio**. The default address is
+  `http://127.0.0.1:11434`; inside Docker it resolves to `host.docker.internal`.
+  The server must be reachable from the container (Linux users may need a
+  host-gateway mapping). Only local hosts and installed local models are
+  accepted. Cloud-backed Ollama models are excluded. Select a model with
+  tool calling and enough context for research; a small model can connect
+  successfully and still produce poor tool arguments or drafts.
+- **OpenAI:** open this app on `http://127.0.0.1:8080`, select OpenAI and click
+  **Continue with ChatGPT**. Complete sign-in in your browser, then **Refresh
+  models**, select an available model and **Save Studio**. This uses the
+  [official ChatGPT plan OAuth flow](https://developers.openai.com/siwc/token-sharing-open-source/sign-in),
+  without an API key. Model availability and limits depend on the connected
+  account. OAuth tokens are encrypted in the workspace settings, renewed
+  automatically and removed by **Disconnect ChatGPT**. A pending sign-in
+  expires after ten minutes or a server restart; start it again if needed.
+  Sign-in requires a browser on the app's host and one web process; a remote
+  website or multiple web replicas need a separate OAuth callback deployment.
+- **OpenRouter:** the existing server-side API key and model controls remain
+  available. No provider is switched automatically.
+
+External providers require workspace consent before receiving channel context.
+Ollama requests stay on the configured local server. Telegram collection and
+publishing continue independently of model selection.
 
 Use the channel selector in Studio to change desks. Each channel has its own
 profile, System Prompt, conversation history, message memory, research state,

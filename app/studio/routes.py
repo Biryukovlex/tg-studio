@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .model import provider_name, model_name
+
 import logging
 import uuid
 import json
@@ -15,7 +17,7 @@ from pydantic import ValidationError
 
 from .. import limits
 from ..web.dependencies import require_auth, require_csrf
-from .consent import PROVIDER_NAME, configuration_fingerprint, consent_state, disclosure
+from .consent import configuration_fingerprint, consent_state, disclosure
 from .drafts import DraftConflictError, DraftValidationError
 from .markdown import render_markdown_html, render_markdown_plain
 from .repository import ActiveRunExists, ConversationNotFound, DraftNotFound, RunNotFound
@@ -365,7 +367,7 @@ def build_router() -> APIRouter:
         row = None
         if getter is not None:
             row = await getter(
-                provider=PROVIDER_NAME,
+                provider=provider_name(_settings(request)),
                 configuration_fingerprint=configuration_fingerprint(_settings(request)),
                 user_id=context.user_id,
             )
@@ -449,7 +451,7 @@ def build_router() -> APIRouter:
             "setup": setup,
             "workspace": {"id": str(context.workspace_id or service.repository.workspace_id), "slug": context.workspace_slug, "role": context.role},
             "user": {"id": str(context.user_id) if context.user_id else None},
-            "provider": {"name": "openrouter", "model": _settings(request).openrouter_model.strip() or "nex-agi/nex-n2.5-pro:free", "configured": bool(_settings(request).openrouter_api_key or getattr(_settings(request), "studio_test_mode", False))},
+            "provider": {"name": provider_name(_settings(request)), "model": model_name(_settings(request)), "configured": setup["ready"]},
             "research": setup.get("research", {}),
             "channels": channels,
             "selected_channel_id": selected_channel_id,
@@ -481,13 +483,13 @@ def build_router() -> APIRouter:
             return _safe_error("invalid_consent", "Consent details are invalid.", status_code=422)
         expected = configuration_fingerprint(_settings(request))
         if not payload.confirm:
-            return _safe_error("consent_required", "Confirm the OpenRouter disclosure to continue.", status_code=409)
+            return _safe_error("consent_required", "Confirm the provider disclosure to continue.", status_code=409)
         if payload.configuration_fingerprint and payload.configuration_fingerprint != expected:
             return _safe_error("consent_stale", "Provider configuration changed; review the disclosure again.", status_code=409)
         granter = getattr(_service(request).repository, "grant_provider_consent", None)
         if granter is None or context.user_id is None:
             return _safe_error("consent_unavailable", "Provider consent persistence is unavailable.", status_code=503)
-        row = await granter(user_id=context.user_id, provider=PROVIDER_NAME, configuration_fingerprint=expected)
+        row = await granter(user_id=context.user_id, provider=provider_name(_settings(request)), configuration_fingerprint=expected)
         # Consent is workspace-wide because the provider configuration is
         # shared, but the profile returned alongside it must stay channel-local.
         profile = None
@@ -516,7 +518,7 @@ def build_router() -> APIRouter:
         revoker = getattr(_service(request).repository, "revoke_provider_consent", None)
         if revoker is None or context.user_id is None:
             return _safe_error("consent_unavailable", "Provider consent persistence is unavailable.", status_code=503)
-        row = await revoker(user_id=context.user_id, provider=PROVIDER_NAME)
+        row = await revoker(user_id=context.user_id, provider=provider_name(_settings(request)))
         return {"consent": consent_state(_settings(request), row)}
 
     def _profile_build_blockers(request: Request, channel_id: int | None, setup: dict[str, Any], consent: dict[str, Any] | None, available_posts: int | None = None) -> list[dict[str, Any]]:
@@ -525,7 +527,7 @@ def build_router() -> APIRouter:
             blockers.append({"code": "studio_not_ready", "message": "Finish Studio setup before building."})
             return blockers
         if consent is not None and consent.get("required") and not consent.get("granted"):
-            blockers.append({"code": "provider_consent_required", "message": "Allow OpenRouter in the Studio banner before building."})
+            blockers.append({"code": "provider_consent_required", "message": "Allow the configured provider in the Studio banner before building."})
         # Check post count
         if available_posts is not None:
             minimum = int(limits.MIN_PROFILE_POSTS)
@@ -646,7 +648,7 @@ def build_router() -> APIRouter:
             return _safe_error("channel_not_found", "Channel not found.", status_code=404)
         consent = await _consent(request, context)
         if consent.get("required") and not consent.get("granted"):
-            return _safe_error("provider_consent_required", "Allow OpenRouter before building.", status_code=409)
+            return _safe_error("provider_consent_required", "Allow the configured provider before building.", status_code=409)
         # Check too_few_posts before building
         reader = getattr(service.repository, "performance_rows", None)
         if reader is not None:
@@ -957,7 +959,7 @@ def build_router() -> APIRouter:
             return _safe_error("studio_not_ready", "Finish Studio setup before starting an agent run.", status_code=409)
         provider_consent = await _consent(request, context)
         if provider_consent["required"] and not provider_consent["granted"]:
-            return _safe_error("provider_consent_required", "Review and confirm the OpenRouter disclosure before using Studio.", status_code=409)
+            return _safe_error("provider_consent_required", "Review and confirm the provider disclosure before using Studio.", status_code=409)
         return await _service(request).stream_request(request, await request.body())
 
     @router.get("/api/runs/{run_id}/events")

@@ -355,6 +355,11 @@
       if (form instanceof HTMLFormElement) markDirty(form);
     });
 
+    settingsStack.addEventListener('change', (event) => {
+      const form = event.target.closest?.('form[data-settings-save]');
+      if (form instanceof HTMLFormElement) markDirty(form);
+    });
+
     settingsStack.addEventListener('submit', async (event) => {
       const form = event.target;
       if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== 'post') return;

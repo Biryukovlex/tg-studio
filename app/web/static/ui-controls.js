@@ -261,6 +261,17 @@
     trigger.addEventListener("click", onTriggerClick);
     trigger.addEventListener("keydown", onTriggerKey);
     menu.addEventListener("keydown", onMenuKey);
+    select.addEventListener("tg:options", function () {
+      closeMenu(false);
+      menu.replaceChildren();
+      state.options = [];
+      Array.prototype.forEach.call(select.options, function (native, i) {
+        var option = buildOption(state, native, i);
+        state.options.push(option);
+        menu.appendChild(option);
+      });
+      syncTrigger(state);
+    });
     select.addEventListener("change", function () {
       syncTrigger(state);
     });

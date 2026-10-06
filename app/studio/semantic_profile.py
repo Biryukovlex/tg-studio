@@ -6,7 +6,7 @@ import logging
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.usage import UsageLimits
-from .model import build_model, model_name
+from .model import build_model, model_name, provider_name, model_configured, run_settings
 from .profile import TopicInsight, build_profile, validate_profile_evidence, _style
 
 log = logging.getLogger("studio.semantic_profile")
@@ -37,7 +37,7 @@ class SemanticProfile(BaseModel):
     style_patterns: list[str] = Field(default_factory=list, max_length=6)
     style_post_ids: list[int] = Field(default_factory=list, max_length=20)
 
-def apply_semantics(analytics, rows, semantic, *, model):
+def apply_semantics(analytics, rows, semantic, *, model, provider="openrouter"):
     profile, analysis = build_profile(analytics)
     allowed = {p.post_id: p for p in analytics.evidence_posts}
     strongest = {p.post_id for p in analytics.top_posts}
@@ -75,13 +75,14 @@ def apply_semantics(analytics, rows, semantic, *, model):
     style.evidence_post_ids = semantic.style_post_ids or style.evidence_post_ids
     analysis_hash = hashlib.sha256((analytics.input_hash + SEMANTIC_PROFILE_VERSION + model + semantic.model_dump_json()).encode()).hexdigest()
     profile = profile.model_copy(update={"topics": topics, "style_profile": style, "analysis_input_hash": analysis_hash,
-        "provider": "openrouter", "model": model, "prompt_version": SEMANTIC_PROFILE_VERSION,
+        "provider": provider, "model": model, "prompt_version": SEMANTIC_PROFILE_VERSION,
         "editorial_rules": {**profile.editorial_rules, "extraction_version": SEMANTIC_PROFILE_VERSION}})
     analysis = analysis.model_copy(update={"topic_insights": topics, "style_insights": style.model_dump(mode="json"), "input_hash": analysis_hash,
-        "provider": "openrouter", "model": model, "prompt_version": SEMANTIC_PROFILE_VERSION})
+        "provider": provider, "model": model, "prompt_version": SEMANTIC_PROFILE_VERSION})
     return validate_profile_evidence(profile, analytics), analysis
 
 async def build_semantic_profile(analytics, rows, settings):
+    settings = run_settings(settings)
     # Include a real comparison sample, not only the highest-ranked 20 posts.
     sample = {p.post_id: p for p in [*analytics.top_posts[:12], *analytics.baseline_posts[:8]]}
     for post in analytics.evidence_posts:
@@ -116,6 +117,8 @@ async def build_semantic_profile(analytics, rows, settings):
     supplied = {p["post_id"] for p in posts}
     evidence = {"posts": posts, "strongest_posts": [p.post_id for p in analytics.top_posts if p.post_id in supplied],
                 "baseline_posts": [p.post_id for p in analytics.baseline_posts if p.post_id in supplied]}
+    from .connections import prepare_model
+    await prepare_model(settings)
     agent = Agent(build_model(settings), output_type=SemanticProfile, instructions=PROFILE_INSTRUCTIONS,
                   retries=2, model_settings={"max_tokens": 3500, "temperature": 0.2})
     @agent.output_validator
@@ -124,7 +127,7 @@ async def build_semantic_profile(analytics, rows, settings):
         try:
             if not used <= supplied:
                 raise ValueError("Use only post IDs supplied in this request")
-            apply_semantics(analytics, rows, value, model=model_name(settings))
+            apply_semantics(analytics, rows, value, model=model_name(settings), provider=provider_name(settings))
         except ValueError as exc:
             raise ModelRetry(str(exc)) from exc
         return value
@@ -133,7 +136,7 @@ async def build_semantic_profile(analytics, rows, settings):
     used_ids = {i for t in result.output.topics for i in t.post_ids} | set(result.output.style_post_ids)
     if not used_ids <= supplied:
         raise ValueError("Profile cited a post outside the supplied model context")
-    return apply_semantics(analytics, rows, result.output, model=model_name(settings))
+    return apply_semantics(analytics, rows, result.output, model=model_name(settings), provider=provider_name(settings))
 
 
 # ---------------------------------------------------------------------------
@@ -225,12 +228,13 @@ async def build_profile_text_draft(analytics, rows, settings, *, model=None, cur
     filters template-like lines and forbidden markup and prepends the
     deterministic formatting facts, which the model may not contradict.
     """
+    settings = run_settings(settings)
 
     from .profile import ProfileDraft, _build_draft_from_analytics, _formatting_facts
     from .sources import sanitize_untrusted_text
 
     deterministic = _build_draft_from_analytics(analytics, rows)
-    has_key = bool(str(getattr(settings, "openrouter_api_key", "") or "").strip())
+    has_key = model_configured(settings)
     if model is None and getattr(settings, "studio_test_mode", False):
         deterministic.evidence_post_ids = [p.post_id for p in analytics.evidence_posts[:30]]
         return deterministic
@@ -265,6 +269,9 @@ async def build_profile_text_draft(analytics, rows, settings, *, model=None, cur
             if str((current or {}).get(key) or "").strip()
         },
     }
+    from .connections import prepare_model
+    if model is None:
+        await prepare_model(settings)
     selected_model = model or build_model(settings)
     log.info("Channel-profile extraction: posts=%s excerpt_chars=%s model=%s",
              len(posts), sum(len(post["text"]) for post in posts), model_name(settings))

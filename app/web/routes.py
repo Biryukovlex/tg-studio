@@ -423,6 +423,8 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
 
     # Keep auth/CSRF and service wiring in one production Studio router.
     app.state.csrf_token = csrf_token
+    from .settings_routes import chatgpt_callback
+    app.add_api_route("/auth/callback", chatgpt_callback, methods=["GET"], include_in_schema=False)
     app.include_router(build_studio_router())
     app.include_router(settings_router)
     from ..publishing.routes import router as publishing_router

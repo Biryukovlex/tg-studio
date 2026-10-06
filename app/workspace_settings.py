@@ -107,7 +107,33 @@ def _validate_blocked_domains(v: Any) -> str:
     return ",".join(seen)
 
 
+def _validate_provider(v: Any) -> str:
+    value = str(v or "").strip()
+    if value not in {"openrouter", "ollama", "openai"}:
+        raise ValueError("studio.provider must be openrouter, ollama or openai")
+    return value
+
+
+def _validate_ollama_url(v: Any) -> str:
+    from .studio.connections import ollama_origin
+    return ollama_origin(str(v or ""), for_runtime=False)
+
+
+def _validate_oauth(v: Any) -> str:
+    import json
+    value = str(v or "")
+    if len(value) > 64_000 or not isinstance(json.loads(value), dict):
+        raise ValueError("Invalid OpenAI connection")
+    return value
+
+
 SETTINGS: dict[str, tuple[str, str, Any]] = {
+    "studio.provider": ("str", "studio_provider", _validate_provider),
+    "studio.ollama_url": ("str", "ollama_base_url", _validate_ollama_url),
+    "studio.ollama_model": ("str", "ollama_model", _validate_model),
+    "studio.openai_model": ("str", "openai_model", _validate_model),
+    "studio.openai_oauth": ("secret", "studio_openai_oauth", _validate_oauth),
+    "studio.openai_host_id": ("str", "studio_openai_host_id", _validate_model),
     "collection.poll_minutes": ("float", "poll_minutes", _validate_poll_minutes),
     "collection.track_days": ("int", "track_days", _validate_track_days),
     "collection.backfill_limit": ("int", "backfill_limit", _validate_backfill_limit),
@@ -118,15 +144,7 @@ SETTINGS: dict[str, tuple[str, str, Any]] = {
 }
 
 # Mapping from registry key to Settings attribute name for RuntimeSettings proxy
-KEY_TO_ATTR = {
-    "collection.poll_minutes": "poll_minutes",
-    "collection.track_days": "track_days",
-    "collection.backfill_limit": "backfill_limit",
-    "studio.openrouter_api_key": "openrouter_api_key",
-    "studio.model": "openrouter_model",
-    "research.enabled": "studio_search_enabled",
-    "research.blocked_domains": "studio_search_blocked_domains",
-}
+KEY_TO_ATTR = {key: entry[1] for key, entry in SETTINGS.items()}
 
 ATTR_TO_KEY = {v: k for k, v in KEY_TO_ATTR.items()}
 

@@ -12,7 +12,7 @@ from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.settings import ModelSettings
 
 from .. import limits
-from .model import build_model
+from .model import build_model, provider_name, model_name
 from .prompts import SYSTEM_INSTRUCTIONS
 from .analytics import analyze_posts_async
 from .context import ContextAssembler, ContextPack, profile_block_from_mapping
@@ -1090,8 +1090,8 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             "creative": creative,
             "story_cluster_id": story_cluster_id,
             "analysis_id": analysis_id,
-            "provider": "local" if getattr(settings, "studio_test_mode", False) else "openrouter",
-            "model": getattr(settings, "openrouter_model", ""),
+            "provider": "local" if getattr(settings, "studio_test_mode", False) else provider_name(settings),
+            "model": model_name(settings),
             "prompt_version": "m5.draft.v1",
         }
         try:
@@ -1189,8 +1189,8 @@ def build_agent(settings, *, model=None) -> Agent[StudioDeps, str]:
             "creative": creative,
             "story_cluster_id": story_cluster_id,
             "analysis_id": analysis_id,
-            "provider": "local" if getattr(settings, "studio_test_mode", False) else "openrouter",
-            "model": getattr(settings, "openrouter_model", ""),
+            "provider": "local" if getattr(settings, "studio_test_mode", False) else provider_name(settings),
+            "model": model_name(settings),
             "prompt_version": "m5.draft.v1",
         }
         payload = {key: value for key, value in payload.items() if value is not None}

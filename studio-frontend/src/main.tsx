@@ -1132,7 +1132,7 @@ function ProfilePrimer({ bootstrap, onBootstrap }: { bootstrap: Bootstrap; onBoo
 
   if (consent.required && !consent.granted) {
     return (
-      <section className="studio-primer studio-primer-consent" aria-label="OpenRouter consent">
+      <section className="studio-primer studio-primer-consent" aria-label="Provider consent">
         <div>
           <p className="studio-overline">One-time permission</p>
           <h2>{consent.disclosure?.title ?? "Allow OpenRouter for Studio"}</h2>
@@ -1550,7 +1550,7 @@ export function StudioThread({
                 className="studio-send"
                 aria-label="Send message"
                 disabled={consent.required && !consent.granted}
-                title={consent.required && !consent.granted ? "Allow OpenRouter above to start" : undefined}
+                title={consent.required && !consent.granted ? "Allow the selected provider above to start" : undefined}
               >
                 <span aria-hidden="true">↗</span>
               </ComposerPrimitive.Send>

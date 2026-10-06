@@ -1,15 +1,16 @@
 """PydanticAI model construction for the Studio.
 
-OpenRouter is configured directly through PydanticAI's OpenAI-compatible
-support. The deterministic TestModel is available only for explicit local
+OpenRouter and local Ollama use OpenAI-compatible chat. ChatGPT OAuth
+uses streamed Responses with server-side storage disabled. The deterministic TestModel is available only for explicit local
 tests; it is never selected silently in a production configuration.
 """
 
 from __future__ import annotations
 
 
+from pydantic_ai import UnexpectedModelBehavior
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -35,6 +36,20 @@ def build_model(settings, *, test_model: bool | None = None) -> Model:
             ),
         )
 
+    provider = provider_name(settings)
+    if provider == "ollama":
+        from .connections import ollama_origin
+        if not settings.ollama_model.strip():
+            raise StudioConfigurationError("Choose an installed Ollama model in Settings")
+        return OpenAIChatModel(settings.ollama_model.strip(), provider=OpenAIProvider(
+            base_url=ollama_origin(settings.ollama_base_url) + "/v1", api_key="ollama"))
+    if provider == "openai":
+        from .connections import oauth_record
+        record = oauth_record(settings)
+        if not record or not settings.openai_model.strip():
+            raise StudioConfigurationError("Connect ChatGPT and choose a model in Settings")
+        return ChatGPTPlanModel(settings.openai_model.strip(), provider=OpenAIProvider(
+            base_url="https://api.openai.com/v1", api_key=record["access_token"]))
     api_key = settings.openrouter_api_key.strip()
     if not api_key:
         raise StudioConfigurationError("OPENROUTER_API_KEY is required for Studio agent runs")
@@ -48,7 +63,73 @@ def build_model(settings, *, test_model: bool | None = None) -> Model:
     )
 
 
-def model_name(settings) -> str:
-    """Return a user-safe requested model label."""
+class ChatGPTPlanModel(OpenAIResponsesModel):
+    """ChatGPT-plan inference requires streaming, including structured extraction."""
 
+    async def request(self, messages, model_settings, model_request_parameters):
+        async with self.request_stream(messages, model_settings, model_request_parameters) as response:
+            async for _event in response:
+                pass
+            return response.get()
+
+    async def _process_streamed_response(self, response, model_settings, model_request_parameters, **kwargs):
+        async def verified_events():
+            completed = False
+            async for event in response:
+                if event.type in {"response.failed", "response.incomplete"}:
+                    raise UnexpectedModelBehavior("ChatGPT returned an unsuccessful response")
+                if event.type == "response.completed":
+                    completed = True
+                yield event
+            if not completed:
+                raise UnexpectedModelBehavior("ChatGPT stream ended before response.completed")
+        return await super()._process_streamed_response(verified_events(), model_settings, model_request_parameters, **kwargs)
+
+    def request_stream(self, messages, model_settings, model_request_parameters, *args, **kwargs):
+        return super().request_stream(messages, {**(model_settings or {}), "openai_store": False}, model_request_parameters, *args, **kwargs)
+
+
+def provider_name(settings) -> str:
+    return str(getattr(settings, "studio_provider", "openrouter") or "openrouter")
+
+
+def model_name(settings) -> str:
+    provider = provider_name(settings)
+    if provider == "ollama":
+        return str(settings.ollama_model).strip()
+    if provider == "openai":
+        return str(settings.openai_model).strip()
     return settings.openrouter_model.strip() or "nex-agi/nex-n2.5-pro:free"
+
+
+def model_configured(settings) -> bool:
+    if getattr(settings, "studio_test_mode", False):
+        return True
+    provider = provider_name(settings)
+    if provider == "ollama":
+        return bool(settings.ollama_model.strip())
+    if provider == "openai":
+        from .connections import oauth_record
+        return bool(oauth_record(settings) and settings.openai_model.strip())
+    return bool(settings.openrouter_api_key.strip())
+
+
+class ModelRunSettings:
+    """Keep a run's provider stable when workspace settings change mid-run."""
+
+    def __init__(self, settings):
+        self._base = settings
+        self._workspace_settings = getattr(settings, "_workspace_settings", None)
+        names = ("studio_provider", "openrouter_model", "openrouter_api_key", "ollama_model",
+                 "ollama_base_url", "openai_model", "studio_openai_oauth", "studio_test_mode")
+        defaults = {"studio_provider": "openrouter", "studio_test_mode": False, "ollama_base_url": "http://127.0.0.1:11434"}
+        self._provider_values = {name: getattr(settings, name, defaults.get(name, "")) for name in names}
+
+    def __getattr__(self, name):
+        if name in self._provider_values:
+            return self._provider_values[name]
+        return getattr(self._base, name)
+
+
+def run_settings(settings):
+    return settings if isinstance(settings, ModelRunSettings) else ModelRunSettings(settings)
