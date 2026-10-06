@@ -19,7 +19,7 @@ these paths from image builds.
 ## First local Docker setup
 
 ```bash
-cd "tg-studio"
+cd "tghost"
 cp .env.example .env
 ```
 

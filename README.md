@@ -33,8 +33,8 @@ Requires Docker Engine with Compose v2, or Docker Desktop.
 ### 1. Get the app
 
 ```bash
-git clone https://github.com/Biryukovlex/tg-studio.git
-cd tg-studio
+git clone https://github.com/Biryukovlex/tghost.git
+cd tghost
 cp .env.example .env
 ```
 
