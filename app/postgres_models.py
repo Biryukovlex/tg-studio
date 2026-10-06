@@ -678,6 +678,7 @@ class StudioDraft(Base):
     analysis_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     working_title: Mapped[str] = mapped_column(Text, nullable=False, server_default="Untitled draft")
     body: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    media_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=sql_text("'[]'::jsonb"))
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="working")
     source_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=sql_text("'[]'::jsonb"))
     claim_support: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=sql_text("'[]'::jsonb"))
@@ -734,6 +735,7 @@ class StudioDraftVersion(Base):
     draft_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    media_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=sql_text("'[]'::jsonb"))
     origin: Mapped[str] = mapped_column(Text, nullable=False)
     instruction: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     character_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
@@ -750,3 +752,73 @@ class StudioDraftVersion(Base):
         UniqueConstraint("workspace_id", "draft_id", "version", name="uq_studio_draft_versions_version"),
         Index("ix_studio_draft_versions_workspace_draft_created", "workspace_id", "draft_id", "created_at", "id"),
     )
+
+
+class StudioMedia(Base):
+    """Immutable workspace-private JPEGs; migration sets only draft_id null on draft deletion."""
+    __tablename__ = 'studio_media'
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False)
+    draft_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    content_type: Mapped[str] = mapped_column(Text, nullable=False, server_default='image/jpeg')
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    __table_args__ = (UniqueConstraint('workspace_id', 'id'), CheckConstraint('octet_length(content) <= 10485760'), CheckConstraint('width > 0 AND height > 0'))
+
+
+class PublishingChannel(Base):
+    __tablename__ = 'publishing_channels'
+    account_id: Mapped[int | None] = mapped_column(BigInteger)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    channel_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default='false')
+    reason: Mapped[str] = mapped_column(Text, nullable=False, server_default='Checking publishing permissions')
+    caption_limit: Mapped[int] = mapped_column(Integer, nullable=False, server_default='1024')
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    __table_args__ = (ForeignKeyConstraint(['workspace_id', 'channel_id'], ['channels.workspace_id', 'channels.id'], ondelete='CASCADE'),)
+
+
+class ScheduledPost(Base):
+    __tablename__ = 'scheduled_posts'
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False)
+    channel_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    draft_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    pending_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    parts: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=sql_text("'[]'::jsonb"))
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    timezone: Mapped[str] = mapped_column(Text, nullable=False)
+    pending_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pending_timezone: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default='queued')
+    action: Mapped[str | None] = mapped_column(Text)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default='1')
+    idempotency_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str] = mapped_column(Text, nullable=False, server_default='')
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    __table_args__ = (UniqueConstraint('workspace_id', 'id'), UniqueConstraint('workspace_id', 'idempotency_key'),
+        ForeignKeyConstraint(['workspace_id', 'channel_id'], ['channels.workspace_id', 'channels.id']),
+        CheckConstraint("status IN ('queued','transferring','scheduled','updating','cancelling','published','cancelled','failed','needs_review')"),
+        CheckConstraint("action IS NULL OR action IN ('schedule','update','cancel')"), Index('ix_scheduled_posts_calendar', 'workspace_id', 'scheduled_at', 'id'))
+
+
+class PublishingEvent(Base):
+    __tablename__ = 'publishing_events'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    post_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False, server_default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    __table_args__ = (ForeignKeyConstraint(['workspace_id', 'post_id'], ['scheduled_posts.workspace_id', 'scheduled_posts.id'], ondelete='CASCADE'),)

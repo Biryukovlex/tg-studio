@@ -17,3 +17,6 @@ asyncpg>=0.29,<1
 cryptography>=50.0.1,<51
 # Explicit runtime dependency for bounded provider/source HTTP calls.
 httpx>=0.27,<1
+
+# Validated image attachments for Telegram publishing.
+Pillow==12.3.0

@@ -46,6 +46,9 @@
           <span>Settings</span>
         </a>
         {% endif %}
+        <a class="sidebar-link{% if request.url.path.startswith('/calendar') %} active{% endif %}" href="/calendar" title="Calendar">
+          <i class="mgc mgc-calendar-2-core-regular" aria-hidden="true"></i><span>Calendar</span>
+        </a>
       </nav>
 
       <div class="sidebar-foot">

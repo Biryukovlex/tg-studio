@@ -463,6 +463,11 @@ class PostgresDatabase:
             if not secrets.compare_digest(confirmation.strip(), identifier):
                 raise ValueError(f"Type {identifier} exactly to confirm deletion.")
 
+            active_schedules = (await session.execute(text("SELECT count(*) FROM scheduled_posts WHERE workspace_id=:workspace_id AND channel_id=:channel_id AND status NOT IN ('published','cancelled','failed')"),
+                {"workspace_id": self._workspace(), "channel_id": channel_id})).scalar_one()
+            if active_schedules:
+                raise ValueError("Cancel or resolve scheduled posts in Calendar before deleting this channel. Telegram may still publish them.")
+            await session.execute(text("DELETE FROM scheduled_posts WHERE workspace_id=:workspace_id AND channel_id=:channel_id"), {"workspace_id": self._workspace(), "channel_id": channel_id})
             counts = (
                 await session.execute(
                     text(

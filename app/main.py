@@ -224,6 +224,9 @@ async def amain() -> None:
     if failed:
         log.warning("Could not resolve channel(s): %s - check CHANNELS in .env", ", ".join(failed))
 
+    from .publishing.worker import start_worker
+    publishing_task = start_worker(db, client)
+
     handlers = CommandHandlers(client, collector, effective)
     await handlers.start()
     log.info("Telegram commands enabled for Saved Messages")
@@ -266,7 +269,8 @@ async def amain() -> None:
         finally:
             if not first_cycle.done():
                 first_cycle.cancel()
-            await asyncio.gather(first_cycle, return_exceptions=True)
+            publishing_task.cancel()
+            await asyncio.gather(first_cycle, publishing_task, return_exceptions=True)
             scheduler.shutdown(wait=False)
             await client.disconnect()
             await db.close()
@@ -292,10 +296,10 @@ async def amain() -> None:
         # tear everything down as soon as the initial poll finishes.
         await asyncio.wait({server_task, tg_task}, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        for task in (server_task, tg_task, first_cycle):
+        for task in (server_task, tg_task, first_cycle, publishing_task):
             if not task.done():
                 task.cancel()
-        await asyncio.gather(server_task, tg_task, first_cycle, return_exceptions=True)
+        await asyncio.gather(server_task, tg_task, first_cycle, publishing_task, return_exceptions=True)
         scheduler.shutdown(wait=False)
         try:
             await client.disconnect()

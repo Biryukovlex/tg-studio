@@ -36,6 +36,7 @@ export type DraftClaim = {
 };
 
 export type Draft = {
+  media_ids?: string[];
   id: string;
   workspace_id: string;
   conversation_id: string;
@@ -71,6 +72,7 @@ export type Draft = {
 };
 
 export type DraftVersion = {
+  media_ids?: string[];
   id: number;
   draft_id: string;
   version: number;

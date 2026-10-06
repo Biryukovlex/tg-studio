@@ -42,6 +42,7 @@ class DraftPatchRequest(BaseModel):
     expected_revision: int = Field(ge=1)
     body: str | None = Field(default=None, max_length=32_000)
     working_title: str | None = Field(default=None, max_length=240)
+    media_ids: list[str] | None = Field(default=None, max_length=10)
     source_ids: list[str] | None = Field(default=None, max_length=40)
     claim_support: list[dict[str, Any]] | None = Field(default=None, max_length=40)
     assumptions: list[str] | None = Field(default=None, max_length=40)

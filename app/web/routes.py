@@ -425,6 +425,8 @@ def create_app(collector: Collector, settings: Settings | RuntimeSettings, works
     app.state.csrf_token = csrf_token
     app.include_router(build_studio_router())
     app.include_router(settings_router)
+    from ..publishing.routes import router as publishing_router
+    app.include_router(publishing_router)
 
     # ---------------- auth ----------------
 

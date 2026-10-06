@@ -75,6 +75,7 @@ def _draft_public(row: dict[str, Any]) -> dict[str, Any]:
 
     data = dict(row)
     list_defaults: tuple[tuple[str, list[Any]], ...] = (
+        ("media_ids", []),
         ("source_ids", []),
         ("claim_support", []),
         ("assumptions", []),
@@ -1053,6 +1054,18 @@ class StudioRepository:
             current = _draft_public(dict(current_row))
             if expected_revision is not None and int(current["revision"]) != int(expected_revision):
                 raise DraftConflictError(current, expected_revision=expected_revision)
+            media_ids = payload.get("media_ids", current.get("media_ids", []))
+            try:
+                media_ids = [str(uuid.UUID(str(item))) for item in media_ids]
+            except (ValueError, TypeError):
+                raise DraftValidationError("invalid_media", "Image identifiers are invalid.") from None
+            if len(media_ids) > 10 or len(set(media_ids)) != len(media_ids):
+                raise DraftValidationError("invalid_media", "Choose up to ten different images.")
+            if media_ids:
+                found = (await session.execute(text("SELECT id FROM studio_media WHERE workspace_id=:workspace_id AND draft_id=:draft_id AND id=ANY(:ids)"),
+                    {"workspace_id": workspace_id, "draft_id": draft_id, "ids": [uuid.UUID(item) for item in media_ids]})).scalars().all()
+                if len(found) != len(media_ids):
+                    raise DraftValidationError("invalid_media", "An image is unavailable in this draft.")
             merged = self._draft_input_payload(current, payload)
             known = await self._validate_draft_references(
                 session,
@@ -1074,8 +1087,8 @@ class StudioRepository:
                 await session.execute(
                     text(
                         """INSERT INTO studio_draft_versions(
-                                   workspace_id, draft_id, version, body, origin, instruction, character_count
-                               ) VALUES (:workspace_id, :draft_id, :version, :body, :origin, :instruction, :character_count)"""
+                                   workspace_id, draft_id, version, body, origin, instruction, character_count, media_ids
+                               ) VALUES (:workspace_id, :draft_id, :version, :body, :origin, :instruction, :character_count, CAST(:media_ids AS jsonb))"""
                     ),
                     {
                         "workspace_id": workspace_id,
@@ -1085,6 +1098,7 @@ class StudioRepository:
                         "origin": origin,
                         "instruction": str(instruction or "")[:4_000],
                         "character_count": values["character_count"],
+                        "media_ids": json.dumps(media_ids),
                     },
                 )
             else:
@@ -1092,7 +1106,7 @@ class StudioRepository:
                 await session.execute(
                     text(
                         """UPDATE studio_draft_versions
-                              SET body=:body, origin=:origin, instruction=:instruction, character_count=:character_count
+                              SET body=:body, origin=:origin, instruction=:instruction, character_count=:character_count, media_ids=CAST(:media_ids AS jsonb)
                             WHERE workspace_id=:workspace_id AND draft_id=:draft_id AND version=:version"""
                     ),
                     {
@@ -1103,6 +1117,7 @@ class StudioRepository:
                         "origin": origin,
                         "instruction": str(instruction or "")[:4_000],
                         "character_count": values["character_count"],
+                        "media_ids": json.dumps(media_ids),
                     },
                 )
             update_params = {
@@ -1111,6 +1126,7 @@ class StudioRepository:
                 "story_cluster_id": values.get("story_cluster_id"),
                 "analysis_id": uuid.UUID(str(values["analysis_id"])) if values.get("analysis_id") else None,
                 "working_title": values["working_title"],
+                "media_ids": json.dumps(media_ids),
                 "body": values["body"],
                 "status": "working",
                 "source_ids": json.dumps(values["source_ids"]),
@@ -1133,7 +1149,7 @@ class StudioRepository:
                     text(
                         """UPDATE studio_drafts SET
                                story_cluster_id=:story_cluster_id, analysis_id=:analysis_id,
-                               working_title=:working_title, body=:body, status=:status,
+                               working_title=:working_title, body=:body, status=:status, media_ids=CAST(:media_ids AS jsonb),
                                source_ids=CAST(:source_ids AS jsonb), claim_support=CAST(:claim_support AS jsonb),
                                assumptions=CAST(:assumptions AS jsonb), warnings=CAST(:warnings AS jsonb),
                                channel_evidence=CAST(:channel_evidence AS jsonb), web_evidence=CAST(:web_evidence AS jsonb),
@@ -1230,7 +1246,7 @@ class StudioRepository:
             row = (
                 await session.execute(
                     text(
-                        """UPDATE studio_drafts SET body=:body, current_version=:version,
+                        """UPDATE studio_drafts SET body=:body, media_ids=CAST(:media_ids AS jsonb), current_version=:version,
                                   current_version_origin=:origin, revision=:revision, updated_at=now()
                             WHERE workspace_id=:workspace_id AND id=:draft_id RETURNING *"""
                     ),
@@ -1238,6 +1254,7 @@ class StudioRepository:
                         "workspace_id": workspace_id,
                         "draft_id": draft_id,
                         "body": selected["body"],
+                        "media_ids": json.dumps(selected.get("media_ids", [])),
                         "version": int(selected["version"]),
                         "origin": selected["origin"],
                         "revision": int(current["revision"]) + 1,

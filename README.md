@@ -241,8 +241,10 @@ making provider calls when a required setting is missing.
 
 In Studio, ask the agent in one free-text message to find a story and draft a
 post. The artifact panel keeps the exact plain-text body editable, shows source
-and channel evidence, autosaves with conflict recovery, and lets you copy the
-final text for Telegram. Studio never publishes to Telegram.
+and channel evidence, saves with conflict recovery, and lets you copy the
+final text or explicitly schedule it in Telegram. Scheduling requires the
+connected Telegram account to have publishing permission. The agent never
+publishes automatically. See [Calendar and images](docs/publishing.md).
 
 On the first real Studio visit, review the concise OpenRouter disclosure and
 choose **Allow and analyze**. Consent is bound to the provider/model/base URL

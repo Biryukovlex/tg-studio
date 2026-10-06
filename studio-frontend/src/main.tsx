@@ -41,6 +41,8 @@ import { isTerminalPollStatus, nextPollDelay, shouldStopPollingAfterErrors } fro
 import { copyRenderedSelection, copyRichText, htmlFromMarkdown, isBlankDraftBody, plainFromMarkdown, telegramMarkupFromMarkdown } from "./markdownCopy";
 import ChannelProfileDialog from "./ChannelProfileDialog";
 import "./styles.css";
+import { ImageAttachments, ScheduleDialog } from "./publishing";
+import { CalendarPage } from "./CalendarPage";
 
 function ToolActivity({ toolName, result }: ToolCallMessagePartProps) {
   const label = toolActivityLabel(toolName);
@@ -697,6 +699,9 @@ function DraftPanel({
   const [saveError, setSaveError] = useState("");
   const [copied, setCopied] = useState(false);
   const [copyNote, setCopyNote] = useState("");
+  const [scheduleDraft, setScheduleDraft] = useState<Draft | null>(null);
+  const [scheduling, setScheduling] = useState(false);
+  const [imageUploading, setImageUploading] = useState(false);
   // The artifact opens formatted (Full post preview, including the heading);
   // raw-source editing is an explicit Edit action, never the default.
   const [previewOpen, setPreviewOpen] = useState(true);
@@ -756,6 +761,8 @@ function DraftPanel({
     hydrated.current = false;
     if (conversationChanged) {
       localChange.current = 0;
+      setScheduleDraft(null);
+      setScheduling(false);
       setConflict(null);
       setSaveState("saved");
       setSaveError("");
@@ -831,7 +838,7 @@ function DraftPanel({
     void api<{ draft: Draft }>(`/studio/api/drafts/${local.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json", "x-csrf-token": csrfToken() },
-      body: JSON.stringify({ expected_revision: local.revision, body: local.body, working_title: local.working_title, save_as_new_version: newVersion }),
+      body: JSON.stringify({ expected_revision: local.revision, body: local.body, working_title: local.working_title, media_ids: local.media_ids || [], save_as_new_version: newVersion }),
     })
       .then((payload) => {
         if (loadedConversation.current !== local.conversation_id) return;
@@ -871,6 +878,25 @@ function DraftPanel({
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [saveState]);
+
+  const prepareSchedule = async () => {
+    if (!draft || viewingOld || scheduling || imageUploading || saveState === "saving" || saveState === "conflict") return;
+    setScheduling(true);
+    try {
+      let selected = draft;
+      if (saveState !== "saved") {
+        const result = await api<{ draft: Draft }>(`/studio/api/drafts/${draft.id}`, { method: "PATCH", headers: { "content-type": "application/json", "x-csrf-token": csrfToken() }, body: JSON.stringify({ expected_revision: draft.revision, body: draft.body, working_title: draft.working_title, media_ids: draft.media_ids || [], save_as_new_version: true }) });
+        selected = result.draft;
+        if (loadedConversation.current !== draft.conversation_id) return;
+        setDraft(selected); localChange.current = 0; setSaveState("saved"); setSelectedVersion(selected.current_version);
+        const history = await api<{ versions: DraftVersion[] }>(`/studio/api/drafts/${selected.id}/versions`);
+        if (loadedConversation.current !== draft.conversation_id) return;
+        setVersions(history.versions);
+      }
+      if (loadedConversation.current === draft.conversation_id) setScheduleDraft(selected);
+    } catch (e) { if (loadedConversation.current === draft.conversation_id) setSaveError(draftSaveErrorMessage(e)); }
+    finally { if (loadedConversation.current === draft.conversation_id) setScheduling(false); }
+  };
 
   const saveNow = (newVersion: boolean) => {
     if (!draft) return;
@@ -1042,11 +1068,12 @@ function DraftPanel({
         </div>
       ) : (
         <div className="studio-draft-content">
-          <label className="studio-draft-title">Artifact title<input aria-label="Artifact title" value={draft.working_title} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /><span className="studio-draft-title-hint">Kept for search and cross-checking. Not copied to the post.</span></label>
+          <label className="studio-draft-title">Artifact title<input aria-label="Artifact title" value={draft.working_title} disabled={scheduling} onChange={(event) => edit("working_title", event.target.value)} maxLength={160} placeholder="Untitled draft" /><span className="studio-draft-title-hint">Kept for search and cross-checking. Not copied to the post.</span></label>
           {viewingOld && <p className="studio-draft-viewing" role="status">Viewing v{selectedVersion} (read-only). Restore makes it the current version.</p>}
+          <ImageAttachments key={draft.id} onBusyChange={setImageUploading} draftId={draft.id} ids={viewingOld ? viewedVersion?.media_ids || [] : draft.media_ids || []} version={viewingOld ? viewedVersion?.version : undefined} disabled={viewingOld || scheduling || imageUploading || saveState === "saving"} onChange={(ids) => { localChange.current += 1; setDraft(current => current ? { ...current, media_ids: ids } : current); setSaveState("unsaved"); setSaveError(""); }} />
           {previewOpen
             ? <div className="studio-draft-preview" role="region" aria-label="Full post preview"><DraftPreview preview={preview} /></div>
-            : <textarea className="studio-draft-editor" aria-label="Full post — headline and body" value={shownBody} readOnly={viewingOld} onChange={(event) => edit("body", event.target.value)} />}
+            : <textarea className="studio-draft-editor" aria-label="Full post — headline and body" value={shownBody} readOnly={viewingOld || scheduling} onChange={(event) => edit("body", event.target.value)} />}
           <div className={`studio-char-count ${shownCounter.overLimit ? "is-over" : shownCounter.warning ? "is-warning" : ""}`}>
             <span>{shownCounter.count.toLocaleString()} / {DRAFT_CHARACTER_LIMIT.toLocaleString()} Telegram characters</span>
             <span>{shownCounter.overLimit ? "Copy blocked · over Telegram limit" : isBlankBody ? "Copy blocked · post is blank" : shownCounter.warning ? "Near Telegram limit" : "Telegram ready"}</span>
@@ -1054,12 +1081,14 @@ function DraftPanel({
           {conflict && <div className="studio-conflict" role="alert"><strong>This draft changed elsewhere.</strong><span>Your local text is preserved.</span><div><button type="button" onClick={keepLocal}>Keep my text</button><button type="button" onClick={useServer}>Use server version</button></div></div>}
           {clickableSources.length > 0 && <div className="studio-draft-notes"><strong>Sources</strong><div className="studio-source-chips">{clickableSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a>)}</div></div>}
           <DraftPanelClaims draft={draft} sourceLinks={sourceLinks} />
-          <div className="studio-draft-toolbar"><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit post" : "Preview"}</button><span className="studio-draft-save-group"><button type="button" className="studio-draft-save" onClick={() => saveNow(false)} disabled={!canSave || viewingOld} title="Overwrite the current version with your edits">Save</button><button type="button" className="studio-draft-save" onClick={() => saveNow(true)} disabled={!canSave || viewingOld} title="Keep the current version and add your edits as a new one">Save as new version</button></span><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) choose(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version || saveState === "saving"} title="Make the viewed version the current one (no copy is created)">Restore</button></label></div>
+          <div className="studio-draft-toolbar"><button type="button" className="studio-draft-mode" aria-pressed={previewOpen} onClick={() => setPreviewOpen((open) => !open)}>{previewOpen ? "Edit post" : "Preview"}</button><span className="studio-draft-save-group"><button type="button" className="studio-draft-save" onClick={() => saveNow(false)} disabled={!canSave || viewingOld || scheduling || imageUploading} title="Overwrite the current version with your edits">Save</button><button type="button" className="studio-draft-save" onClick={() => saveNow(true)} disabled={!canSave || viewingOld || scheduling || imageUploading} title="Keep the current version and add your edits as a new one">Save as new version</button></span><label className="studio-version-select">Version<select aria-label="Draft version" value={selectedVersion ?? draft.current_version} onChange={(event) => setSelectedVersion(Number(event.target.value))}>{versions.map((version) => <option key={version.version} value={version.version}>v{version.version} · {version.origin}</option>)}</select><button type="button" className="studio-restore" onClick={() => { const version = versions.find((item) => item.version === selectedVersion); if (version && version.version !== draft.current_version) choose(version); }} disabled={selectedVersion === null || selectedVersion === draft.current_version || saveState === "saving"} title="Make the viewed version the current one (no copy is created)">Restore</button></label></div>
           {saveError && <p className="studio-save-error" role="alert">{saveError}</p>}
         </div>
       )}
+      {scheduleDraft && <ScheduleDialog draft={scheduleDraft} onClose={() => setScheduleDraft(null)} onScheduled={() => { setScheduleDraft(null); setCopyNote("Queued for Telegram. Track its status in Calendar."); }} />}
       {draft && (
         <div className="studio-draft-bottom">
+          <button type="button" className="studio-schedule" onClick={() => void prepareSchedule()} disabled={viewingOld || scheduling || imageUploading || saveState === "saving" || saveState === "conflict" || shownCounter.overLimit || (isBlankBody && !draft.media_ids?.length)}>{scheduling ? "Saving…" : "Schedule"}</button>
           <button
             type="button"
             className="studio-copy studio-copy-sticky"
@@ -2069,3 +2098,5 @@ function StudioApp() {
 
 const mount = document.getElementById("studio-react-root");
 if (mount) createRoot(mount).render(<StudioApp />);
+const calendarMount = document.getElementById("calendar-react-root");
+if (calendarMount) createRoot(calendarMount).render(<CalendarPage />);

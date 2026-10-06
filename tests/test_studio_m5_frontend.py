@@ -110,11 +110,14 @@ def test_idle_studio_does_not_poll_an_empty_draft_and_has_a_favicon():
     assert favicon.exists()
 
 
-def test_artifact_panel_does_not_offer_publish_action():
-    source = (ROOT / "studio-frontend/src/main.tsx").read_text(encoding="utf-8").lower()
-    # "publish" appears only in comments about the "publishable post field" boundary;
-    # no publish route, agent tool, or UI action exists
-    assert "publish" not in source.replace("publishable", "")
+def test_artifact_scheduling_requires_an_explicit_user_confirmation():
+    source = (ROOT / "studio-frontend/src/main.tsx").read_text(encoding="utf-8")
+    publishing = (ROOT / "studio-frontend/src/publishing.tsx").read_text(encoding="utf-8")
+    assert "prepareSchedule" in source
+    assert "Confirm schedule" in publishing
+    assert "confirm: true" in publishing
+    agent = (ROOT / "app/studio/agent.py").read_text(encoding="utf-8")
+    assert "publishing/posts" not in agent
 
 
 def test_assistant_messages_render_safe_gfm_while_user_messages_stay_literal():
