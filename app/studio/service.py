@@ -25,9 +25,9 @@ from ag_ui.core import (
 from pydantic_ai import UsageLimits
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.ui import SSE_CONTENT_TYPE
-from pydantic_ai.ui.ag_ui import AGUIAdapter
 from starlette.responses import JSONResponse, StreamingResponse
 
+from .adapter import StudioAGUIAdapter as AGUIAdapter
 from .agent import StudioDeps, build_agent, is_revision_request, is_short_continuation_request, workflow_tool_sequence
 from .. import limits
 from .analytics import analyze_posts_async
@@ -62,6 +62,7 @@ class _UpstreamRunError(RuntimeError):
     def __init__(self, message: str = "", *, diagnostics: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.diagnostics: dict[str, Any] = dict(diagnostics or {})
+        self.safe_failure: tuple[str, str, bool] | None = None
 
 
 @dataclass(slots=True)
@@ -325,7 +326,8 @@ def _model_history(rows: list[dict[str, Any]]) -> list[Any]:
 
 
 def _safe_error(exc: BaseException) -> tuple[str, str, bool]:
-    return safe_error(exc)
+    captured = getattr(exc, "safe_failure", None)
+    return captured if captured else safe_error(exc)
 
 
 class StudioService:
@@ -506,6 +508,12 @@ class StudioService:
         if len(content) > 32_000:
             return JSONResponse({"error": {"code": "message_too_large", "message": "Message is too large.", "retryable": False}}, status_code=413)
 
+        custom = (run_input.forwarded_props or {}).get("runConfig", {})
+        retry_value = custom.get("retryRunId") if isinstance(custom, dict) else None
+        try:
+            retry_run_id = uuid.UUID(str(retry_value)) if retry_value is not None else None
+        except (TypeError, ValueError):
+            return JSONResponse({"error": {"code": "invalid_identifier", "message": "Retry identifier is invalid.", "retryable": False}}, status_code=422)
         history_rows = await self.repository.list_messages(conversation_id)
         user_row: dict[str, Any] | None = None
         try:
@@ -517,8 +525,11 @@ class StudioService:
                     requested_model=model_name(self.settings),
                     provider="openrouter",
                     run_id=run_id,
+                    **({"retry_run_id": retry_run_id} if retry_run_id else {}),
                 )
             else:
+                if retry_run_id:
+                    raise StudioRepositoryError("Repository does not support retry")
                 user_row = await self.repository.append_message(conversation_id=conversation_id, role="user", content=content)
                 await self.repository.create_run(
                     conversation_id=conversation_id,
@@ -534,7 +545,7 @@ class StudioService:
                 title = title[:77].rsplit(" ", 1)[0] + "…" if len(title) > 80 else title
                 await renamer(conversation_id, title=title, only_default=True)
         except ActiveRunExists:
-            if user_row is not None:
+            if user_row is not None and retry_run_id is None:
                 remover = getattr(self.repository, "delete_message", None)
                 if remover is not None:
                     try:
@@ -546,6 +557,13 @@ class StudioService:
             return JSONResponse({"error": {"code": "conversation_not_found", "message": "Conversation not found.", "retryable": False}}, status_code=404)
         except StudioRepositoryError:
             return JSONResponse({"error": {"code": "conversation_write_failed", "message": "The conversation could not be updated.", "retryable": True}}, status_code=409)
+
+        if retry_run_id:
+            # Reuse the server-owned request. Failed output after it is not
+            # evidence or conversation context for the replacement attempt.
+            content = str(user_row["content"])
+            user_message = user_message.model_copy(update={"content": content})
+            history_rows = [row for row in history_rows if int(row["id"]) < int(user_row["id"])]
 
         # Strip client-supplied history, frontend tools, and context. Only the
         # newly accepted user message is sent through AG-UI; persisted history
@@ -850,17 +868,20 @@ class StudioService:
                                     getattr(event, "message", "")
                                     or "The provider ended the AG-UI run with an error."
                                 )
-                                raise _UpstreamRunError(
-                                    upstream_message,
-                                    diagnostics=describe_upstream_failure(
-                                        upstream_message,
-                                        phase=_failure_phase(),
-                                        requested_model=model_name(self.settings),
-                                        elapsed_ms=_run_elapsed_ms(),
-                                        requests=_run_requests(),
-                                        tool_calls=observed_tool_calls,
-                                    ),
-                                )
+                                diagnostics = getattr(adapter, "failure_diagnostics", None)
+                                if not diagnostics:
+                                    diagnostics = describe_upstream_failure(upstream_message)
+                                diagnostics = {
+                                    **diagnostics,
+                                    "phase": _failure_phase(),
+                                    "elapsed_ms": _run_elapsed_ms(),
+                                    "requested_model": model_name(self.settings),
+                                    "requests": _run_requests(),
+                                    "tool_calls": observed_tool_calls,
+                                }
+                                failure = _UpstreamRunError(upstream_message, diagnostics=diagnostics)
+                                failure.safe_failure = getattr(adapter, "safe_failure", None)
+                                raise failure
                             await self.repository.append_event(
                                 run_id,
                                 event_type=event_type,

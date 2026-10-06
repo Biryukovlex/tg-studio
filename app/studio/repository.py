@@ -1668,6 +1668,7 @@ class StudioRepository:
         requested_model: str,
         provider: str = "openrouter",
         run_id: uuid.UUID | None = None,
+        retry_run_id: uuid.UUID | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Append the user message and queue its run in one transaction.
 
@@ -1704,16 +1705,27 @@ class StudioRepository:
                 ).first()
                 if active is not None:
                     raise ActiveRunExists("conversation already has an active run")
-                message = (
-                    await session.execute(
-                        text(
-                            """INSERT INTO studio_messages(workspace_id, conversation_id, role, content, metadata_json)
-                               VALUES (:workspace_id, :conversation_id, 'user', :content, '{}'::jsonb)
-                            RETURNING id, role, content, metadata_json, created_at"""
-                        ),
-                        {"workspace_id": workspace_id, "conversation_id": conversation_id, "content": content},
-                    )
-                ).mappings().one()
+                if retry_run_id is not None:
+                    latest = (await session.execute(text(
+                        "SELECT * FROM studio_agent_runs WHERE workspace_id=:workspace_id AND conversation_id=:conversation_id ORDER BY created_at DESC, id DESC LIMIT 1"
+                    ), {"workspace_id": workspace_id, "conversation_id": conversation_id})).mappings().first()
+                    message = (await session.execute(text(
+                        "SELECT id, role, content, metadata_json, created_at FROM studio_messages WHERE workspace_id=:workspace_id AND conversation_id=:conversation_id AND role='user' ORDER BY id DESC LIMIT 1"
+                    ), {"workspace_id": workspace_id, "conversation_id": conversation_id})).mappings().first()
+                    if (latest is None or latest["id"] != retry_run_id or latest["status"] != "failed"
+                            or message is None or latest["user_message_id"] != message["id"]):
+                        raise StudioRepositoryError("Only the latest failed request can be retried")
+                else:
+                    message = (
+                        await session.execute(
+                            text(
+                                """INSERT INTO studio_messages(workspace_id, conversation_id, role, content, metadata_json)
+                                   VALUES (:workspace_id, :conversation_id, 'user', :content, '{}'::jsonb)
+                                RETURNING id, role, content, metadata_json, created_at"""
+                            ),
+                            {"workspace_id": workspace_id, "conversation_id": conversation_id, "content": content},
+                        )
+                    ).mappings().one()
                 try:
                     run = (
                         await session.execute(
@@ -2958,6 +2970,7 @@ class MemoryStudioRepository:
         requested_model: str,
         provider: str = "openrouter",
         run_id: uuid.UUID | None = None,
+        retry_run_id: uuid.UUID | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Append the user message and queue its run atomically (in-memory)."""
         if not isinstance(content, str) or not content.strip():
@@ -2973,9 +2986,17 @@ class MemoryStudioRepository:
                 for item in self.runs.values()
             ):
                 raise ActiveRunExists("conversation already has an active run")
-            self._message_id += 1
-            message = {"id": self._message_id, "role": "user", "content": content, "metadata_json": {}, "created_at": utcnow()}
-            self.messages[conversation_id].append(message)
+            if retry_run_id is not None:
+                candidates = [item for item in self.runs.values() if item["conversation_id"] == conversation_id]
+                latest = max(candidates, key=lambda item: (item["created_at"], str(item["id"]))) if candidates else None
+                message = next((item for item in reversed(self.messages[conversation_id]) if item["role"] == "user"), None)
+                if (latest is None or latest["id"] != retry_run_id or latest["status"] != "failed"
+                        or message is None or latest["user_message_id"] != message["id"]):
+                    raise StudioRepositoryError("Only the latest failed request can be retried")
+            else:
+                self._message_id += 1
+                message = {"id": self._message_id, "role": "user", "content": content, "metadata_json": {}, "created_at": utcnow()}
+                self.messages[conversation_id].append(message)
             row["updated_at"] = message["created_at"]
             run_id = run_id or uuid.uuid4()
             run = {

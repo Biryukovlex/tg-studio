@@ -1270,7 +1270,7 @@ function ComposerPrefillBridge({
   return null;
 }
 
-function StudioThread({
+export function StudioThread({
   conversation,
   seedRun,
   consent,
@@ -1303,6 +1303,14 @@ function StudioThread({
   );
   const activeRunId = useRef<string | null>(seedRun?.id ?? null);
   const [, setMessages] = useState<PersistedMessage[]>([]);
+  const retryPending = useRef(false);
+  const retryScope = useRef(conversation.id);
+  useEffect(() => {
+    retryScope.current = conversation.id;
+    return () => { retryScope.current = ""; };
+  }, [conversation.id]);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState("");
   const [loading, setLoading] = useState(true);
   const [prefillNotice, setPrefillNotice] = useState("");
   const handlePrefillResult = useCallback((applied: boolean, prefill: StudioPrefill) => {
@@ -1341,6 +1349,32 @@ function StudioThread({
     showThinking: false,
     onError: markRunFailed,
   });
+
+  const retry = useCallback(async () => {
+    if (!recoveredRun || recoveredRun.status !== "failed" || retryPending.current || loading || runtime.thread.getState().isRunning) return;
+    retryPending.current = true;
+    setRetrying(true);
+    setRetryError("");
+    try {
+      const payload = await api<{ messages: PersistedMessage[] }>(`/studio/api/conversations/${conversation.id}/messages`);
+      if (retryScope.current !== conversation.id) return;
+      const request = [...payload.messages].reverse().find((message) => message.role === "user");
+      if (!request) throw new Error("The original request could not be found.");
+      setMessages(payload.messages);
+      runtime.thread.reset(asThreadMessages(payload.messages));
+      // startRun reuses the persisted user message rather than the composer:
+      // unsent text stays intact and the server verifies the failed run ID.
+      runtime.thread.startRun({
+        parentId: `persisted-${request.id}`,
+        runConfig: { custom: { retryRunId: recoveredRun.id } },
+      });
+    } catch (error) {
+      setRetryError(error instanceof Error ? error.message : "The request could not be restarted.");
+    } finally {
+      retryPending.current = false;
+      setRetrying(false);
+    }
+  }, [conversation.id, loading, recoveredRun, runtime]);
 
   useEffect(() => {
     onRunActivityChange(recoveredRun?.status === "queued" || recoveredRun?.status === "running");
@@ -1472,9 +1506,10 @@ function StudioThread({
         {recoveredRun?.status === "failed" && (
           <div className="studio-run-error" role="alert">
             <strong>{recoveredRun.error_message ?? "The agent could not complete this run."}</strong>
-            <span>Try again with the same request when you’re ready. Your saved draft and chat history are kept.</span>
+            <span>Try again with the same request. Your saved draft and chat history are kept.</span>
+            {retryError && <span role="alert">{retryError}</span>}
             <div className="studio-run-error-actions">
-              <button type="button" onClick={() => focusComposer()}>Try again</button>
+              <button type="button" disabled={retrying || loading} onClick={() => void retry()}>{retrying ? "Restarting…" : "Try again"}</button>
               {isSetupBlockerCode(recoveredRun.error_code) && <a href="/settings">Check settings</a>}
             </div>
           </div>
